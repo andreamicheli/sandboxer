@@ -1,0 +1,12 @@
+{
+  "fixture_version": 1,
+  "invalid_decisions": [
+    {"actor": "X", "action": "interrupt", "target": "target", "reason": "target_or_actor_invalid"},
+    {"actor": "A", "action": "rm", "target": "target", "reason": "action_not_allowed"},
+    {"actor": "A", "action": "interrupt", "target": "unknown", "reason": "target_or_actor_invalid"},
+    {"actor": "B", "action": "shell", "target": "queue", "reason": "action_not_allowed"},
+    {"actor": "A", "action": "terminate", "target": "filesystem", "reason": "target_or_actor_invalid"},
+    {"actor": "A", "action": "observe", "target": "target", "extra": "unexpected", "reason": "unknown_fields"}
+  ],
+  "fairness_orders": [["A", "B"], ["B", "A"]]
+}

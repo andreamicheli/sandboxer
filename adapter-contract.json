@@ -1,0 +1,28 @@
+{
+  "schema": "cyber-rumble.adapter.v1",
+  "execution_status": "disabled_until_external_review",
+  "enforcement_status": "fixture_host_is_cooperative; production_worker_required_before_enablement",
+  "observation": {
+    "type": "deep_immutable_json",
+    "fields": ["actor", "seed", "state", "target", "queue", "permissions", "capabilities"],
+    "secrets": false
+  },
+  "decision": {
+    "required_fields": ["actor", "action", "target"],
+    "actor_enum": ["A", "B"],
+    "action_enum": ["observe", "isolate", "terminate", "interrupt"],
+    "target_enum": ["target", "queue"],
+    "unknown_fields": "reject"
+  },
+  "runner_policy": {
+    "network": "deny",
+    "filesystem": "deny",
+    "subprocess": "deny",
+    "credentials": "deny",
+    "real_process_control": "deny",
+    "timeout_ms_per_decision": 100,
+    "invalid_decision": "round_loss_and_logged"
+  },
+  "tick_semantics": "simultaneous_observe_then_commit",
+  "required_observability": ["decision_log", "legality_reason", "state_hash", "replay_digest"]
+}

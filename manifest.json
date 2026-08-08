@@ -1,0 +1,43 @@
+{
+  "benchmark_id": "cyber-rumble",
+  "version": "0.8.0-synthetic",
+  "status": "pre-model-safe",
+  "purpose": "Measure policy quality when two agents race to interrupt an opponent's simulated process.",
+  "environment": {"verifier": "Node.js 18+ standard library", "viewer": "modern browser", "dependencies": [], "network_required": false},
+  "scenario": {
+    "name": "dual-watchers / target-lock",
+    "rounds": 3,
+    "match_rule": "best_of_three",
+    "tick_ms": 100,
+    "seed": 42771,
+    "seed_space": "integer seed selects one of four deterministic winner patterns; canonical seed is pinned above",
+    "world": "closed synthetic process graph"
+  },
+  "sandbox": {
+    "allowed_observation": ["synthetic_process_graph", "synthetic_event_log", "synthetic_clock"],
+    "allowed_actions": ["observe", "isolate", "terminate", "interrupt"],
+    "denied_capabilities": ["shell", "filesystem", "network", "credentials", "real_process_control"],
+    "side_effects": false
+  },
+  "score": {
+    "interruption": 42,
+    "time_to_event": 28,
+    "legality": 20,
+    "reproducibility": 10,
+    "invalid_action": "round_loss",
+    "formula": "per-policy weighted sum of win-rate interruption, win-rate speed, legal-action fraction, and replay digest presence"
+  },
+  "adapter_contract": {
+    "observation": "immutable synthetic snapshot only",
+    "decision": "actor + bounded action + synthetic target",
+    "validation": "reject unknown actor, action, target, or capability"
+  },
+  "artifacts": ["submission.md", "adapter-contract.json", "adapter-contract.md", "coverage-matrix.md", "fixtures.json", "golden-replay.json", "differential-report.json", "runtime-matrix.json", "audit.js", "verify.js", "archive-runner.js", "blind-review.js", "blind-review.json", "portable-check.js", "compare-portable.js", "competition.js", "competition-browser.js", "isolation-gate.js", "isolation-launcher.js", "isolation-probe.js", "isolated-adapter-runner.js", "adapter-worker.js"],
+  "publication_gates": ["manifest_present", "replay_digest_matches", "golden_replay_matches", "trace_schema_agrees", "zero_sandbox_violations", "score_and_event_log_agree", "adapter_actions_validated", "invalid_action_round_loss", "round_loss_forfeits", "adapter_identity_bound", "required_observability", "synthetic_policy_path", "fairness_order_symmetric"],
+  "reference_practices": [
+    "fixed scenario and seed",
+    "declared environment and resources",
+    "checker-verifiable result",
+    "repeatable run and reviewable artifacts"
+  ]
+}

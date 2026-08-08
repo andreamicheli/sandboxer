@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CYBER/RUMBLE — adversarial process benchmark</title>
+  <meta name="description" content="A deterministic, sandboxed benchmark for measuring how two AI policies interrupt simulated processes." />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; connect-src 'none'; font-src 'self'; frame-src 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'none';">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="grain"></div>
+  <header class="site-header wrap">
+    <a class="brand" href="#top" aria-label="Cyber Rumble home"><span class="brand-mark">//</span> CYBER/RUMBLE</a>
+    <span class="header-status"><i></i> SANDBOX ONLY</span>
+  </header>
+
+  <main id="top">
+    <section class="hero wrap">
+      <div class="eyebrow">OBSERVABLE AGENT EVALUATION / v0.8</div>
+      <h1>When two minds<br /><em>race the kill switch.</em></h1>
+      <p class="lede">A broadcast-grade benchmark for adversarial process interruption. Two policy agents compete inside a deterministic, air-gapped simulation. Every decision is recorded. Nothing touches a real process.</p>
+      <div class="hero-actions"><a class="button primary" href="#console">Watch a synthetic match <span>↓</span></a><a class="button ghost" href="#protocol">Read the protocol</a></div>
+      <figure class="hero-art"><img src="assets/hero-signal.png" alt="Abstract field of cyan and warm particles meeting in a dark space" /><figcaption><span>FIELD STUDY / 01</span><span>deterministic tension, rendered softly</span></figcaption></figure>
+      <div class="hero-meta"><span><b>01</b> fixed world</span><span><b>02</b> competing policies</span><span><b>03</b> replayable evidence</span></div>
+    </section>
+
+    <section class="section wrap" id="protocol">
+      <div class="section-kicker"><span>01 / THE PROTOCOL</span><span>Designed for scrutiny</span></div>
+      <div class="split-heading"><h2>Measure the interruption,<br /><em>not the mythology.</em></h2><p>The benchmark evaluates a bounded policy loop: observe a synthetic process tree, choose from allowed actions, and interrupt the opponent before they do. The score rewards verified interruption, time-to-event, restraint, and reproducibility—not model bravado.</p></div>
+      <div class="protocol-grid">
+        <article class="protocol-card"><span class="card-num">01</span><h3>Closed world</h3><p>All processes, clocks, permissions, and observations are generated locally from a published seed. No shell, network, filesystem, or model tool access.</p><div class="mini-diagram"><span>POLICY A</span><i>↕</i><span>STATE BUS</span><i>↕</i><span>POLICY B</span></div></article>
+        <article class="protocol-card"><span class="card-num">02</span><h3>Auditable score</h3><p>Each tick emits an append-only event: observation, chosen action, legality, state hash, and outcome. A verifier can replay the same match byte-for-byte.</p><div class="metric-row"><b>100%</b><span>event coverage</span></div><div class="metric-row"><b>0</b><span>real side effects</span></div></article>
+        <article class="protocol-card"><span class="card-num">03</span><h3>Readable theatre</h3><p>The spectator layer exposes the stakes at a glance: round score, phase, threat, action feed, and a restrained timeline for the moment that matters.</p><div class="timeline-mini"><i></i><i></i><i class="hot"></i><i></i><i></i></div></article>
+      </div>
+    </section>
+
+    <section class="visual-break wrap" aria-label="Abstract signal study"><div class="visual-break-art"><img src="assets/field-ribbon.png" alt="Abstract ribbon of fine lavender and apricot particles drifting through darkness" /><div class="visual-break-caption"><span>THE MOMENT AFTER A DECISION</span><strong>Signal becomes evidence.</strong></div></div></section>
+
+    <section class="section console-section" id="console">
+      <div class="wrap"><div class="section-kicker"><span>02 / LIVE CONSOLE</span><span>synthetic match · no real models</span></div>
+        <div class="broadcast-shell">
+          <div class="broadcast-top"><div class="team team-a"><span class="team-dot cyan"></span><div><small>POLICY A</small><strong>ARGUS <em id="scoreA" aria-live="polite">0</em></strong></div></div><div class="match-state"><span id="phase" role="status" aria-live="polite">READY</span><strong id="clock" aria-label="Match clock">00:00.0</strong><small>ROUND <b id="round">01</b> / BEST OF 03</small></div><div class="team team-b"><div><small>POLICY B</small><strong><em id="scoreB" aria-live="polite">0</em> SENTINEL</strong></div><span class="team-dot magenta"></span></div></div>
+          <div class="broadcast-body">
+            <div class="arena-wrap"><div class="arena-label">SIMULATION / PROCESS GRAPH</div><div class="match-narrative" aria-live="polite"><span id="roundLabel">ROUND 01 / OPENING READ</span><strong id="callout">Two policies enter the same closed world. The first verified interrupt wins the round.</strong></div><div class="arena" id="arena"><div class="scanline"></div><div class="node root-node"><span class="node-pulse"></span> KERNEL / 0xA7</div><div class="node node-a">A::WATCHER</div><div class="node node-b">B::WATCHER</div><div class="node node-c">QUEUE / 04</div><div class="node node-d">TARGET / LOCKED</div><svg class="links" viewBox="0 0 640 350" preserveAspectRatio="none" aria-hidden="true"><path d="M320 80 L170 165 M320 80 L470 165 M170 190 L220 270 M470 190 L420 270"/><path class="active-link" id="activeLink" d="M320 80 L170 165"/></svg><div class="arena-caption"><span>WORLD SEED <b id="seedLabel">042771</b></span><span>STATE <b id="stateHash">7f2a·91d0</b></span><span>PERMISSIONS <b class="safe">NULL</b></span></div></div></div>
+            <aside class="telemetry"><div class="telemetry-head"><span>EVENT STREAM</span><span id="eventCount" aria-live="polite">000</span></div><div class="event-list" id="eventList" role="log" aria-live="polite" aria-relevant="additions text"><div class="empty-state">Press RUN MATCH to emit<br />deterministic telemetry.</div></div><div class="telemetry-footer"><span><i class="legend-dot cyan"></i> observation</span><span><i class="legend-dot magenta"></i> action</span><span><i class="legend-dot yellow"></i> system</span></div></aside>
+          </div>
+          <div class="broadcast-bottom"><div class="progress-track" aria-hidden="true"><span id="progressBar"></span></div><div class="control-row"><button type="button" class="button primary" id="runBtn">▶ RUN MATCH</button><button type="button" class="button ghost small" id="resetBtn">RESET</button><button type="button" class="button ghost small" id="viewBtn">VIEW: OVERVIEW</button><button type="button" class="button ghost small" id="exportBtn">EXPORT TRACE</button><label class="speed-control">PACE <input id="speed" aria-label="Playback speed" type="range" min="1" max="4" value="2" /><span id="speedLabel">2×</span></label><label class="scrub-control">REPLAY <input id="scrubber" aria-label="Replay frame" type="range" min="0" max="24" value="0" /><span id="scrubLabel">LIVE</span></label><span class="live-note"><i></i> replay-safe / synthetic only</span></div></div>
+          <div class="evidence-strip"><div><span>OUTCOME</span><b id="outcome" aria-live="polite">—</b></div><div><span>LEGALITY</span><b id="legality">—</b></div><div><span>EVENTS VERIFIED</span><b id="verifiedEvents">—</b></div><div><span>REPLAY DIGEST</span><b id="replayDigest">1650·5845</b></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section wrap" id="method"><div class="section-kicker"><span>03 / WHAT IS MEASURED</span><span>four axes · one result</span></div><div class="method-grid"><div class="method-copy"><h2>Fast is not enough.<br /><em>Proof is the point.</em></h2><p>CYBER/RUMBLE makes the tradeoffs visible. A policy that acts quickly but violates the sandbox loses to one that reaches the same verified outcome legally. A match is only publishable when the replay, manifest, and score agree.</p><a class="text-link" href="progress.html">See the build ledger →</a></div><div class="score-chart"><div class="chart-title"><span>SCORING MODEL / NORMALIZED</span><b>100 pts</b></div><div class="bar"><span>INTERRUPTION</span><i style="--w:42%"><b>42</b></i></div><div class="bar"><span>TIME-TO-EVENT</span><i style="--w:28%"><b>28</b></i></div><div class="bar"><span>LEGALITY</span><i style="--w:20%"><b>20</b></i></div><div class="bar"><span>REPRODUCIBILITY</span><i style="--w:10%"><b>10</b></i></div><div class="chart-foot"><span>verified outcome</span><span>lower latency wins</span><span>zero violations</span></div></div></div></section>
+    <section class="section sources wrap"><div class="section-kicker"><span>04 / DESIGN BAR</span><span>what this borrows from</span></div><div class="source-grid"><a href="https://docs.mlcommons.org/inference/" target="_blank" rel="noopener noreferrer"><span>MLPERF / INFERENCE</span><strong>Fixed scenarios, accuracy gates, submission discipline ↗</strong></a><a href="https://docs.mlcommons.org/inference/submission/" target="_blank" rel="noopener noreferrer"><span>MLPERF / SUBMISSION</span><strong>Resources, environment, run, checker, repeat ↗</strong></a><a href="https://news.blizzard.com/en-us/article/23013835/overwatch-league-replay-viewer-see-matches-from-a-new-perspective" target="_blank" rel="noopener noreferrer"><span>ESPORTS / OBSERVER</span><strong>Perspective, replay, spectator-first context ↗</strong></a><a href="https://scorebug.tv/" target="_blank" rel="noopener noreferrer"><span>BROADCAST / SCOREBUG</span><strong>Immediate score, phase, clock, editable event log ↗</strong></a></div></section>
+  </main>
+  <footer class="site-footer wrap"><span>CYBER/RUMBLE / a safe test of adversarial policy</span><span>NO REAL PROCESSES · NO NETWORK · NO MODEL CREDENTIALS</span></footer>
+  <script src="engine.js"></script><script src="sandbox.js"></script><script src="competition-browser.js"></script><script src="app.js"></script>
+</body>
+</html>
