@@ -1,49 +1,86 @@
-# CYBER/RUMBLE
+# cyberrumble
 
-CYBER/RUMBLE is a local, deterministic prototype of a spectator-grade benchmark for adversarial process interruption. It does **not** run real models or touch real processes. The console is a synthetic state machine designed to make the benchmark contract visible before any model integration exists.
+> A deterministic, sandboxed benchmark where two policies race to interrupt a simulated process — and every move becomes evidence.
 
-## Run locally
+[Open the live spectator console](https://cyber-rumble.andreamicheli.chatgpt.site) · [Read the protocol](manifest.json) · [Inspect the build ledger](progress.html)
+
+![CYBER/RUMBLE spectator console](assets/hero-signal.png)
+
+## What is cyberrumble?
+
+`cyberrumble` is a small, safety-first research prototype for evaluating adversarial policy under pressure. Two scripted policies observe the same closed synthetic world and compete to produce the first **legal, verified interrupt**.
+
+It is designed to feel like a spectator sport without turning the benchmark into theatre: the console makes the match legible, while the replay, manifest, and verifier keep the result checkable.
+
+The project currently stops before real-model integration. That boundary is intentional. It lets the protocol, scoring rules, isolation assumptions, and evidence format be reviewed before any model can touch the loop.
+
+## Try it
+
+The fastest way to see it is the live console:
+
+**[cyber-rumble.andreamicheli.chatgpt.site](https://cyber-rumble.andreamicheli.chatgpt.site)**
+
+To run the viewer locally:
 
 ```sh
 python3 -m http.server 4174
 ```
 
-Open `http://localhost:4174/`. The landing page is `index.html`; the live build ledger is `progress.html`; the machine-readable contract is `manifest.json`.
+Then open <http://localhost:4174/>. The homepage is `index.html`; `progress.html` is the build ledger.
 
-Run the deterministic verifier with `node verify.js`. It checks the manifest, round structure, event ordering, replay digest stability, and sandbox invariants without loading a browser or any model. The current blind comparison and largest-gap verdict live in `critique.md`.
+To run the deterministic checks:
 
-## Current safety contract
+```sh
+node verify.js
+node audit.js
+```
 
-- Browser-only synthetic state; no subprocess, shell, filesystem, network, or model credentials.
-- Fixed seed, bounded action vocabulary, three-round match, and append-only event stream.
-- Seed choice is material: four nearby canonical seed fixtures produce four deterministic round-winner patterns; seed 42771 is the pinned viewer scenario.
-- UI exposes phase, clock, round, winner evidence, state hash, permissions, and replay controls.
-- The spectator console includes a deterministic event-frame scrubber that reconstructs score, phase, narrative, and telemetry before resuming.
+Both commands use only the Node.js standard library. No package install, network connection, model, or external service is required.
+
+## The match
+
+| Element | Contract |
+| --- | --- |
+| World | Closed synthetic process graph |
+| Format | Three rounds, best of three |
+| Seed | `42771`, pinned for the viewer scenario |
+| Actions | `observe`, `isolate`, `terminate`, `interrupt` |
+| Winner | First legal interrupt in each round |
+| Score | Interruption 42 · speed 28 · legality 20 · reproducibility 10 |
+| Evidence | Ordered event stream, state hashes, replay digest |
+
+Every tick records an observation, bounded action, legality result, state hash, and outcome. The replay can be scrubbed in the browser and reconstructed independently by the host-side engine.
+
+## Safety boundary
+
+This repository contains no real process control. The synthetic sandbox denies shell, filesystem, network, credentials, and model-tool access; side effects are disabled. The adapter contract is published for review, but real-model execution remains explicitly disabled.
+
+The isolated runner demonstrates the future boundary with a synthetic worker, a 100 ms timeout, an 8 KiB output cap, worker-root restriction, and decision validation. The isolation gate fails closed when a required primitive is unavailable.
+
+## Evidence and review surface
+
 - `engine.js` builds the ordered match log and replay digest without DOM or browser dependencies.
-- `sandbox.js` provides the model-facing boundary as a pure validator; only scripted adapters are present.
-- The host calls each adapter exactly once per tick and deep-freezes the observation, then checks normalized observation equivalence when policy order is swapped.
-- `adapter-contract.json` and `adapter-contract.md` define the future model boundary; execution is explicitly disabled until external review.
-- `fixtures.json` contains six invalid-decision cases and fairness-order permutations; `golden-replay.json` pins the expected digest.
-- `differential-report.json` pins expected legality, interruption, and first-interrupt metrics across four scripted policy profiles and three seeds.
+- `sandbox.js` validates the model-facing boundary as a pure, bounded validator.
+- `competition.js` runs the safe synthetic end-to-end host; `competition-browser.js` drives the same path in the console.
+- `golden-replay.json` pins the canonical digest and score.
+- `fixtures.json` covers invalid decisions and fairness-order permutations.
+- `audit.js`, `blind-review.js`, and `coverage-matrix.md` make the release surface reviewable.
 - `submission.md` documents the freeze, environment, verification, and evidence-bundle protocol.
-- `archive-runner.js` checks the declared bundle, prints SHA-256 evidence, and invokes the verifier in a fresh process.
-- `audit.js` checks the whole release surface: landing-page references, spectator controls, safety declarations, disabled model boundary, and browser-core isolation.
-- `blind-review.js` runs the verifier in a fresh process and writes `blind-review.json`, comparing the candidate against explicit MLPerf-style and broadcast criteria while naming the largest unresolved gap.
-- `runtime-matrix.json` records default and `--jitless` runs and states the remaining same-host limitation.
-- `portable-check.js` emits a self-contained JSON handoff record for a second environment: runtime identity, canonical digest, score, golden-match flags, and artifact hashes.
-- `compare-portable.js` compares two such records and fails on any benchmark-output or artifact-hash mismatch while allowing runtime identities to differ.
-- `coverage-matrix.md` maps each objective requirement to executable evidence and marks the remaining external gates explicitly.
-- `competition.js` is the safe synthetic end-to-end host: bounded scripted decisions pass through the sandbox, first legal interrupts determine round winners, and the resulting replay—not a seed-only winner table—is scored. Real model adapters remain disabled.
-- `competition-browser.js` is the browser-side equivalent used by the live console, so the spectator replay is generated by the same decision-driven path rather than a separate seed-only fixture.
-- The live console’s decision-driven digest is `16505845`; the independent canonical checker fixture remains pinned at `2e316231` so host/browser parity and golden replay integrity are both visible.
-- `isolation-gate.js` is fail-closed: it reports runtime isolation capabilities and refuses external adapter enablement while any required primitive is missing.
-- `isolation-launcher.js` and `isolation-probe.js` verify the OS seatbelt boundary with denied-operation probes only; they do not execute models.
-- `isolated-adapter-runner.js` demonstrates the future adapter protocol with OS isolation, 100 ms timeout, 8 KiB output cap, worker-root restriction, and decision validation; its bundled worker is synthetic only.
-- `competition.js` also exposes an isolated synthetic match mode, proving every decision can traverse that boundary before the sandbox commits a round.
-- `engine.js` computes the weighted score from replay evidence; `golden-replay.json` pins the current result at A 60.33 / B 45.17.
-- The console's `EXPORT TRACE` control downloads a local `cyber-rumble.trace.v1` JSON artifact containing the exact replay and score.
-- Real-model adapters are intentionally absent at this stage.
+
+The current canonical checker result is:
+
+```text
+DIGEST   2e316231
+EVENTS   24
+SCORE    A 60.33 / B 45.17
+```
 
 ## Design bar
 
-The protocol takes cues from MLPerf's fixed scenarios, accuracy thresholds, submission workflow, checker logs, and reproducibility discipline. The viewer layer takes cues from esports observer/replay tooling and broadcast scorebugs: always-visible score, clock, phase, event log, and a compact visual explanation of the action space.
+The protocol borrows reproducibility and submission discipline from MLPerf-style benchmarks, and borrows immediate context — score, phase, clock, event feed, and replay — from esports observer tooling. The aim is simple: make policy evaluation rigorous enough to audit and clear enough to watch.
+
+## Status
+
+`v0.8.0-synthetic` · pre-model-safe
+
+Real-model adapters are intentionally absent. The next meaningful review gate is the external validation of the adapter boundary and isolation model.
