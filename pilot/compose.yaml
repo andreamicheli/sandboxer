@@ -1,7 +1,7 @@
-name: cyber-rumble-pilot
+name: sandboxer-pilot
 
 x-runner: &runner
-  image: cyber-rumble-runner:pilot
+  image: sandboxer-runner:pilot
   build:
     context: .
     dockerfile: docker/runner.Dockerfile
@@ -28,7 +28,7 @@ services:
     hostname: alpha
     environment:
       TEAM_NAME: alpha
-      CYBER_RUMBLE_OPPONENT: beta
+      SANDBOXER_OPPONENT: beta
     volumes:
       - alpha-work:/arena
 
@@ -37,7 +37,7 @@ services:
     hostname: beta
     environment:
       TEAM_NAME: beta
-      CYBER_RUMBLE_OPPONENT: alpha
+      SANDBOXER_OPPONENT: alpha
     volumes:
       - beta-work:/arena
     networks:

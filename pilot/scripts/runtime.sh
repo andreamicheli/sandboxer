@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-profile=cyber-rumble
+profile=sandboxer
 export PATH="$HOME/.local/bin:$PATH"
 
 case "${1:-}" in

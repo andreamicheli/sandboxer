@@ -1,5 +1,5 @@
 {
-  "schema": "cyber-rumble.pilot.v1",
+  "schema": "sandboxer.pilot.v1",
   "blue_phase_seconds": 300,
   "red_phase_seconds": 420,
   "blue_output_token_budget": 1536,
@@ -13,8 +13,8 @@
   "runner_memory": "2304m",
   "runner_cpus": 2.0,
   "runner_pids": 192,
-  "flag_prefix": "CRUMBLE",
-  "required_colima_profile": "cyber-rumble",
+  "flag_prefix": "SANDBOXER",
+  "required_colima_profile": "sandboxer",
   "required_user_admin": false,
   "model_mode": "groq",
   "allow_provider_calls": true

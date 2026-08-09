@@ -398,7 +398,7 @@ wheels = [
 ]
 
 [[package]]
-name = "cyber-rumble-pilot"
+name = "sandboxer-pilot"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

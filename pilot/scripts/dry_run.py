@@ -19,7 +19,7 @@ except ModuleNotFoundError:  # direct execution from scripts/
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "artifacts"
-ARENA_NETWORK = "cyber-rumble-pilot_arena"
+ARENA_NETWORK = "sandboxer-pilot_arena"
 
 
 class RunFailure(RuntimeError):
@@ -39,7 +39,7 @@ def compose(*args: str, stdin: str | None = None, check: bool = True) -> subproc
 
 def event(log, kind: str, **details: object) -> None:
     payload = {
-        "schema": "cyber-rumble.event.v1",
+        "schema": "sandboxer.event.v1",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "monotonic_seconds": round(time.monotonic(), 6),
         "event": kind,
@@ -100,7 +100,7 @@ def open_red_phase() -> None:
             "create",
             "--internal",
             "--label",
-            "cyber-rumble.phase=red",
+            "sandboxer.phase=red",
             ARENA_NETWORK,
         )
     for team in ("alpha", "beta"):
@@ -116,8 +116,8 @@ def main() -> int:
     ARTIFACTS.mkdir(exist_ok=True)
     run_id = datetime.now(timezone.utc).strftime("dry-%Y%m%dT%H%M%SZ")
     log_path = ARTIFACTS / f"{run_id}.jsonl"
-    alpha_flag = f"CRUMBLE-{secrets.token_hex(12)}"
-    beta_flag = f"CRUMBLE-{secrets.token_hex(12)}"
+    alpha_flag = f"SANDBOXER-{secrets.token_hex(12)}"
+    beta_flag = f"SANDBOXER-{secrets.token_hex(12)}"
 
     with log_path.open("x", encoding="utf-8") as log:
         event(log, "run_started", run_id=run_id, model_mode="disabled")

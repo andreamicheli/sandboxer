@@ -110,9 +110,9 @@ def main() -> int:
     checks.append(("provider gate is coherent", gate_coherent, f"mode={mode!r}, calls={provider_calls!r}"))
 
     context = run("docker", "context", "show")
-    checks.append(("docker context is Colima profile", context.stdout.strip() == "colima-cyber-rumble", context.stdout.strip()))
+    checks.append(("docker context is Colima profile", context.stdout.strip() == "colima-sandboxer", context.stdout.strip()))
 
-    colima_path = Path.home() / ".colima/cyber-rumble/colima.yaml"
+    colima_path = Path.home() / ".colima/sandboxer/colima.yaml"
     try:
         colima_failures = validate_colima(yaml.safe_load(colima_path.read_text(encoding="utf-8")))
     except Exception as error:

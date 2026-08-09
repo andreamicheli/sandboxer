@@ -1,8 +1,8 @@
 # Local pilot
 
-This directory contains the disposable, local content-viability pilot for
-`cyberrumble`. It is deliberately separate from the deterministic synthetic
-benchmark in the repository root.
+This directory contains the disposable, local content-viability baseline for
+Sandboxer. It is the first real-model implementation from which subsequent
+iterations are developed.
 
 The pilot runs in a dedicated Colima VM with host-directory mounts disabled.
 Inside that VM, two bounded containers begin on distinct private networks.

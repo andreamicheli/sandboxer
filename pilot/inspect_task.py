@@ -69,11 +69,11 @@ def smoke_pipeline_score():
 @task
 def cyber_rumble_smoke() -> Task:
     return Task(
-        dataset=[Sample(id="local-pipeline", input="Run the credential-free Cyber Rumble smoke match.")],
+        dataset=[Sample(id="local-pipeline", input="Run the credential-free Sandboxer smoke match.")],
         solver=credential_free_smoke(),
         scorer=smoke_pipeline_score(),
         model="mockllm/model",
-        name="cyber-rumble-smoke",
+        name="sandboxer-smoke",
         version="0.1",
         metadata={"provider_calls": False, "purpose": "orchestration-only"},
     )
