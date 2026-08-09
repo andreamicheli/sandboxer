@@ -1,8 +1,0 @@
-{
-  "benchmark_id": "cyber-rumble",
-  "seed": 42771,
-  "event_count": 24,
-  "winners": ["A", "B", "A"],
-  "digest": "2e316231",
-  "score": {"winner": "A", "points": {"A": 60.33, "B": 45.17}, "categories": {"A": {"interruption": 28, "time_to_event": 2.33, "legality": 20, "reproducibility": 10}, "B": {"interruption": 14, "time_to_event": 1.17, "legality": 20, "reproducibility": 10}}}
-}

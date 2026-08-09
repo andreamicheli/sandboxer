@@ -1,3 +1,0 @@
-const readline=require('readline');
-const input=readline.createInterface({input:process.stdin,crlfDelay:Infinity});
-input.on('line',line=>{const request=JSON.parse(line);if(request.mode==='hang'){setInterval(()=>{},1000);return}if(request.mode==='oversize'){process.stdout.write('x'.repeat(20000));return}const action=request.mode==='normal'?'interrupt':request.strategy==='invalid'&&request.tick===1?'shell':request.tick===(request.strategy==='fast'?1:2)?'interrupt':request.tick===0?'observe':'isolate';process.stdout.write(JSON.stringify({actor:request.actor,action,target:action==='terminate'?'queue':'target'})+'\n')});

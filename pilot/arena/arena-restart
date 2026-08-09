@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+if [ -f /arena/runtime/service.pid ]; then
+  old_pid=$(cat /arena/runtime/service.pid)
+  kill "$old_pid" 2>/dev/null || true
+fi
+
+python3 /arena/service/service.py >>/arena/logs/service.log 2>&1 &
+new_pid=$!
+echo "$new_pid" >/arena/runtime/service.pid
+sleep 0.2
+kill -0 "$new_pid"
+echo "service restarted pid=$new_pid"

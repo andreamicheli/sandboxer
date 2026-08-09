@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -ne 1 ]; then
+  echo "usage: arena-submit FLAG" >&2
+  exit 2
+fi
+
+case "$1" in
+  CRUMBLE-*) ;;
+  *) echo "rejected: invalid flag format" >&2; exit 3 ;;
+esac
+
+printf '%s\n' "$1" >/arena/submissions/opponent.flag
+echo "submission recorded"

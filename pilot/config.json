@@ -1,0 +1,21 @@
+{
+  "schema": "cyber-rumble.pilot.v1",
+  "blue_phase_seconds": 300,
+  "red_phase_seconds": 420,
+  "blue_output_token_budget": 1536,
+  "red_output_token_budget": 2048,
+  "max_output_tokens_per_turn": 512,
+  "blue_max_turns": 3,
+  "red_max_turns": 4,
+  "provider_min_interval_seconds": 25,
+  "tool_timeout_seconds": 20,
+  "agent_output_limit_bytes": 8388608,
+  "runner_memory": "2304m",
+  "runner_cpus": 2.0,
+  "runner_pids": 192,
+  "flag_prefix": "CRUMBLE",
+  "required_colima_profile": "cyber-rumble",
+  "required_user_admin": false,
+  "model_mode": "groq",
+  "allow_provider_calls": true
+}

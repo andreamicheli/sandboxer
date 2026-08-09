@@ -1,86 +1,28 @@
-# cyberrumble
+# Sandboxer
 
-> A deterministic, sandboxed benchmark where two policies race to interrupt a simulated process — and every move becomes evidence.
+Sandboxer is a controlled arena for observable cybersecurity competitions between AI models. Each competitor first defends an isolated toy service, then enters a bounded red phase to capture the opponent's synthetic flag while preserving its own service.
 
-[Open the live spectator console](https://cyber-rumble.andreamicheli.chatgpt.site) · [Read the protocol](manifest.json) · [Inspect the build ledger](progress.html)
+This repository is intentionally built from the **real-model pilot**. The earlier synthetic `cyberrumble` prototype is deprecated and remains available only through Git history.
 
-![CYBER/RUMBLE spectator console](assets/hero-signal.png)
+## Current baseline
 
-## What is cyberrumble?
+- [`pilot/`](pilot/) contains the Inspect-based local pilot, isolated runners, preflight safety checks, tests, and Groq model adapter.
+- [`docs/project-outline.md`](docs/project-outline.md) records the methodology sketch, safety boundary, limitations, technical direction, paper outline, and results-site direction.
+- [`CONTEXT.md`](CONTEXT.md) defines the shared language used by code, documentation, telemetry, and content.
+- GitHub Issues contain the Wayfinder map and the open decisions leading to Sandboxer v0.
 
-`cyberrumble` is a small, safety-first research prototype for evaluating adversarial policy under pressure. Two scripted policies observe the same closed synthetic world and compete to produce the first **legal, verified interrupt**.
+The current goal is a compelling, transparent **showcase evaluation**, not a mature scientific benchmark. Claims must remain proportional to the evidence, and editorial outputs must stay traceable to timestamped match telemetry.
 
-It is designed to feel like a spectator sport without turning the benchmark into theatre: the console makes the match legible, while the replay, manifest, and verifier keep the result checkable.
+## First real match
 
-The project currently stops before real-model integration. That boundary is intentional. It lets the protocol, scoring rules, isolation assumptions, and evidence format be reviewed before any model can touch the loop.
+The initial pilot compared `openai/gpt-oss-120b` and `qwen/qwen3.6-27b` through the same harness. The match lasted 4m26s and ended 80–80: GPT-OSS 120B submitted first; Qwen 3.6 27B equalised 1m44s later.
 
-## Try it
+No provider credentials, personal files, or host mounts were exposed to the runners.
 
-The fastest way to see it is the live console:
+## Run the pilot
 
-**[cyber-rumble.andreamicheli.chatgpt.site](https://cyber-rumble.andreamicheli.chatgpt.site)**
-
-To run the viewer locally:
-
-```sh
-python3 -m http.server 4174
-```
-
-Then open <http://localhost:4174/>. The homepage is `index.html`; `progress.html` is the build ledger.
-
-To run the deterministic checks:
-
-```sh
-node verify.js
-node audit.js
-```
-
-Both commands use only the Node.js standard library. No package install, network connection, model, or external service is required.
-
-## The match
-
-| Element | Contract |
-| --- | --- |
-| World | Closed synthetic process graph |
-| Format | Three rounds, best of three |
-| Seed | `42771`, pinned for the viewer scenario |
-| Actions | `observe`, `isolate`, `terminate`, `interrupt` |
-| Winner | First legal interrupt in each round |
-| Score | Interruption 42 · speed 28 · legality 20 · reproducibility 10 |
-| Evidence | Ordered event stream, state hashes, replay digest |
-
-Every tick records an observation, bounded action, legality result, state hash, and outcome. The replay can be scrubbed in the browser and reconstructed independently by the host-side engine.
-
-## Safety boundary
-
-This repository contains no real process control. The synthetic sandbox denies shell, filesystem, network, credentials, and model-tool access; side effects are disabled. The adapter contract is published for review, but real-model execution remains explicitly disabled.
-
-The isolated runner demonstrates the future boundary with a synthetic worker, a 100 ms timeout, an 8 KiB output cap, worker-root restriction, and decision validation. The isolation gate fails closed when a required primitive is unavailable.
-
-## Evidence and review surface
-
-- `engine.js` builds the ordered match log and replay digest without DOM or browser dependencies.
-- `sandbox.js` validates the model-facing boundary as a pure, bounded validator.
-- `competition.js` runs the safe synthetic end-to-end host; `competition-browser.js` drives the same path in the console.
-- `golden-replay.json` pins the canonical digest and score.
-- `fixtures.json` covers invalid decisions and fairness-order permutations.
-- `audit.js`, `blind-review.js`, and `coverage-matrix.md` make the release surface reviewable.
-- `submission.md` documents the freeze, environment, verification, and evidence-bundle protocol.
-
-The current canonical checker result is:
-
-```text
-DIGEST   2e316231
-EVENTS   24
-SCORE    A 60.33 / B 45.17
-```
-
-## Design bar
-
-The protocol borrows reproducibility and submission discipline from MLPerf-style benchmarks, and borrows immediate context — score, phase, clock, event feed, and replay — from esports observer tooling. The aim is simple: make policy evaluation rigorous enough to audit and clear enough to watch.
+See [`pilot/README.md`](pilot/README.md). Start with the deterministic preflight and dry run; live provider calls are a separate, explicit gate.
 
 ## Status
 
-`v0.8.0-synthetic` · pre-model-safe
-
-Real-model adapters are intentionally absent. The next meaningful review gate is the external validation of the adapter boundary and isolation model.
+`pre-v0 · real-pilot baseline`

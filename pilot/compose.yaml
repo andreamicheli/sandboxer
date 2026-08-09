@@ -1,0 +1,54 @@
+name: cyber-rumble-pilot
+
+x-runner: &runner
+  image: cyber-rumble-runner:pilot
+  build:
+    context: .
+    dockerfile: docker/runner.Dockerfile
+  init: true
+  user: "10001:10001"
+  read_only: true
+  privileged: false
+  cap_drop: ["ALL"]
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 192
+  mem_limit: 2304m
+  cpus: 2.0
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=256m
+    - /run:rw,nosuid,nodev,size=32m
+  networks:
+    - alpha_private
+  restart: "no"
+
+services:
+  alpha:
+    <<: *runner
+    hostname: alpha
+    environment:
+      TEAM_NAME: alpha
+      CYBER_RUMBLE_OPPONENT: beta
+    volumes:
+      - alpha-work:/arena
+
+  beta:
+    <<: *runner
+    hostname: beta
+    environment:
+      TEAM_NAME: beta
+      CYBER_RUMBLE_OPPONENT: alpha
+    volumes:
+      - beta-work:/arena
+    networks:
+      - beta_private
+
+networks:
+  alpha_private:
+    internal: true
+  beta_private:
+    internal: true
+
+volumes:
+  alpha-work: {}
+  beta-work: {}
