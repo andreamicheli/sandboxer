@@ -60,7 +60,7 @@ class LocalKvmHost(Protocol):
 
     def arm_ttl(self, cgroup: str, identity: str, seconds: int) -> object: ...
 
-    def cancel_ttl(self, token: object) -> None: ...
+    def cancel_ttl(self, token: object) -> bool: ...
 
     def terminate(self, pid: int) -> None: ...
 
@@ -157,9 +157,13 @@ class SubprocessLocalKvmHost:
             raise RuntimeError("TTL_WATCHDOG_UNAVAILABLE")
         return unit
 
-    def cancel_ttl(self, token: object) -> None:
-        if isinstance(token, str):
-            subprocess.run(("systemctl", "stop", token), text=True, capture_output=True, check=False)
+    def cancel_ttl(self, token: object) -> bool:
+        if not isinstance(token, str):
+            return False
+        # A successful synchronous stop is the authoritative acknowledgement
+        # that the independently-owned watchdog can no longer fire.
+        completed = subprocess.run(("systemctl", "stop", token), text=True, capture_output=True, check=False)
+        return completed.returncode == 0
 
     def terminate(self, pid: int) -> None:
         try:
@@ -251,7 +255,7 @@ class _RunnerRecord:
 class _PartialRecord:
     root: Path
     namespaces: tuple[str, ...]
-    tap: str
+    tap: str | None
     control_socket: Path
     pid: int | None
     process_identity: str | None
@@ -303,19 +307,20 @@ class LocalKvmRunnerProvider:
             for record in records:
                 evidence.append(self._destroy_record(record, "PROVISION_ROLLBACK"))
             for namespace in (*blue_namespaces, red_namespace):
-                deleted = self._run(("ip", "netns", "del", namespace), "", allow_failure=True)
-                listed = self._run(("ip", "netns", "list"), "", allow_failure=True)
-                remains = listed.returncode != 0 or any(line.split(maxsplit=1)[0] == namespace for line in listed.stdout.splitlines() if line.strip())
+                self._run(("ip", "netns", "del", namespace), "", allow_failure=True)
+                namespace_destroyed = self._namespace_absent(namespace)
                 evidence.append(TeardownEvidence(
                     f"{match_id}:{namespace}",
-                    TeardownState.QUARANTINED if deleted.returncode != 0 or remains else TeardownState.DESTROYED,
-                    "namespace deletion verified" if deleted.returncode == 0 and not remains else "namespace cleanup unverified",
-                    None if deleted.returncode == 0 and not remains else "NAMESPACE_REMAINS",
+                    TeardownState.DESTROYED if namespace_destroyed else TeardownState.QUARANTINED,
+                    "namespace deletion verified" if namespace_destroyed else "namespace cleanup unverified",
+                    None if namespace_destroyed else "NAMESPACE_REMAINS",
                 ))
             if isinstance(error, ProvisioningFailed):
                 evidence.extend(error.teardown_evidence)
-            if all(item.state is TeardownState.DESTROYED for item in evidence):
-                shutil.rmtree(match_root, ignore_errors=True)
+            if all(item.state is TeardownState.DESTROYED for item in evidence) and not self._remove_root(match_root):
+                evidence.append(TeardownEvidence(
+                    match_id, TeardownState.QUARANTINED, "Match artifact cleanup unverified", "MATCH_ROOT_REMAINS"
+                ))
             raise ProvisioningFailed(str(error), tuple(evidence)) from error
         return records[0].handle, records[1].handle
 
@@ -380,21 +385,32 @@ class LocalKvmRunnerProvider:
         record = self._records.get(runner_id)
         partial = self._partials.get(runner_id)
         if partial is not None:
-            failures = []
-            if partial.ttl_token is not None:
-                self._host.cancel_ttl(partial.ttl_token)
+            failures: list[str] = []
+            if partial.ttl_token is not None and not self._cancel_ttl(partial.ttl_token):
+                failures.append("TTL_WATCHDOG_REMAINS")
             if partial.pid is not None and partial.process_identity is not None:
                 self._stop_pid(partial.pid)
                 if self._host.process_identity(partial.pid) == partial.process_identity:
                     failures.append("QEMU_PROCESS_SURVIVED")
             if partial.cgroup is not None and not self._host.destroy_cgroup(partial.cgroup):
                 failures.append("CGROUP_REMAINS")
+            if partial.tap is not None and not self._remove_tap(partial.namespaces[0], partial.tap):
+                failures.append("TAP_REMAINS")
             for namespace in partial.namespaces:
-                deleted = self._run(("ip", "netns", "del", namespace), "", allow_failure=True)
-                if deleted.returncode != 0:
+                self._run(("ip", "netns", "del", namespace), "", allow_failure=True)
+                if not self._namespace_absent(namespace):
                     failures.append(namespace)
+            if not failures and not self._remove_root(partial.root):
+                failures.append("RUNNER_ROOT_REMAINS")
+            match_root = partial.root.parent
+            another_partial_remains = any(
+                candidate_id != runner_id and candidate.root.parent == match_root
+                for candidate_id, candidate in self._partials.items()
+            )
+            another_record_remains = any(candidate.root.parent == match_root for candidate in self._records.values())
+            if not failures and not another_partial_remains and not another_record_remains and not self._remove_root(match_root):
+                failures.append("MATCH_ROOT_REMAINS")
             if not failures:
-                shutil.rmtree(partial.root, ignore_errors=True)
                 self._partials.pop(runner_id, None)
                 return TeardownEvidence(runner_id, TeardownState.DESTROYED, "partial Runner artifacts reconciled")
             return TeardownEvidence(runner_id, TeardownState.QUARANTINED, "partial Runner remains", "RECONCILIATION_UNAVAILABLE")
@@ -459,22 +475,42 @@ class LocalKvmRunnerProvider:
             handle = RunnerHandle(runner_id, name, ready.boot_id, ready.uid == 1001, True, True)
             return _RunnerRecord(handle, match_id, blue_namespace, red_namespace, red_bridge, tap, root, workspace, control_socket, pid, process_identity, cgroup, ttl_token, nonce, time.monotonic() + self.config.ttl_seconds)
         except Exception as error:
+            failures: list[str] = []
+            if ttl_token is not None and not self._cancel_ttl(ttl_token):
+                failures.append("TTL_WATCHDOG_REMAINS")
+            else:
+                ttl_token = None
             if pid is not None:
                 self._stop_pid(pid)
+                if process_identity is not None and self._host.process_identity(pid) == process_identity:
+                    failures.append("QEMU_PROCESS_SURVIVED")
+                else:
+                    pid = None
+                    process_identity = None
             if cgroup is not None:
-                self._host.destroy_cgroup(cgroup)
-            self._run_quiet(("ip", "-n", blue_namespace, "link", "del", tap))
-            state = TeardownState.DESTROYED if pid is None or not self._host.process_alive(pid) else TeardownState.QUARANTINED
-            if state is TeardownState.DESTROYED:
-                shutil.rmtree(root, ignore_errors=True)
+                if not self._host.destroy_cgroup(cgroup):
+                    failures.append("CGROUP_REMAINS")
+                else:
+                    cgroup = None
+            if not self._remove_tap(blue_namespace, tap):
+                failures.append("TAP_REMAINS")
             else:
+                tap = None
+            if not failures and not self._remove_root(root):
+                failures.append("RUNNER_ROOT_REMAINS")
+            state = TeardownState.DESTROYED if not failures else TeardownState.QUARANTINED
+            if state is TeardownState.QUARANTINED:
                 self._partials[runner_id] = _PartialRecord(
                     root, (blue_namespace, red_namespace), tap, control_socket, pid,
                     process_identity, cgroup, ttl_token,
                 )
             raise ProvisioningFailed(
                 str(error),
-                (TeardownEvidence(runner_id, state, "partial Runner provisioning rollback attempted", str(error)),),
+                (TeardownEvidence(
+                    runner_id, state,
+                    "partial Runner provisioning rollback verified" if not failures else ";".join(failures),
+                    str(error) if not failures else failures[0],
+                ),),
             ) from error
 
     def _qemu_command(
@@ -599,7 +635,8 @@ class LocalKvmRunnerProvider:
 
     def _destroy_record(self, record: _RunnerRecord, reason_code: str | None) -> TeardownEvidence:
         failures: list[str] = []
-        self._host.cancel_ttl(record.ttl_token)
+        if not self._cancel_ttl(record.ttl_token):
+            failures.append("TTL_WATCHDOG_REMAINS")
         self._stop_pid(record.pid)
         if self._host.process_identity(record.pid) == record.process_identity:
             failures.append("QEMU_PROCESS_SURVIVED")
@@ -608,29 +645,24 @@ class LocalKvmRunnerProvider:
             failures.append("OVERLAY_INTEGRITY_UNVERIFIED")
         if not self._host.destroy_cgroup(record.cgroup):
             failures.append("CGROUP_REMAINS")
-        blue_deleted = self._run(("ip", "netns", "del", record.blue_namespace), "", allow_failure=True)
-        blue_listed = self._run(("ip", "netns", "list"), "", allow_failure=True)
-        blue_remains = blue_listed.returncode != 0 or any(
-            line.split(maxsplit=1)[0] == record.blue_namespace for line in blue_listed.stdout.splitlines() if line.strip()
-        )
-        if blue_deleted.returncode != 0 or blue_remains:
+        self._run(("ip", "netns", "del", record.blue_namespace), "", allow_failure=True)
+        if not self._namespace_absent(record.blue_namespace):
             failures.append("BLUE_NAMESPACE_REMAINS")
         another_runner_remains = any(
             candidate.handle.runner_id != record.handle.runner_id and candidate.match_id == record.match_id
             for candidate in self._records.values()
         )
         if not failures and not another_runner_remains:
-            deleted = self._run(("ip", "netns", "del", record.red_namespace), "", allow_failure=True)
-            listed = self._run(("ip", "netns", "list"), "", allow_failure=True)
-            if deleted.returncode != 0 or listed.returncode != 0 or any(
-                line.split(maxsplit=1)[0] == record.red_namespace for line in listed.stdout.splitlines() if line.strip()
-            ):
+            self._run(("ip", "netns", "del", record.red_namespace), "", allow_failure=True)
+            if not self._namespace_absent(record.red_namespace):
                 failures.append("ARENA_NAMESPACE_REMAINS")
         if not failures:
-            self._records.pop(record.handle.runner_id, None)
-            shutil.rmtree(record.root, ignore_errors=True)
+            if not self._remove_root(record.root):
+                return TeardownEvidence(record.handle.runner_id, TeardownState.QUARANTINED, "RUNNER_ROOT_REMAINS", reason_code or "RUNNER_ROOT_REMAINS")
             if not another_runner_remains:
-                shutil.rmtree(record.root.parent, ignore_errors=True)
+                if not self._remove_root(record.root.parent):
+                    return TeardownEvidence(record.handle.runner_id, TeardownState.QUARANTINED, "MATCH_ROOT_REMAINS", reason_code or "MATCH_ROOT_REMAINS")
+            self._records.pop(record.handle.runner_id, None)
             return TeardownEvidence(record.handle.runner_id, TeardownState.DESTROYED, "QEMU stopped; workspace checked; Arena namespace and cgroup removed")
         return TeardownEvidence(record.handle.runner_id, TeardownState.QUARANTINED, ";".join(failures), reason_code or failures[0])
 
@@ -639,6 +671,35 @@ class LocalKvmRunnerProvider:
             self._host.terminate(pid)
             if self._host.process_alive(pid):
                 self._host.kill(pid)
+
+    def _cancel_ttl(self, token: object) -> bool:
+        try:
+            return self._host.cancel_ttl(token)
+        except Exception:
+            return False
+
+    def _remove_tap(self, namespace: str, tap: str) -> bool:
+        if self._namespace_absent(namespace):
+            return True
+        self._run(("ip", "-n", namespace, "link", "del", tap), "", allow_failure=True)
+        listed = self._run(("ip", "-n", namespace, "link", "show", "dev", tap), "", allow_failure=True)
+        return listed.returncode != 0 and "does not exist" in listed.stderr.lower()
+
+    def _namespace_absent(self, namespace: str) -> bool:
+        listed = self._run(("ip", "netns", "list"), "", allow_failure=True)
+        return listed.returncode == 0 and not any(
+            line.split(maxsplit=1)[0] == namespace for line in listed.stdout.splitlines() if line.strip()
+        )
+
+    @staticmethod
+    def _remove_root(root: Path) -> bool:
+        try:
+            shutil.rmtree(root)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return not root.exists()
 
     def _enforce_ttl(self, records: list[_RunnerRecord]) -> None:
         expired = [record for record in records if time.monotonic() >= record.deadline]
