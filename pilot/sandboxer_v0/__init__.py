@@ -35,6 +35,7 @@ from .auditor import (
     RedactedProjection,
     audit_series,
 )
+from .evidence import EvidenceBundle, EvidenceFreezeError, EvidenceVersionStore, freeze_evidence_bundle
 from .local_kvm import LocalKvmConfig, LocalKvmRunnerProvider, SubprocessLocalKvmHost
 from .runner_backend import ProvisioningFailed
 
@@ -63,6 +64,10 @@ __all__ = [
     "Auditor",
     "RedactedProjection",
     "audit_series",
+    "EvidenceBundle",
+    "EvidenceFreezeError",
+    "EvidenceVersionStore",
+    "freeze_evidence_bundle",
     "LocalKvmConfig",
     "LocalKvmRunnerProvider",
     "SubprocessLocalKvmHost",

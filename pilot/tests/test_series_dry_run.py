@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 
+import pytest
 from typing import Any
 
 from sandboxer_v0 import (
@@ -19,6 +20,9 @@ from sandboxer_v0 import (
     MatchPolicy,
     SeriesSpec,
     audit_series,
+    EvidenceFreezeError,
+    EvidenceVersionStore,
+    freeze_evidence_bundle,
     execute_series,
 )
 from sandboxer_v0.series import _digest
@@ -664,3 +668,43 @@ def test_no_signature_before_telemetry_closure_or_without_teardown() -> None:
     assert uncertain_outcome.verdict["teardown_verified"] is False
     assert uncertain_outcome.verdict["signed"] is False
     assert uncertain_outcome.verdict["signature"] is None
+
+
+def test_evidence_bundle_freezes_redacted_derivation_and_proofs() -> None:
+    outcome = execute_series(_spec())
+    bundle = outcome.evidence_bundle
+
+    assert bundle["schema_version"] == "sandboxer.evidence-bundle.v1"
+    assert bundle["public"]["seed_commitment"]
+    assert bundle["restricted"]["redaction_irreversible"] is True
+    assert bundle["public"]["auditor_verdict"]["signature"] == outcome.verdict["signature"]
+    derivations = {item["kind"] for item in bundle["public"]["evidence_derivation"]}
+    assert {"MODEL_CLAIMED", "RUNNER_OBSERVED", "ORCHESTRATOR_VERIFIED"} <= derivations
+    rendered = repr(bundle["public"]["normalized_telemetry"])
+    assert "capture" not in rendered
+    assert "response_proof" in rendered
+
+
+def test_evidence_freeze_rejects_missing_or_tampered_material_evidence() -> None:
+    outcome = execute_series(_spec())
+    events = [dict(event) for event in outcome.telemetry]
+    events[2]["event_type"] = "tampered"
+    with pytest.raises(EvidenceFreezeError, match="TELEMETRY_HASH_INVALID"):
+        freeze_evidence_bundle(spec=_spec(), telemetry=events, results=outcome.match_results, verdict=outcome.verdict)
+
+    asymmetric = _rehash_telemetry([dict(event) for event in outcome.telemetry if event["evidence_kind"] != "RUNNER_OBSERVED"])
+    with pytest.raises(EvidenceFreezeError, match="MATERIAL_EVIDENCE_ASYMMETRIC"):
+        freeze_evidence_bundle(spec=_spec(), telemetry=asymmetric, results=outcome.match_results, verdict=outcome.verdict)
+
+
+def test_evidence_corrections_preserve_prior_immutable_provenance() -> None:
+    outcome = execute_series(_spec())
+    store = EvidenceVersionStore()
+    first = store.freeze(spec=_spec(), telemetry=outcome.telemetry, results=outcome.match_results, verdict=outcome.verdict)
+    corrected = store.freeze(spec=_spec(), telemetry=outcome.telemetry, results=outcome.match_results, verdict=outcome.verdict)
+
+    assert store.current == corrected
+    assert corrected.version == 2
+    assert corrected.previous_version_url == first.url
+    assert corrected.previous_bundle_hash == first.bundle_hash
+    assert first.url in corrected.provenance

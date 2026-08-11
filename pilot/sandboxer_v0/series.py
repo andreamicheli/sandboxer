@@ -12,6 +12,7 @@ from typing import Any
 from .calibration import diagnose_dry_run
 from .blue_briefs import BlueBrief, brief_manifest, select_blue_briefs
 from .auditor import audit_series
+from .evidence import EvidenceFreezeError, freeze_evidence_bundle
 
 
 def _digest(value: object) -> str:
@@ -144,6 +145,7 @@ class ReleaseBundle:
     quarantined_runners: tuple[str, ...]
     calibration: dict[str, Any]
     verdict: dict[str, Any] = field(default_factory=dict)
+    evidence_bundle: dict[str, Any] = field(default_factory=dict)
 
 
 class _Telemetry:
@@ -344,7 +346,12 @@ def _bundle(
     }
     bundle_hash = _digest({"spec": asdict(spec), "terminal_code": terminal_code, "winner": winner, "manifest": artifact_manifest, "calibration": calibration})
     artifact_manifest["release_bundle"] = bundle_hash
-    return ReleaseBundle(eligible, terminal_code, winner, len(results), tuple(results), telemetry_events, telemetry_hash, artifact_manifest, bundle_hash, replay, report, broadcast, quarantined, calibration, verdict)
+    try:
+        evidence_bundle = freeze_evidence_bundle(spec=spec, telemetry=telemetry_events, results=results, verdict=verdict).to_dict()
+    except EvidenceFreezeError as error:
+        evidence_bundle = {"schema_version": "sandboxer.evidence-bundle.v1", "freeze_error": str(error)}
+        eligible = False
+    return ReleaseBundle(eligible, terminal_code, winner, len(results), tuple(results), telemetry_events, telemetry_hash, artifact_manifest, bundle_hash, replay, report, broadcast, quarantined, calibration, verdict, evidence_bundle)
 
 
 class _LifecycleStore:
