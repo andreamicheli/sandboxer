@@ -20,6 +20,7 @@ class RecordingKvmHost:
         self.control_requests: list[str] = []
         self.control_failures = 0
         self.destroyed_cgroups: list[str] = []
+        self.ttl_tokens: list[object] = []
 
     def run(self, argv: tuple[str, ...], *, input_text: str | None = None, timeout_seconds: float = 10) -> CommandResult:
         del timeout_seconds
@@ -66,6 +67,23 @@ class RecordingKvmHost:
     def process_alive(self, pid: int) -> bool:
         return pid in self.alive
 
+    def process_identity(self, pid: int) -> str | None:
+        return f"{pid}:fixture" if pid in self.alive else None
+
+    def cgroup_contains(self, cgroup: str, pid: int) -> bool:
+        return cgroup.startswith("/sys/fs/cgroup/sandboxer/") and pid in self.alive
+
+    def cgroup_limited(self, cgroup: str, pid: int, memory_bytes: int, cpu_max: str, pids_max: int) -> bool:
+        return self.cgroup_contains(cgroup, pid) and memory_bytes == 512 * 1024 * 1024 and cpu_max == "100000 100000" and pids_max == 128
+
+    def arm_ttl(self, cgroup: str, identity: str, seconds: int) -> object:
+        token = (cgroup, identity, seconds)
+        self.ttl_tokens.append(token)
+        return token
+
+    def cancel_ttl(self, token: object) -> None:
+        self.ttl_tokens.remove(token)
+
     def terminate(self, pid: int) -> None:
         self.alive.discard(pid)
 
@@ -92,7 +110,7 @@ def configured_provider(tmp_path: Path) -> tuple[LocalKvmRunnerProvider, Recordi
     base.write_bytes(b"known-good-qcow2-base")
     profile = tmp_path / "immutable-base.profile.json"
     profile.write_text(
-        '{"schema_version":1,"root_filesystem":"readonly","workspace_mount":"/workspace",'
+        '{"schema_version":1,"image_sha256":"' + hashlib.sha256(base.read_bytes()).hexdigest() + '","root_filesystem":"readonly","workspace_mount":"/workspace",'
         '"control_protocol":"virtio-serial-v1","toy_service":"synthetic-http"}'
     )
     config = LocalKvmConfig(
@@ -126,7 +144,8 @@ def test_local_kvm_rehearsal_uses_distinct_overlays_control_and_a_disposable_net
     assert all("setpriv" in command and any("sandboxer-runner" in item for item in command) for command in qemu_commands)
     assert all("-runas" not in command for command in qemu_commands)
     assert all("-daemonize" not in command and "-pidfile" not in command for command in qemu_commands)
-    assert all("timeout" in command and "--kill-after=5" in command for command in qemu_commands)
+    assert all("timeout" not in command for command in qemu_commands)
+    assert not host.ttl_tokens
     assert all("-sandbox" in command and "-nodefaults" in command for command in qemu_commands)
     assert all("-virtfs" not in command and "hostfwd" not in " ".join(command) for command in qemu_commands)
     assert all(
@@ -214,8 +233,8 @@ def test_partial_provision_rolls_back_a_qemu_process_when_control_proof_is_inval
     assert not host.alive
     assert host.destroyed_cgroups
     assert failure is not None
-    assert failure.teardown_evidence[0].resource_id == "kvm-rehearsal-005:atlas"
-    assert failure.teardown_evidence[-1].resource_id == "kvm-rehearsal-005:arena"
+    assert any(item.resource_id == "kvm-rehearsal-005:atlas" for item in failure.teardown_evidence)
+    assert any(item.resource_id.startswith("kvm-rehearsal-005:sbb-") for item in failure.teardown_evidence)
     assert not (tmp_path / "runners" / "kvm-rehearsal-005").exists()
 
 
@@ -229,14 +248,13 @@ def test_local_kvm_waits_for_a_bounded_guest_control_bootstrap(tmp_path: Path) -
     assert all(provider.destroy(runner).state is TeardownState.DESTROYED for runner in runners)
 
 
-def test_guest_control_has_a_minimal_alpine_device_path_fallback(tmp_path: Path) -> None:
+def test_runtime_metadata_never_asks_cloud_init_to_write_the_runner_root(tmp_path: Path) -> None:
     provider, _host = configured_provider(tmp_path)
     runners = provider.provision("kvm-rehearsal-007", ("atlas", "borealis"))
 
     user_data = (tmp_path / "runners" / "kvm-rehearsal-007" / "atlas" / "user-data.yaml").read_text()
 
-    assert "/dev/virtio-ports/org.sandboxer.control" in user_data
-    assert "/dev/vport0p1" in user_data
+    assert user_data == "#cloud-config\n"
     assert all(provider.destroy(runner).state is TeardownState.DESTROYED for runner in runners)
 
 

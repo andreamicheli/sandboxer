@@ -11,6 +11,7 @@ The image must have a sibling JSON profile with exactly these fields:
 ```json
 {
   "schema_version": 1,
+  "image_sha256": "the exact SHA-256 configured for this qcow2",
   "root_filesystem": "readonly",
   "workspace_mount": "/workspace",
   "control_protocol": "virtio-serial-v1",
@@ -18,7 +19,8 @@ The image must have a sibling JSON profile with exactly these fields:
 }
 ```
 
-The image builder is a separate follow-up. Its acceptance proof must show that
+The profile is a binding requirement, not evidence of image contents. The
+image builder is a separate follow-up. Its acceptance proof must show that
 the non-root `competitor` user runs the synthetic toy service and workspace,
 the root filesystem is read-only, and the virtio handler actively reports the
 Blue/Red network probes. Until that proof exists, `BASE_IMAGE_PROFILE_INVALID`
