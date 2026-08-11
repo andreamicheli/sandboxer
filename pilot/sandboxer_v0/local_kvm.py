@@ -512,8 +512,10 @@ class LocalKvmRunnerProvider:
         self._enforce_ttl(records)
         try:
             responses = [self._control_probe(record) for record in records]
+        except PreflightWitnessFailed:
+            raise
         except Exception as error:
-            raise PreflightWitnessFailed("LOCAL_KVM_CONTROL_WITNESS_UNAVAILABLE") from error
+            raise PreflightWitnessFailed("LOCAL_KVM_CONTROL_SOCKET_UNAVAILABLE") from error
         if any(item.route_after_setup != "absent" for item in responses):
             raise PreflightWitnessFailed("LOCAL_KVM_BLUE_ROUTE_AFTER_SETUP_WITNESS_FAILED")
         if any(item.route_at_control != "absent" for item in responses):
@@ -862,7 +864,18 @@ class LocalKvmRunnerProvider:
             raise PreflightWitnessFailed("LOCAL_KVM_BLUE_EGRESS_TCP_WITNESS_FAILED")
 
     def _control_probe(self, record: _RunnerRecord) -> ControlProbe:
-        return self._parse_control(self._control_exchange(record.control_socket, record.nonce), record.nonce, require_probe=True)
+        try:
+            response = self._control_exchange(record.control_socket, record.nonce)
+        except RuntimeError as error:
+            if str(error) == "CONTROL_BOOTSTRAP_TIMEOUT":
+                raise PreflightWitnessFailed("LOCAL_KVM_CONTROL_TIMEOUT") from error
+            raise PreflightWitnessFailed("LOCAL_KVM_CONTROL_SOCKET_UNAVAILABLE") from error
+        except (FileNotFoundError, ConnectionRefusedError, OSError, socket.timeout) as error:
+            raise PreflightWitnessFailed("LOCAL_KVM_CONTROL_SOCKET_UNAVAILABLE") from error
+        try:
+            return self._parse_control(response, record.nonce, require_probe=True)
+        except Exception as error:
+            raise PreflightWitnessFailed("LOCAL_KVM_CONTROL_INVALID_FRAME") from error
 
     def _control_exchange(self, socket_path: Path, nonce: str) -> str:
         deadline = time.monotonic() + 30
