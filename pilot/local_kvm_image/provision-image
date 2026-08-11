@@ -1,0 +1,21 @@
+#!/bin/ash
+set -eu
+
+apk add --no-cache e2fsprogs iproute2 iputils busybox-extras
+adduser -D -H -u 1001 -s /bin/ash competitor
+passwd -l competitor
+install -d -m 0755 /usr/local/libexec
+install -m 0755 /run/sandboxer-build/sandboxer-common /usr/local/libexec/sandboxer-common
+install -m 0755 /run/sandboxer-build/sandboxer-setup /usr/local/libexec/sandboxer-setup
+install -m 0755 /run/sandboxer-build/sandboxer-toy /usr/local/libexec/sandboxer-toy
+install -m 0755 /run/sandboxer-build/sandboxer-control /usr/local/libexec/sandboxer-control
+install -m 0755 /run/sandboxer-build/sandboxer-runner.init /etc/init.d/sandboxer-runner
+rc-update add sandboxer-runner default
+mkdir -p /workspace
+chown competitor:competitor /workspace
+chmod 0700 /workspace
+touch /etc/cloud/cloud-init.disabled
+apk info -vv | sort > /etc/sandboxer-image-packages.txt
+printf 'SANDBOXER_BUILD_OK\n' > /dev/ttyS0
+sync
+poweroff -f

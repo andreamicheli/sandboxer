@@ -1,0 +1,48 @@
+#!/bin/ash
+# Installed only in the immutable Runner image. Runtime metadata is read from
+# the read-only CIDATA disk; it is never interpreted as shell code.
+
+SANDBOXER_METADATA_MOUNT=/run/sandboxer-meta
+SANDBOXER_METADATA_DEVICE=/dev/sr0
+
+sandboxer_mount_metadata() {
+    mkdir -p "$SANDBOXER_METADATA_MOUNT"
+    if ! mountpoint -q "$SANDBOXER_METADATA_MOUNT"; then
+        mount -t iso9660 -o ro,nosuid,nodev,noexec "$SANDBOXER_METADATA_DEVICE" "$SANDBOXER_METADATA_MOUNT" || return 1
+    fi
+}
+
+sandboxer_metadata_value() {
+    key="$1"
+    sed -n "s/^${key}=//p" "$SANDBOXER_METADATA_MOUNT/meta-data" | sed -n '1p'
+}
+
+sandboxer_load_metadata() {
+    sandboxer_mount_metadata || return 1
+    SANDBOXER_NONCE="$(sandboxer_metadata_value nonce)"
+    SANDBOXER_IP="$(sandboxer_metadata_value ip)"
+    SANDBOXER_PEER_IP="$(sandboxer_metadata_value peer_ip)"
+    case "$SANDBOXER_NONCE" in
+        ????????*) ;;
+        *) return 1 ;;
+    esac
+    case "$SANDBOXER_IP:$SANDBOXER_PEER_IP" in
+        10.77.0.11:10.77.0.12|10.77.0.12:10.77.0.11) ;;
+        *) return 1 ;;
+    esac
+}
+
+sandboxer_private_mounts() {
+    ! awk '$3 ~ /^(9p|virtiofs|nfs|nfs4|cifs|smbfs|fuse\\.sshfs)$/ { found = 1 } END { exit found ? 0 : 1 }' /proc/mounts
+}
+
+sandboxer_no_credentials() {
+    for path in /root/.ssh /root/.aws /root/.config/gcloud /home/competitor/.ssh /home/competitor/.aws /home/competitor/.config/gcloud /run/secrets /var/run/secrets; do
+        test ! -e "$path" || return 1
+    done
+    for environment in /proc/1/environ /proc/self/environ; do
+        test -r "$environment" || continue
+        tr '\000' '\n' < "$environment" | grep -Eq '^(GROQ_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|COHERE_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|AZURE_.*TOKEN|.*_PASSWORD)=' && return 1
+    done
+    return 0
+}

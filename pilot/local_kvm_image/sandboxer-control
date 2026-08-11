@@ -1,0 +1,54 @@
+#!/bin/ash
+set -eu
+
+. /usr/local/libexec/sandboxer-common
+PORT=/dev/virtio-ports/org.sandboxer.control
+
+probe_bool() {
+    if "$1"; then printf 1; else printf 0; fi
+}
+
+tcp_http() {
+    /bin/busybox wget -q -T 2 -O /dev/null "http://$1:$2/"
+}
+
+network_proof() {
+    phase="$1"
+    peer_denied=0
+    toy_http=0
+    if test "$phase" = blue; then
+        tcp_http "$SANDBOXER_PEER_IP" 8080 || peer_denied=1
+    else
+        tcp_http "$SANDBOXER_PEER_IP" 8080 && toy_http=1
+    fi
+    alternate_denied=0
+    tcp_http "$SANDBOXER_PEER_IP" 8081 || alternate_denied=1
+    icmp_denied=0
+    ping -c 1 -W 1 "$SANDBOXER_PEER_IP" >/dev/null 2>&1 || icmp_denied=1
+    egress_denied=0
+    if test -z "$(ip route show default)" && ! /bin/busybox wget -q -T 2 -O /dev/null http://198.51.100.1:81/; then
+        egress_denied=1
+    fi
+    orchestrator_denied=0
+    /bin/busybox nc -z -w 1 10.77.0.1 1 >/dev/null 2>&1 || orchestrator_denied=1
+    printf 'NETWORK_PROBE nonce=%s phase=%s peer_denied=%s toy_http=%s alternate_denied=%s icmp_denied=%s egress_denied=%s orchestrator_denied=%s\n' \
+        "$SANDBOXER_NONCE" "$phase" "$peer_denied" "$toy_http" "$alternate_denied" "$icmp_denied" "$egress_denied" "$orchestrator_denied"
+}
+
+while :; do
+    sandboxer_load_metadata || { sleep 1; continue; }
+    exec 3<> "$PORT"
+    if IFS= read -r command <&3; then
+        set -- $command
+        if test "$1" = PROBE && test "${2:-}" = "$SANDBOXER_NONCE" && test "$#" -eq 2; then
+            printf 'READY nonce=%s uid=%s boot_id=%s no_credentials=%s private_mounts=%s\n' \
+                "$SANDBOXER_NONCE" "$(id -u competitor)" "$(cat /proc/sys/kernel/random/boot_id)" \
+                "$(probe_bool sandboxer_no_credentials)" "$(probe_bool sandboxer_private_mounts)" >&3
+            printf 'PROBE_OK nonce=%s uid=%s clock_epoch=%s\n' "$SANDBOXER_NONCE" "$(id -u competitor)" "$(date +%s)" >&3
+        elif test "$1" = NETPROBE && test "${2:-}" = "$SANDBOXER_NONCE" && { test "${3:-}" = blue || test "${3:-}" = red; } && test "$#" -eq 3; then
+            network_proof "$3" >&3
+        fi
+    fi
+    exec 3>&-
+    exec 3<&-
+done
