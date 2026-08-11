@@ -29,7 +29,7 @@ from typing import Protocol
 
 from .arena_safety import NetworkObservation, Phase, TeardownEvidence, TeardownState
 from .local_kvm_control import ControlProbe, ControlReady, NetworkProof, parse_control, parse_network_proof
-from .runner_backend import PreflightCheck, ProvisioningFailed, RunnerHandle
+from .runner_backend import PreflightCheck, PreflightWitnessFailed, ProvisioningFailed, RunnerHandle
 
 
 _SAFE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
@@ -142,6 +142,8 @@ class LocalKvmHost(Protocol):
     def terminate(self, pid: int) -> None: ...
 
     def kill(self, pid: int) -> None: ...
+
+    def wait_for_exit(self, pid: int, identity: str, *, timeout_seconds: float) -> bool: ...
 
     def create_cgroup(self, name: str, *, memory_max_bytes: int, cpu_max: str, pids_max: int) -> str: ...
 
@@ -329,6 +331,20 @@ class SubprocessLocalKvmHost:
         except ProcessLookupError:
             pass
 
+    def wait_for_exit(self, pid: int, identity: str, *, timeout_seconds: float) -> bool:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if self.process_identity(pid) != identity:
+                return True
+            try:
+                reaped, _status = os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                reaped = 0
+            if reaped == pid:
+                return True
+            time.sleep(0.02)
+        return self.process_identity(pid) != identity
+
     def create_cgroup(self, name: str, *, memory_max_bytes: int, cpu_max: str, pids_max: int) -> str:
         self._cgroup_root.mkdir(parents=True, exist_ok=True)
         # Controllers must be enabled in the Sandboxer-owned parent before
@@ -488,8 +504,14 @@ class LocalKvmRunnerProvider:
     def probe(self, runners: tuple[RunnerHandle, RunnerHandle]) -> tuple[PreflightCheck, ...]:
         records = self._require_records(runners)
         self._enforce_ttl(records)
-        responses = [self._control_probe(record) for record in records]
-        network = self._measure_network(records, Phase.BLUE)
+        try:
+            responses = [self._control_probe(record) for record in records]
+        except Exception as error:
+            raise PreflightWitnessFailed("LOCAL_KVM_CONTROL_WITNESS_UNAVAILABLE") from error
+        try:
+            network = self._measure_network(records, Phase.BLUE)
+        except Exception as error:
+            raise PreflightWitnessFailed("LOCAL_KVM_BLUE_NETWORK_WITNESS_UNAVAILABLE") from error
         all_alive = all(self._host.process_alive(record.pid) for record in records)
         unique_boot_ids = len({record.handle.kernel_id for record in records}) == 2
         now = time.monotonic()
@@ -553,7 +575,7 @@ class LocalKvmRunnerProvider:
                 else:
                     partial.ttl_token = None
             if partial.pid is not None and partial.process_identity is not None:
-                self._stop_pid(partial.pid)
+                self._stop_pid(partial.pid, partial.process_identity)
                 if self._host.process_identity(partial.pid) == partial.process_identity:
                     failures.append("QEMU_PROCESS_SURVIVED")
             if partial.cgroup is not None and not self._host.destroy_cgroup(partial.cgroup):
@@ -650,7 +672,8 @@ class LocalKvmRunnerProvider:
             else:
                 ttl_token = None
             if pid is not None:
-                self._stop_pid(pid)
+                if process_identity is not None:
+                    self._stop_pid(pid, process_identity)
                 if process_identity is not None and self._host.process_identity(pid) == process_identity:
                     failures.append("QEMU_PROCESS_SURVIVED")
                 else:
@@ -832,12 +855,13 @@ class LocalKvmRunnerProvider:
                 failures.append("TTL_WATCHDOG_REMAINS")
             else:
                 record.ttl_token = None
-        self._stop_pid(record.pid)
-        if self._host.process_identity(record.pid) == record.process_identity:
+        stopped = self._stop_pid(record.pid, record.process_identity)
+        if not stopped or self._host.process_identity(record.pid) == record.process_identity:
             failures.append("QEMU_PROCESS_SURVIVED")
-        check = self._run((self.config.qemu_img_binary, "check", "--output=json", os.fspath(record.workspace)), "", allow_failure=True)
-        if check.returncode != 0:
-            failures.append("OVERLAY_INTEGRITY_UNVERIFIED")
+        else:
+            check = self._run((self.config.qemu_img_binary, "check", "--output=json", os.fspath(record.workspace)), "", allow_failure=True)
+            if check.returncode != 0:
+                failures.append("OVERLAY_INTEGRITY_UNVERIFIED")
         if not self._host.destroy_cgroup(record.cgroup):
             failures.append("CGROUP_REMAINS")
         self._run(("ip", "netns", "del", record.blue_namespace), "", allow_failure=True)
@@ -861,11 +885,14 @@ class LocalKvmRunnerProvider:
             return TeardownEvidence(record.handle.runner_id, TeardownState.DESTROYED, "QEMU stopped; workspace checked; Arena namespace and cgroup removed")
         return TeardownEvidence(record.handle.runner_id, TeardownState.QUARANTINED, ";".join(failures), reason_code or failures[0])
 
-    def _stop_pid(self, pid: int) -> None:
-        if self._host.process_alive(pid):
-            self._host.terminate(pid)
-            if self._host.process_alive(pid):
-                self._host.kill(pid)
+    def _stop_pid(self, pid: int, identity: str) -> bool:
+        if self._host.process_identity(pid) != identity:
+            return True
+        self._host.terminate(pid)
+        if self._host.wait_for_exit(pid, identity, timeout_seconds=0.5):
+            return True
+        self._host.kill(pid)
+        return self._host.wait_for_exit(pid, identity, timeout_seconds=0.5)
 
     def _cancel_ttl(self, token: object) -> bool:
         try:

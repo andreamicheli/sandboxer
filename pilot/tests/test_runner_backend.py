@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from sandboxer_v0.runner_backend import (
+    PreflightWitnessFailed,
     SimulatedRunnerProvider,
     ProductionRunnerBackend,
     RunnerPreflightFailed,
@@ -101,6 +102,22 @@ def test_provider_probe_exception_is_quarantined_instead_of_leaking_live_runners
 
     assert error.value.reason_code == "PREFLIGHT_EXECUTION_FAILED"
     assert provider.quarantine_calls == ["rehearsal-probe-error:atlas", "rehearsal-probe-error:borealis"]
+
+
+def test_typed_provider_preflight_failure_preserves_its_safe_substage() -> None:
+    class TypedBrokenProbeFixture(SimulatedRunnerProvider):
+        def probe(self, runners):  # type: ignore[no-untyped-def]
+            raise PreflightWitnessFailed("LOCAL_KVM_BLUE_NETWORK_WITNESS_UNAVAILABLE")
+
+    provider = TypedBrokenProbeFixture()
+
+    with pytest.raises(RunnerPreflightFailed) as error:
+        ProductionRunnerBackend(provider).rehearse(
+            match_id="rehearsal-typed-probe-error", runner_names=("atlas", "borealis")
+        )
+
+    assert error.value.reason_code == "LOCAL_KVM_BLUE_NETWORK_WITNESS_UNAVAILABLE"
+    assert provider.quarantine_calls == ["rehearsal-typed-probe-error:atlas", "rehearsal-typed-probe-error:borealis"]
 
 
 def test_teardown_failure_is_quarantined_and_reconciliation_retains_typed_evidence() -> None:

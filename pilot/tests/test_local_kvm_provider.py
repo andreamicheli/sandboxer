@@ -8,6 +8,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from sandboxer_v0.arena_safety import Phase, TeardownState
 from sandboxer_v0.local_kvm import (
     CommandResult,
@@ -18,7 +20,7 @@ from sandboxer_v0.local_kvm import (
     SocketWitnessStage,
     SubprocessLocalKvmHost,
 )
-from sandboxer_v0.runner_backend import ProductionRunnerBackend, ProvisioningFailed
+from sandboxer_v0.runner_backend import ProductionRunnerBackend, ProvisioningFailed, RunnerPreflightFailed
 
 
 class RecordingKvmHost:
@@ -47,6 +49,9 @@ class RecordingKvmHost:
         self.socket_witness_directory_metadata: list[tuple[int, int, int]] = []
         self.socket_witness_result = SocketWitnessResult.success()
         self.create_stale_control_socket = False
+        self.terminate_leaves_process_alive = False
+        self.wait_calls: list[tuple[int, str, float]] = []
+        self.stop_order: list[str] = []
 
     def run(self, argv: tuple[str, ...], *, input_text: str | None = None, timeout_seconds: float = 10) -> CommandResult:
         del timeout_seconds
@@ -81,6 +86,7 @@ class RecordingKvmHost:
             if self.create_stale_control_socket:
                 Path(next(item for item in argv if item.endswith(".iso"))).parent.joinpath("control.sock").touch()
         if argv[:3] == ("qemu-img", "check", "--output=json"):
+            self.stop_order.append("check")
             return CommandResult(0, '{"filename":"overlay","format":"qcow2"}', "")
         if "addr" in argv and "show" in argv and "-j" in argv:
             return CommandResult(0, "[]", "")
@@ -148,10 +154,18 @@ class RecordingKvmHost:
         return True
 
     def terminate(self, pid: int) -> None:
-        self.alive.discard(pid)
+        self.stop_order.append("term")
+        if not self.terminate_leaves_process_alive:
+            self.alive.discard(pid)
 
     def kill(self, pid: int) -> None:
+        self.stop_order.append("kill")
         self.alive.discard(pid)
+
+    def wait_for_exit(self, pid: int, identity: str, *, timeout_seconds: float) -> bool:
+        self.wait_calls.append((pid, identity, timeout_seconds))
+        self.stop_order.append("wait")
+        return pid not in self.alive
 
     def create_cgroup(self, name: str, *, memory_max_bytes: int, cpu_max: str, pids_max: int) -> str:
         assert memory_max_bytes == 512 * 1024 * 1024
@@ -282,6 +296,34 @@ def test_local_kvm_requires_non_root_socket_create_unlink_witness_before_qemu(tm
 
     assert len(host.socket_witnesses) == 1
     assert not any("qemu-system-x86_64" in command for command in host.commands)
+
+
+def test_local_kvm_labels_an_unavailable_blue_network_witness_without_generic_preflight_collapse(tmp_path: Path, monkeypatch) -> None:
+    provider, _host = configured_provider(tmp_path)
+    monkeypatch.setattr(
+        provider,
+        "_measure_network",
+        lambda _records, _phase: (_ for _ in ()).throw(RuntimeError("private detail")),
+    )
+
+    with pytest.raises(RunnerPreflightFailed) as error:
+        ProductionRunnerBackend(provider).rehearse(
+            match_id="kvm-blue-witness", runner_names=("atlas", "borealis")
+        )
+
+    assert error.value.reason_code == "LOCAL_KVM_BLUE_NETWORK_WITNESS_UNAVAILABLE"
+
+
+def test_local_kvm_waits_for_identity_exit_before_checking_the_overlay(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    runners = provider.provision("kvm-teardown-wait", ("atlas", "borealis"))
+    host.terminate_leaves_process_alive = True
+
+    evidence = provider.destroy(runners[0])
+
+    assert evidence.state is TeardownState.DESTROYED
+    assert host.stop_order[:5] == ["term", "wait", "kill", "wait", "check"]
+    assert host.wait_calls[0][2] > 0
 
 
 def test_local_kvm_preserves_a_sanitized_qemu_startup_diagnostic_in_typed_failure(tmp_path: Path) -> None:
