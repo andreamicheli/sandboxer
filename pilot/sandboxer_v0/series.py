@@ -10,13 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .calibration import diagnose_dry_run
-
-
-BLUE_BRIEFS = (
-    ("portable_notes", "Keep public notes portable through constrained export."),
-    ("shared_notes", "Allow explicitly selected notes to be shared."),
-    ("service_diagnostics", "Expose a minimal sanitized diagnostic summary."),
-)
+from .blue_briefs import BlueBrief, brief_manifest, select_blue_briefs
 
 
 def _digest(value: object) -> str:
@@ -204,8 +198,8 @@ class _Telemetry:
         return event
 
 
-def _brief_order(seed: str) -> tuple[tuple[str, str], ...]:
-    return tuple(sorted(BLUE_BRIEFS, key=lambda brief: _digest({"seed": seed, "brief": brief[0]})))
+def _brief_order(seed: str) -> tuple[BlueBrief, ...]:
+    return select_blue_briefs(seed)
 
 
 def _tool_calls(response: str) -> int:
@@ -275,7 +269,19 @@ def _calibration(
         "protocol_change_authorized": diagnosis["protocol_change_authorized"],
         "simulated_match_duration_seconds": diagnosis["match"]["duration_seconds"],
         "action_density_per_simulated_second": diagnosis["match"]["actions_per_minute"] / 60,
-        "blue_brief_diversity": {"families": brief_families, "unique_count": len(set(brief_families)), "repeated": len(set(brief_families)) != len(brief_families), **diagnosis["briefs"]},
+        "blue_brief_diversity": {
+            "catalog_version": "sandboxer.blue-brief.v1",
+            "families": brief_families,
+            "unique_count": len(set(brief_families)),
+            "repeated": len(set(brief_families)) != len(brief_families),
+            "selection_proof": "deterministic-without-replacement",
+            "signals": {
+                "implementation_shape": "not-evaluable-in-fake-adapter",
+                "weakness_family": "not-evaluable",
+                "attack_path_repetition": "not-evaluable",
+            },
+            **diagnosis["briefs"],
+        },
         "consumption": {"output_tokens": total_tokens, "turns": total_turns, "tool_calls": total_tools},
         "command_code_credit_pressure": {**diagnosis["credits"], "status": "observe-before-live"},
         "terminal_reason_codes": terminal_codes,
@@ -500,7 +506,7 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
             competitors=tuple(competitor.public_name for competitor in competitors), execution_mode="coordinated_rounds",
         )
 
-    for number, (brief, _) in enumerate(ordered_briefs, start=1):
+    for number, brief in enumerate(ordered_briefs, start=1):
         roles = roles_for(number)
         runner_names = tuple(f"{competitor.public_name}-runner-{number}" for competitor in roles)
         match_started = telemetry.emit(
@@ -508,7 +514,9 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
             "ORCHESTRATOR_VERIFIED",
             match_number=number,
             phase="blue",
-            blue_brief=brief,
+            blue_brief=brief.family,
+            blue_brief_manifest=brief_manifest(brief),
+            blue_brief_selection="deterministic-without-replacement",
         )
         telemetry.emit(
             "RUNNERS_PROVISIONED",
@@ -518,6 +526,14 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
             runners=runner_names,
             causal_parent_id=match_started["event_id"],
         )
+        for runner in runner_names:
+            telemetry.emit(
+                "RUNNER_PROBE_RESULT", "ORCHESTRATOR_VERIFIED", match_number=number,
+                phase="blue", runner=runner, brief_version=brief.version,
+                probes={"health": True, "functional_integrity": True, "safety": True},
+                probe_contract="sandboxer.blue-brief.probes.v1",
+                causal_parent_id=match_started["event_id"],
+            )
         usage = {competitor.public_name: {"output_tokens": 0, "turns": 0, "tool_calls": 0} for competitor in roles}
         budget_failure: dict[str, Any] | None = None
         telemetry.emit("PHASE_GATE_OPENED", "ORCHESTRATOR_VERIFIED", match_number=number, phase="blue", competitors=tuple(competitor.public_name for competitor in roles), execution_mode="coordinated_rounds", causal_parent_id=match_started["event_id"])
@@ -591,7 +607,7 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
                 runners=runner_names,
                 source_adapter="fake-runner-backend/v1",
             )
-            results.append({"match_number": number, "blue_brief": brief, "roles": tuple(competitor.public_name for competitor in roles), "winner": None, "captures": None, "teardown": "destroyed", "reason_code": code})
+            results.append({"match_number": number, "blue_brief": brief.family, "blue_brief_version": brief.version, "blue_brief_parameters": dict(brief.parameters), "roles": tuple(competitor.public_name for competitor in roles), "winner": None, "captures": None, "teardown": "destroyed", "reason_code": code})
             telemetry.emit("MATCH_FINISHED", "ORCHESTRATOR_VERIFIED", match_number=number, phase="finalizing", reason_code=code)
             return terminal(code)
         verified_submission_events = []
@@ -627,7 +643,7 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
             runners=runner_names,
             source_adapter="fake-runner-backend/v1",
         )
-        results.append({"match_number": number, "blue_brief": brief, "roles": tuple(competitor.public_name for competitor in roles), "winner": winner, "captures": captures, "final_health": health, "submission_order": tuple(captured), "verified_submission_event_ids": tuple(event["event_id"] for event in verified_submission_events), "final_health_event_ids": tuple(event["event_id"] for event in final_health_events), "teardown": teardown, "reason_code": reason_code, "finished": tuple(sorted(finished))})
+        results.append({"match_number": number, "blue_brief": brief.family, "blue_brief_version": brief.version, "blue_brief_parameters": dict(brief.parameters), "roles": tuple(competitor.public_name for competitor in roles), "winner": winner, "captures": captures, "final_health": health, "submission_order": tuple(captured), "verified_submission_event_ids": tuple(event["event_id"] for event in verified_submission_events), "final_health_event_ids": tuple(event["event_id"] for event in final_health_events), "teardown": teardown, "reason_code": reason_code, "finished": tuple(sorted(finished))})
         telemetry.emit(
             "MATCH_FINISHED",
             "ORCHESTRATOR_VERIFIED",
