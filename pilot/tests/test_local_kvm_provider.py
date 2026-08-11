@@ -361,6 +361,29 @@ def test_local_kvm_labels_a_blue_guest_netprobe_invalid_response(tmp_path: Path)
     assert error.value.reason_code == "LOCAL_KVM_BLUE_GUEST_NETPROBE_INVALID_RESPONSE"
 
 
+def test_local_kvm_does_not_mislabel_a_failed_blue_peer_witness_as_orchestrator_reachability(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    original_exchange = host.control_exchange
+
+    def failed_peer_witness(socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
+        if payload.startswith("NETPROBE "):
+            _, nonce, phase = payload.split()
+            return (
+                f"NETWORK_PROBE nonce={nonce} phase={phase} peer_denied=0 toy_http=0 "
+                "alternate_denied=1 icmp_denied=1 egress_denied=1 orchestrator_denied=1\n"
+            )
+        return original_exchange(socket_path, payload, timeout_seconds=timeout_seconds)
+
+    host.control_exchange = failed_peer_witness  # type: ignore[method-assign]
+
+    with pytest.raises(RunnerPreflightFailed) as error:
+        ProductionRunnerBackend(provider).rehearse(
+            match_id="kvm-blue-peer-witness", runner_names=("atlas", "borealis")
+        )
+
+    assert error.value.reason_code == "LOCAL_KVM_BLUE_PEER_ISOLATION_WITNESS_FAILED"
+
+
 def test_local_kvm_waits_for_identity_exit_before_checking_the_overlay(tmp_path: Path) -> None:
     provider, host = configured_provider(tmp_path)
     runners = provider.provision("kvm-teardown-wait", ("atlas", "borealis"))

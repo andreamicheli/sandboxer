@@ -811,8 +811,7 @@ class LocalKvmRunnerProvider:
             if any(item.stdout.strip() for item in routes):
                 return NetworkObservation(frozenset(), True, True, True)
             proofs = [self._network_proof(record, phase) for record in records]
-            if not all(proof.peer_denied and proof.alternate_denied and proof.icmp_denied and proof.egress_denied and proof.orchestrator_denied and not proof.toy_http for proof in proofs):
-                return NetworkObservation(frozenset(), True, True, True)
+            self._require_blue_network_proofs(proofs)
             return NetworkObservation(
                 frozenset({f"{records[0].handle.name}:private-a", f"{records[1].handle.name}:private-b"}),
                 False, False, False,
@@ -839,6 +838,21 @@ class LocalKvmRunnerProvider:
         # The namespace has only a bridge and unnumbered taps.  The Unix control
         # socket is not an IP path and cannot be reached by either guest.
         return NetworkObservation(edges, direct_egress, public_ingress, False)
+
+    @staticmethod
+    def _require_blue_network_proofs(proofs: list[NetworkProof]) -> None:
+        """Preserve the failed guest witness instead of inventing an IP leak."""
+        checks = (
+            ("LOCAL_KVM_BLUE_PEER_ISOLATION_WITNESS_FAILED", lambda proof: proof.peer_denied),
+            ("LOCAL_KVM_BLUE_TOY_SERVICE_WITNESS_FAILED", lambda proof: not proof.toy_http),
+            ("LOCAL_KVM_BLUE_ALTERNATE_PORT_WITNESS_FAILED", lambda proof: proof.alternate_denied),
+            ("LOCAL_KVM_BLUE_ICMP_WITNESS_FAILED", lambda proof: proof.icmp_denied),
+            ("LOCAL_KVM_BLUE_EGRESS_WITNESS_FAILED", lambda proof: proof.egress_denied),
+            ("LOCAL_KVM_BLUE_ORCHESTRATOR_WITNESS_FAILED", lambda proof: proof.orchestrator_denied),
+        )
+        for reason_code, passed in checks:
+            if not all(passed(proof) for proof in proofs):
+                raise PreflightWitnessFailed(reason_code)
 
     def _control_probe(self, record: _RunnerRecord) -> ControlProbe:
         return self._parse_control(self._control_exchange(record.control_socket, record.nonce), record.nonce, require_probe=True)
