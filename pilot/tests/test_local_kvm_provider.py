@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -269,6 +270,22 @@ def test_local_kvm_refuses_an_unprofiled_base_before_booting_a_guest(tmp_path: P
     assert not host.commands
 
 
+def test_local_kvm_refuses_a_profile_with_undeclared_runtime_contract_fields(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    profile = json.loads(provider.config.base_profile.read_text())
+    profile["undeclared_runtime_behavior"] = True
+    provider.config.base_profile.write_text(json.dumps(profile))
+
+    try:
+        provider.provision("kvm-rehearsal-extra-profile", ("atlas", "borealis"))
+    except RuntimeError as error:
+        assert str(error) == "BASE_IMAGE_PROFILE_INVALID"
+    else:  # pragma: no cover
+        raise AssertionError("the local Runner profile must be exact")
+
+    assert not host.commands
+
+
 def test_local_kvm_network_observation_fails_closed_when_host_measurement_is_incomplete(tmp_path: Path) -> None:
     provider, host = configured_provider(tmp_path)
 
@@ -386,8 +403,11 @@ def test_runtime_metadata_never_asks_cloud_init_to_write_the_runner_root(tmp_pat
     runners = provider.provision("kvm-rehearsal-007", ("atlas", "borealis"))
 
     user_data = (tmp_path / "runners" / "kvm-rehearsal-007" / "atlas" / "user-data.yaml").read_text()
+    metadata = (tmp_path / "runners" / "kvm-rehearsal-007" / "atlas" / "meta-data.yaml").read_text()
 
     assert user_data == "#cloud-config\n"
+    assert "ip=10.77.0.11\n" in metadata
+    assert "peer_ip=10.77.0.12\n" in metadata
     assert all(provider.destroy(runner).state is TeardownState.DESTROYED for runner in runners)
 
 

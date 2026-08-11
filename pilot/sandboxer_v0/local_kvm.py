@@ -745,12 +745,14 @@ class LocalKvmRunnerProvider:
             "control_protocol": "virtio-serial-v1",
             "toy_service": "synthetic-http",
         }
-        if any(profile.get(key) != value for key, value in required_profile.items()):
+        if profile != required_profile:
             raise RuntimeError("BASE_IMAGE_PROFILE_INVALID")
 
     def _write_cloud_init(self, root: Path, match_id: str, name: str, host_octet: int, nonce: str) -> None:
+        peer_octet = 12 if host_octet == 11 else 11
         (root / "meta-data.yaml").write_text(
-            f"match={match_id}\nrunner={name}\nnonce={nonce}\nip=10.77.0.{host_octet}\n", encoding="ascii"
+            f"match={match_id}\nrunner={name}\nnonce={nonce}\nip=10.77.0.{host_octet}\npeer_ip=10.77.0.{peer_octet}\n",
+            encoding="ascii",
         )
         (root / "network-config.yaml").write_text(
             "version: 2\nethernets:\n  eth0:\n    addresses:\n      - 10.77.0." + str(host_octet) + "/24\n", encoding="ascii"
