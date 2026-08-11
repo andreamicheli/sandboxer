@@ -23,11 +23,11 @@ from pathlib import Path
 from typing import Protocol
 
 from .arena_safety import NetworkObservation, Phase, TeardownEvidence, TeardownState
-from .runner_backend import PreflightCheck, RunnerHandle
+from .local_kvm_control import ControlProbe, ControlReady, NetworkProof, parse_control, parse_network_proof
+from .runner_backend import PreflightCheck, ProvisioningFailed, RunnerHandle
 
 
 _SAFE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
-_BOOT_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f-]{27}\Z")
 _MAX_CONTROL_RESPONSE = 4096
 
 
@@ -157,6 +157,7 @@ class LocalKvmConfig:
     runner_root: Path
     base_image: Path
     base_image_sha256: str
+    base_profile: Path
     qemu_user: str
     qemu_uid: int
     toy_service_port: int
@@ -169,7 +170,7 @@ class LocalKvmConfig:
     cloud_localds_binary: str = "cloud-localds"
 
     def __post_init__(self) -> None:
-        if not self.runner_root.is_absolute() or not self.base_image.is_absolute():
+        if not self.runner_root.is_absolute() or not self.base_image.is_absolute() or not self.base_profile.is_absolute():
             raise ValueError("local KVM paths must be absolute")
         if not re.fullmatch(r"[0-9a-f]{64}", self.base_image_sha256):
             raise ValueError("base image requires a SHA-256 digest")
@@ -183,11 +184,12 @@ class LocalKvmConfig:
 class _RunnerRecord:
     handle: RunnerHandle
     match_id: str
-    namespace: str
-    bridge: str
+    blue_namespace: str
+    red_namespace: str
+    red_bridge: str
     tap: str
     root: Path
-    overlay: Path
+    workspace: Path
     control_socket: Path
     pid: int
     cgroup: str
@@ -216,42 +218,51 @@ class LocalKvmRunnerProvider:
         if match_root.exists():
             raise RuntimeError("MATCH_ARTIFACTS_ALREADY_EXIST")
         match_root.mkdir(parents=True, mode=0o711)
-        namespace, bridge = self._network_names(match_id)
+        red_namespace, red_bridge = self._network_names(match_id)
         records: list[_RunnerRecord] = []
         try:
-            self._run(("ip", "netns", "add", namespace), "NETWORK_NAMESPACE_CREATE_FAILED")
-            self._run(("ip", "-n", namespace, "link", "add", bridge, "type", "bridge"), "BRIDGE_CREATE_FAILED")
-            self._run(("ip", "-n", namespace, "link", "set", "lo", "up"), "LOOPBACK_ENABLE_FAILED")
-            self._run(("ip", "-n", namespace, "link", "set", bridge, "up"), "BRIDGE_ENABLE_FAILED")
+            self._run(("ip", "netns", "add", red_namespace), "NETWORK_NAMESPACE_CREATE_FAILED")
+            self._run(("ip", "-n", red_namespace, "link", "add", red_bridge, "type", "bridge"), "BRIDGE_CREATE_FAILED")
+            self._run(("ip", "-n", red_namespace, "link", "set", "lo", "up"), "LOOPBACK_ENABLE_FAILED")
+            self._run(("ip", "-n", red_namespace, "link", "set", red_bridge, "up"), "BRIDGE_ENABLE_FAILED")
+            self._install_red_policy(red_namespace, "")
             for index, name in enumerate(names, start=11):
-                record = self._provision_runner(match_id, name, index, match_root, namespace, bridge)
+                blue_namespace = self._blue_namespace(match_id, name)
+                self._run(("ip", "netns", "add", blue_namespace), "BLUE_NAMESPACE_CREATE_FAILED")
+                self._run(("ip", "-n", blue_namespace, "link", "set", "lo", "up"), "BLUE_LOOPBACK_ENABLE_FAILED")
+                record = self._provision_runner(match_id, name, index, match_root, blue_namespace, red_namespace, red_bridge)
                 records.append(record)
                 self._records[record.handle.runner_id] = record
             self._apply_network_phase(Phase.BLUE, records)
-        except Exception:
+        except Exception as error:
+            evidence: list[TeardownEvidence] = []
             for record in records:
-                self._destroy_record(record, "PROVISION_ROLLBACK")
-            self._run_quiet(("ip", "netns", "del", namespace))
+                evidence.append(self._destroy_record(record, "PROVISION_ROLLBACK"))
+            self._run_quiet(("ip", "netns", "del", red_namespace))
             shutil.rmtree(match_root, ignore_errors=True)
-            raise
+            if isinstance(error, ProvisioningFailed):
+                evidence.extend(error.teardown_evidence)
+            evidence.append(TeardownEvidence(f"{match_id}:arena", TeardownState.DESTROYED, "provisioning Arena namespace cleanup attempted"))
+            raise ProvisioningFailed(str(error), tuple(evidence)) from error
         return records[0].handle, records[1].handle
 
     def probe(self, runners: tuple[RunnerHandle, RunnerHandle]) -> tuple[PreflightCheck, ...]:
         records = self._require_records(runners)
+        self._enforce_ttl(records)
         responses = [self._control_probe(record) for record in records]
-        network = self._measure_network(records[0].match_id, records, Phase.BLUE)
+        network = self._measure_network(records, Phase.BLUE)
         all_alive = all(self._host.process_alive(record.pid) for record in records)
         unique_boot_ids = len({record.handle.kernel_id for record in records}) == 2
         now = time.monotonic()
         return (
             PreflightCheck("distinct_kernels", unique_boot_ids, "KERNEL_ISOLATION_LOST"),
             PreflightCheck("orchestrator_unreachable", not network.orchestrator_reachable, "ORCHESTRATOR_REACHABLE"),
-            PreflightCheck("no_host_mounts", all(item["private_mounts"] for item in responses), "HOST_MOUNT_DETECTED"),
-            PreflightCheck("no_credentials", all(item["no_credentials"] for item in responses), "CREDENTIAL_EXPOSURE"),
-            PreflightCheck("telemetry_egress", all(item["nonce"] == record.nonce for item, record in zip(responses, records)), "TELEMETRY_EGRESS_UNAVAILABLE"),
-            PreflightCheck("clock", all(item["clock_epoch"] > 0 for item in responses), "CLOCK_UNVERIFIED"),
+            PreflightCheck("no_host_mounts", all(item.private_mounts for item in responses), "HOST_MOUNT_DETECTED"),
+            PreflightCheck("no_credentials", all(item.no_credentials for item in responses), "CREDENTIAL_EXPOSURE"),
+            PreflightCheck("telemetry_egress", all(item.nonce == record.nonce for item, record in zip(responses, records)), "TELEMETRY_EGRESS_UNAVAILABLE"),
+            PreflightCheck("clock", all(item.clock_epoch > 0 for item in responses), "CLOCK_UNVERIFIED"),
             PreflightCheck("ttl", all(record.deadline > now for record in records), "TTL_UNVERIFIED"),
-            PreflightCheck("health", all_alive and all(item["uid"] == 1001 for item in responses), "RUNNER_HEALTH_UNVERIFIED"),
+            PreflightCheck("health", all_alive and all(item.uid == 1001 for item in responses), "RUNNER_HEALTH_UNVERIFIED"),
             PreflightCheck("cleanup_capability", all(bool(record.cgroup) for record in records), "CLEANUP_UNAVAILABLE"),
         )
 
@@ -260,9 +271,10 @@ class LocalKvmRunnerProvider:
     ) -> NetworkObservation:
         records = self._require_records(runners)
         try:
+            self._enforce_ttl(records)
             self._apply_network_phase(phase, records)
-            return self._measure_network(records[0].match_id, records, phase)
-        except Exception:
+            return self._measure_network(records, phase)
+        except Exception as error:
             # An unavailable witness is unsafe by definition; never infer safety.
             return NetworkObservation(frozenset(), True, True, True)
 
@@ -302,13 +314,13 @@ class LocalKvmRunnerProvider:
         return evidence
 
     def _provision_runner(
-        self, match_id: str, name: str, host_octet: int, match_root: Path, namespace: str, bridge: str
+        self, match_id: str, name: str, host_octet: int, match_root: Path, blue_namespace: str, red_namespace: str, red_bridge: str
     ) -> _RunnerRecord:
         runner_id = f"{match_id}:{name}"
         root = match_root / name
         root.mkdir(mode=0o700)
         os.chown(root, self.config.qemu_uid, -1)
-        overlay = root / "runner.qcow2"
+        workspace = root / "workspace.qcow2"
         seed = root / "seed.iso"
         control_socket = root / "control.sock"
         nonce = secrets.token_hex(32)
@@ -318,10 +330,10 @@ class LocalKvmRunnerProvider:
         try:
             self._write_cloud_init(root, match_id, name, host_octet, nonce)
             self._run(
-                (self.config.qemu_img_binary, "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", os.fspath(self.config.base_image), os.fspath(overlay)),
-                "OVERLAY_CREATE_FAILED",
+                (self.config.qemu_img_binary, "create", "-q", "-f", "qcow2", os.fspath(workspace), "64M"),
+                "WORKSPACE_CREATE_FAILED",
             )
-            os.chown(overlay, self.config.qemu_uid, -1)
+            os.chown(workspace, self.config.qemu_uid, -1)
             self._run(
                 (
                     self.config.cloud_localds_binary,
@@ -333,10 +345,9 @@ class LocalKvmRunnerProvider:
                 "SEED_CREATE_FAILED",
             )
             os.chown(seed, self.config.qemu_uid, -1)
-            self._run(("ip", "netns", "exec", namespace, "ip", "tuntap", "add", "dev", tap, "mode", "tap", "user", str(self.config.qemu_uid)), "TAP_CREATE_FAILED")
-            self._run(("ip", "-n", namespace, "link", "set", tap, "master", bridge), "TAP_ATTACH_FAILED")
-            self._run(("ip", "-n", namespace, "link", "set", tap, "up"), "TAP_ENABLE_FAILED")
-            pid = self._host.start(self._qemu_command(namespace, tap, overlay, seed, control_socket, root / "serial.log"))
+            self._run(("ip", "netns", "exec", blue_namespace, "ip", "tuntap", "add", "dev", tap, "mode", "tap", "user", str(self.config.qemu_uid)), "TAP_CREATE_FAILED")
+            self._run(("ip", "-n", blue_namespace, "link", "set", tap, "up"), "TAP_ENABLE_FAILED")
+            pid = self._host.start(self._qemu_command(blue_namespace, tap, workspace, seed, control_socket, root / "serial.log"))
             if not self._host.process_alive(pid):
                 raise RuntimeError("QEMU_PID_UNVERIFIED")
             cgroup = self._host.create_cgroup(
@@ -348,28 +359,34 @@ class LocalKvmRunnerProvider:
             self._host.attach_to_cgroup(cgroup, pid)
             response = self._control_exchange(control_socket, nonce)
             ready = self._parse_control(response, nonce, require_probe=False)
-            handle = RunnerHandle(runner_id, name, ready["boot_id"], ready["uid"] == 1001, True, True)
-            return _RunnerRecord(handle, match_id, namespace, bridge, tap, root, overlay, control_socket, pid, cgroup, nonce, time.monotonic() + self.config.ttl_seconds)
-        except Exception:
+            handle = RunnerHandle(runner_id, name, ready.boot_id, ready.uid == 1001, True, True)
+            return _RunnerRecord(handle, match_id, blue_namespace, red_namespace, red_bridge, tap, root, workspace, control_socket, pid, cgroup, nonce, time.monotonic() + self.config.ttl_seconds)
+        except Exception as error:
             if pid is not None:
                 self._stop_pid(pid)
             if cgroup is not None:
                 self._host.destroy_cgroup(cgroup)
-            self._run_quiet(("ip", "-n", namespace, "link", "del", tap))
+            self._run_quiet(("ip", "-n", blue_namespace, "link", "del", tap))
             shutil.rmtree(root, ignore_errors=True)
-            raise
+            state = TeardownState.DESTROYED if pid is None or not self._host.process_alive(pid) else TeardownState.QUARANTINED
+            raise ProvisioningFailed(
+                str(error),
+                (TeardownEvidence(runner_id, state, "partial Runner provisioning rollback attempted", str(error)),),
+            ) from error
 
     def _qemu_command(
-        self, namespace: str, tap: str, overlay: Path, seed: Path, control_socket: Path, serial_log: Path
+        self, namespace: str, tap: str, workspace: Path, seed: Path, control_socket: Path, serial_log: Path
     ) -> tuple[str, ...]:
         return (
+            "timeout", "--signal=TERM", "--kill-after=5", str(self.config.ttl_seconds),
             "ip", "netns", "exec", namespace,
             "setpriv", f"--reuid={self.config.qemu_user}", f"--regid={self.config.qemu_user}", "--init-groups",
             self.config.qemu_binary,
             "-enable-kvm", "-cpu", "host", "-m", str(self.config.memory_mib), "-smp", str(self.config.vcpus),
             "-nodefaults", "-display", "none", "-monitor", "none", "-serial", f"file:{serial_log}", "-no-reboot",
             "-sandbox", "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny",
-            "-drive", f"file={overlay},if=virtio,format=qcow2,cache=none,discard=unmap",
+            "-drive", f"file={self.config.base_image},if=virtio,format=qcow2,readonly=on,cache=none",
+            "-drive", f"file={workspace},if=virtio,format=qcow2,cache=none,discard=unmap",
             "-drive", f"file={seed},media=cdrom,readonly=on", "-nic", "none",
             "-netdev", f"tap,id=arena0,ifname={tap},script=no,downscript=no", "-device", "virtio-net-pci,netdev=arena0",
             "-device", "virtio-serial-pci", "-chardev", f"socket,id=control,path={control_socket},server=on,wait=off",
@@ -377,27 +394,60 @@ class LocalKvmRunnerProvider:
         )
 
     def _apply_network_phase(self, phase: Phase, records: list[_RunnerRecord]) -> None:
-        namespace = records[0].namespace
         if phase is Phase.BLUE:
-            rules = "table bridge sandboxer { chain forward { type filter hook forward priority 0; policy drop; } }\n"
+            # Red is dismantled before either tap returns to an isolated Blue
+            # namespace.  There is no bridge shared by the two Runners here.
+            for record in records:
+                if record.phase is Phase.RED:
+                    self._run(("ip", "-n", record.red_namespace, "link", "set", record.tap, "nomaster"), "BLUE_DETACH_FAILED")
+                    self._run(("ip", "-n", record.red_namespace, "link", "set", record.tap, "netns", record.blue_namespace), "BLUE_MOVE_FAILED")
+                    self._run(("ip", "-n", record.blue_namespace, "link", "set", record.tap, "up"), "BLUE_TAP_ENABLE_FAILED")
         else:
             left, right = records
             port = self.config.toy_service_port
             rules = (
-                "table bridge sandboxer { chain forward { type filter hook forward priority 0; policy drop; "
-                f'iifname "{left.tap}" oifname "{right.tap}" ether type arp accept; '
-                f'iifname "{right.tap}" oifname "{left.tap}" ether type arp accept; '
-                f'iifname "{left.tap}" oifname "{right.tap}" ether type ip ip protocol tcp tcp dport {port} accept; '
-                f'iifname "{right.tap}" oifname "{left.tap}" ether type ip ip protocol tcp tcp dport {port} accept; '
-                "ct state established,related accept; } }\n"
+                f'add rule bridge sandboxer forward iifname "{left.tap}" oifname "{right.tap}" ether type arp accept\n'
+                f'add rule bridge sandboxer forward iifname "{right.tap}" oifname "{left.tap}" ether type arp accept\n'
+                f'add rule bridge sandboxer forward iifname "{left.tap}" oifname "{right.tap}" ether type ip ip protocol tcp tcp dport {port} accept\n'
+                f'add rule bridge sandboxer forward iifname "{right.tap}" oifname "{left.tap}" ether type ip ip protocol tcp tcp dport {port} accept\n'
+                "add rule bridge sandboxer forward ct state established,related accept\n"
             )
-        self._run(("ip", "netns", "exec", namespace, "nft", "delete", "table", "bridge", "sandboxer"), "", allow_failure=True)
-        self._run(("ip", "netns", "exec", namespace, "nft", "-f", "-"), "NETWORK_POLICY_APPLY_FAILED", input_text=rules)
+            # Install a complete deny-by-default Red ruleset before the first
+            # tap can join the shared bridge. nft applies this as one transaction.
+            self._install_red_policy(left.red_namespace, rules)
+            for record in records:
+                if record.phase is not Phase.RED:
+                    self._run(("ip", "-n", record.blue_namespace, "link", "set", record.tap, "netns", record.red_namespace), "RED_MOVE_FAILED")
+                    self._run(("ip", "-n", record.red_namespace, "link", "set", record.tap, "master", record.red_bridge), "RED_ATTACH_FAILED")
+                    self._run(("ip", "-n", record.red_namespace, "link", "set", record.tap, "up"), "RED_TAP_ENABLE_FAILED")
         for record in records:
             record.phase = phase
 
-    def _measure_network(self, match_id: str, records: list[_RunnerRecord], phase: Phase) -> NetworkObservation:
-        namespace, bridge = records[0].namespace, records[0].bridge
+    def _install_red_policy(self, namespace: str, forward_rules: str) -> None:
+        # There is no delete-then-open gap: nft's complete table replacement is
+        # applied before any Runner tap joins the Red bridge.
+        exists = self._run(
+            ("ip", "netns", "exec", namespace, "nft", "list", "table", "bridge", "sandboxer"),
+            "", allow_failure=True,
+        )
+        prefix = "flush table bridge sandboxer\n" if exists.returncode == 0 else "add table bridge sandboxer\n"
+        rules = prefix + "add chain bridge sandboxer forward { type filter hook forward priority 0; policy drop; }\n" + forward_rules
+        self._run(("ip", "netns", "exec", namespace, "nft", "-f", "-"), "NETWORK_POLICY_APPLY_FAILED", input_text=rules)
+
+    def _measure_network(self, records: list[_RunnerRecord], phase: Phase) -> NetworkObservation:
+        if phase is Phase.BLUE:
+            # Separate Linux namespaces are the authoritative Blue boundary.
+            routes = [self._run(("ip", "-n", record.blue_namespace, "ip", "route", "show", "default"), "NETWORK_WITNESS_UNAVAILABLE") for record in records]
+            if any(item.stdout.strip() for item in routes):
+                return NetworkObservation(frozenset(), True, True, True)
+            proofs = [self._network_proof(record, phase) for record in records]
+            if not all(proof.peer_denied and proof.alternate_denied and proof.icmp_denied and proof.egress_denied and proof.orchestrator_denied and not proof.toy_http for proof in proofs):
+                return NetworkObservation(frozenset(), True, True, True)
+            return NetworkObservation(
+                frozenset({f"{records[0].handle.name}:private-a", f"{records[1].handle.name}:private-b"}),
+                False, False, False,
+            )
+        namespace, bridge = records[0].red_namespace, records[0].red_bridge
         nft = self._run(("ip", "netns", "exec", namespace, "nft", "list", "table", "bridge", "sandboxer"), "NETWORK_WITNESS_UNAVAILABLE")
         addresses = self._run(("ip", "-n", namespace, "-j", "addr", "show", "dev", bridge), "NETWORK_WITNESS_UNAVAILABLE")
         routes = self._run(("ip", "-n", namespace, "ip", "route", "show", "default"), "NETWORK_WITNESS_UNAVAILABLE")
@@ -407,19 +457,20 @@ class LocalKvmRunnerProvider:
             raise RuntimeError("NETWORK_WITNESS_UNAVAILABLE") from error
         public_ingress = any(item.get("addr_info") for item in bridge_addresses)
         direct_egress = bool(routes.stdout.strip())
-        expected_rules = ["policy drop"]
-        if phase is Phase.RED:
-            expected_rules.extend(("ether type arp", f"tcp dport {self.config.toy_service_port}", records[0].tap, records[1].tap))
+        expected_rules = ["policy drop", "ether type arp", f"tcp dport {self.config.toy_service_port}", records[0].tap, records[1].tap]
         rule_set_ok = all(rule in nft.stdout for rule in expected_rules)
         if not rule_set_ok:
             return NetworkObservation(frozenset(), True, True, True)
+        proofs = [self._network_proof(record, phase) for record in records]
+        if not all(not proof.peer_denied and proof.toy_http and proof.alternate_denied and proof.icmp_denied and proof.egress_denied and proof.orchestrator_denied for proof in proofs):
+            return NetworkObservation(frozenset(), True, True, True)
         private = frozenset({f"{records[0].handle.name}:private-a", f"{records[1].handle.name}:private-b"})
-        edges = private if phase is Phase.BLUE else private | frozenset({f"{records[0].handle.name}->toy-service", f"{records[1].handle.name}->toy-service"})
+        edges = private | frozenset({f"{records[0].handle.name}->toy-service", f"{records[1].handle.name}->toy-service"})
         # The namespace has only a bridge and unnumbered taps.  The Unix control
         # socket is not an IP path and cannot be reached by either guest.
         return NetworkObservation(edges, direct_egress, public_ingress, False)
 
-    def _control_probe(self, record: _RunnerRecord) -> dict[str, object]:
+    def _control_probe(self, record: _RunnerRecord) -> ControlProbe:
         return self._parse_control(self._control_exchange(record.control_socket, record.nonce), record.nonce, require_probe=True)
 
     def _control_exchange(self, socket_path: Path, nonce: str) -> str:
@@ -433,49 +484,37 @@ class LocalKvmRunnerProvider:
                 time.sleep(0.25)
         raise RuntimeError("CONTROL_BOOTSTRAP_TIMEOUT") from last_error
 
-    def _parse_control(self, response: str, nonce: str, *, require_probe: bool) -> dict[str, object]:
+    def _network_proof(self, record: _RunnerRecord, phase: Phase) -> NetworkProof:
+        response = self._host.control_exchange(
+            record.control_socket, f"NETPROBE {record.nonce} {phase.value}\n", timeout_seconds=5
+        )
+        return parse_network_proof(response, record.nonce, phase.value)
+
+    def _parse_control(self, response: str, nonce: str, *, require_probe: bool) -> ControlReady | ControlProbe:
         if len(response.encode("ascii", errors="ignore")) > _MAX_CONTROL_RESPONSE:
             raise RuntimeError("CONTROL_RESPONSE_TOO_LARGE")
-        fields: dict[str, str] = {}
-        for line in response.splitlines():
-            if line.startswith(("READY ", "PROBE_OK ")):
-                for token in line.split()[1:]:
-                    key, separator, value = token.partition("=")
-                    if separator and key not in fields:
-                        fields[key] = value
-        required = {"nonce", "uid", "boot_id", "no_credentials", "private_mounts"}
-        if require_probe:
-            required.add("clock_epoch")
-        if required - fields.keys() or fields.get("nonce") != nonce or not _BOOT_ID.fullmatch(fields.get("boot_id", "")):
-            raise RuntimeError("CONTROL_PROBE_INVALID")
-        try:
-            uid, clock = int(fields["uid"]), int(fields.get("clock_epoch", "1"))
-        except ValueError as error:
-            raise RuntimeError("CONTROL_PROBE_INVALID") from error
-        return {
-            "nonce": fields["nonce"], "uid": uid, "boot_id": fields["boot_id"], "no_credentials": fields["no_credentials"] == "1",
-            "private_mounts": fields["private_mounts"] == "1", "clock_epoch": clock,
-        }
+        return parse_control(response, nonce, require_probe=require_probe)
 
     def _destroy_record(self, record: _RunnerRecord, reason_code: str | None) -> TeardownEvidence:
         failures: list[str] = []
         self._stop_pid(record.pid)
         if self._host.process_alive(record.pid):
             failures.append("QEMU_PROCESS_SURVIVED")
-        check = self._run((self.config.qemu_img_binary, "check", "--output=json", os.fspath(record.overlay)), "", allow_failure=True)
+        check = self._run((self.config.qemu_img_binary, "check", "--output=json", os.fspath(record.workspace)), "", allow_failure=True)
         if check.returncode != 0:
             failures.append("OVERLAY_INTEGRITY_UNVERIFIED")
         if not self._host.destroy_cgroup(record.cgroup):
             failures.append("CGROUP_REMAINS")
+        self._run_quiet(("ip", "netns", "del", record.blue_namespace))
         another_runner_remains = any(
             candidate.handle.runner_id != record.handle.runner_id and candidate.match_id == record.match_id
             for candidate in self._records.values()
         )
         if not failures and not another_runner_remains:
-            deleted = self._run(("ip", "netns", "del", record.namespace), "", allow_failure=True)
+            deleted = self._run(("ip", "netns", "del", record.red_namespace), "", allow_failure=True)
             listed = self._run(("ip", "netns", "list"), "", allow_failure=True)
             if deleted.returncode != 0 or listed.returncode != 0 or any(
-                line.split(maxsplit=1)[0] == record.namespace for line in listed.stdout.splitlines() if line.strip()
+                line.split(maxsplit=1)[0] == record.red_namespace for line in listed.stdout.splitlines() if line.strip()
             ):
                 failures.append("ARENA_NAMESPACE_REMAINS")
         if not failures:
@@ -483,7 +522,7 @@ class LocalKvmRunnerProvider:
             shutil.rmtree(record.root, ignore_errors=True)
             if not another_runner_remains:
                 shutil.rmtree(record.root.parent, ignore_errors=True)
-            return TeardownEvidence(record.handle.runner_id, TeardownState.DESTROYED, "QEMU stopped; overlay checked; Arena namespace and cgroup removed")
+            return TeardownEvidence(record.handle.runner_id, TeardownState.DESTROYED, "QEMU stopped; workspace checked; Arena namespace and cgroup removed")
         return TeardownEvidence(record.handle.runner_id, TeardownState.QUARANTINED, ";".join(failures), reason_code or failures[0])
 
     def _stop_pid(self, pid: int) -> None:
@@ -491,6 +530,15 @@ class LocalKvmRunnerProvider:
             self._host.terminate(pid)
             if self._host.process_alive(pid):
                 self._host.kill(pid)
+
+    def _enforce_ttl(self, records: list[_RunnerRecord]) -> None:
+        expired = [record for record in records if time.monotonic() >= record.deadline]
+        if not expired:
+            return
+        for record in expired:
+            evidence = self._destroy_record(record, "TTL_EXPIRED")
+            self._terminal[record.handle.runner_id] = evidence
+        raise RuntimeError("TTL_EXPIRED")
 
     def _verify_base_image(self) -> None:
         if not self.config.base_image.is_file():
@@ -502,6 +550,19 @@ class LocalKvmRunnerProvider:
         mode = self.config.base_image.stat().st_mode
         if mode & stat.S_IWOTH:
             raise RuntimeError("BASE_IMAGE_WORLD_WRITABLE")
+        try:
+            profile = json.loads(self.config.base_profile.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError("BASE_IMAGE_PROFILE_INVALID") from error
+        required_profile = {
+            "schema_version": 1,
+            "root_filesystem": "readonly",
+            "workspace_mount": "/workspace",
+            "control_protocol": "virtio-serial-v1",
+            "toy_service": "synthetic-http",
+        }
+        if any(profile.get(key) != value for key, value in required_profile.items()):
+            raise RuntimeError("BASE_IMAGE_PROFILE_INVALID")
 
     def _write_cloud_init(self, root: Path, match_id: str, name: str, host_octet: int, nonce: str) -> None:
         (root / "meta-data.yaml").write_text(f"instance-id: {match_id}-{name}\nlocal-hostname: runner-{name}\n", encoding="ascii")
@@ -520,7 +581,10 @@ class LocalKvmRunnerProvider:
             f"          printf 'READY nonce={nonce} uid=%s boot_id=%s no_credentials=1 private_mounts=1\\n' \"$(id -u)\" \"$(cat /proc/sys/kernel/random/boot_id)\" >&3\n"
             f"          printf 'PROBE_OK nonce={nonce} uid=%s clock_epoch=%s\\n' \"$(id -u)\" \"$(date +%s)\" >&3\n"
             "        else\n          printf 'CONTROL_DENIED\\n' >&3\n        fi\n      done\n"
-            "runcmd:\n  - [sh, -ec, 'control=/dev/virtio-ports/org.sandboxer.control; test -e $control || control=/dev/vport0p1; chown competitor:competitor $control; su competitor -s /bin/ash -c /usr/local/lib/sandboxer-control &']\n",
+            # This is intentionally foregrounded.  Cloud-init otherwise tears
+            # down its background process group before the virtio handler can
+            # answer the host's first bounded probe.
+            "runcmd:\n  - [sh, -ec, 'control=/dev/virtio-ports/org.sandboxer.control; test -e $control || control=/dev/vport0p1; chown competitor:competitor $control; exec su competitor -s /bin/ash -c /usr/local/lib/sandboxer-control']\n",
             encoding="ascii",
         )
 
@@ -529,7 +593,7 @@ class LocalKvmRunnerProvider:
         if any(record is None for record in records):
             raise RuntimeError("RUNNER_STATE_UNAVAILABLE")
         typed = [record for record in records if record is not None]
-        if len({record.match_id for record in typed}) != 1 or len({record.namespace for record in typed}) != 1:
+        if len({record.match_id for record in typed}) != 1 or len({record.red_namespace for record in typed}) != 1:
             raise RuntimeError("RUNNER_ARENA_MISMATCH")
         return typed
 
@@ -541,6 +605,11 @@ class LocalKvmRunnerProvider:
     def _network_names(match_id: str) -> tuple[str, str]:
         digest = hashlib.sha256(match_id.encode("ascii")).hexdigest()[:8]
         return f"sbx-{digest}", f"br-{digest}"
+
+    @staticmethod
+    def _blue_namespace(match_id: str, name: str) -> str:
+        digest = hashlib.sha256(f"{match_id}:{name}:blue".encode("ascii")).hexdigest()[:8]
+        return f"sbb-{digest}"
 
     @staticmethod
     def _tap_name(match_id: str, name: str) -> str:

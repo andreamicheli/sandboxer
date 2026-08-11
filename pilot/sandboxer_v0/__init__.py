@@ -26,6 +26,7 @@ from .arena_safety import (
     TeardownState,
 )
 from .local_kvm import LocalKvmConfig, LocalKvmRunnerProvider, SubprocessLocalKvmHost
+from .runner_backend import ProvisioningFailed
 
 __all__ = [
     "ControlledCompetitor",
@@ -47,4 +48,5 @@ __all__ = [
     "LocalKvmConfig",
     "LocalKvmRunnerProvider",
     "SubprocessLocalKvmHost",
+    "ProvisioningFailed",
 ]
