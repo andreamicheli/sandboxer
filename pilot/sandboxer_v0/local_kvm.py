@@ -21,6 +21,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
@@ -62,6 +63,13 @@ class QemuStartupFailure(RuntimeError):
         self.diagnostic = f"QEMU_STDERR:{_sanitize_qemu_stderr(stderr)}"
 
 
+class SocketWitnessResult(str, Enum):
+    SUCCESS = "success"
+    CREATE_FAILED = "create_failed"
+    UNLINK_FAILED = "unlink_failed"
+    ARTIFACT_REMAINS = "artifact_remains"
+
+
 class LocalKvmHost(Protocol):
     """Small host-privileged port; every command is argv-only, never a shell."""
 
@@ -71,7 +79,9 @@ class LocalKvmHost(Protocol):
 
     def start(self, argv: tuple[str, ...], *, stderr_path: Path) -> int: ...
 
-    def verify_socket_access(self, directory: Path, control_socket: Path, *, qemu_user: str) -> bool: ...
+    def verify_socket_access(
+        self, directory: Path, control_socket: Path, *, qemu_user: str
+    ) -> SocketWitnessResult: ...
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str: ...
 
@@ -147,7 +157,9 @@ class SubprocessLocalKvmHost:
             raise QemuStartupFailure(diagnostic)
         return process.pid
 
-    def verify_socket_access(self, directory: Path, control_socket: Path, *, qemu_user: str) -> bool:
+    def verify_socket_access(
+        self, directory: Path, control_socket: Path, *, qemu_user: str
+    ) -> SocketWitnessResult:
         # Run as the exact setpriv identity used for QEMU. Fixed binaries and
         # argv-only calls avoid a shell or a repository-path dependency while
         # proving both directory create and unlink permissions.
@@ -157,16 +169,18 @@ class SubprocessLocalKvmHost:
             "/usr/bin/touch", "--", os.fspath(probe),
         ))
         if create.returncode != 0:
-            return False
+            return SocketWitnessResult.CREATE_FAILED
         remove = self.run((
             "setpriv", f"--reuid={qemu_user}", f"--regid={qemu_user}", "--init-groups",
             "/usr/bin/rm", "--", os.fspath(probe),
         ))
+        if remove.returncode != 0:
+            return SocketWitnessResult.UNLINK_FAILED
         try:
             os.lstat(probe)
         except FileNotFoundError:
-            return remove.returncode == 0
-        return False
+            return SocketWitnessResult.SUCCESS
+        return SocketWitnessResult.ARTIFACT_REMAINS
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -610,8 +624,9 @@ class LocalKvmRunnerProvider:
             # Never unlink an unexpected filesystem entry merely to make a
             # Runner start. A fresh disposable root is the only valid state.
             raise RuntimeError("CONTROL_SOCKET_PREEXISTS")
-        if not self._host.verify_socket_access(root, control_socket, qemu_user=self.config.qemu_user):
-            raise RuntimeError("QEMU_SOCKET_WITNESS_FAILED")
+        witness = self._host.verify_socket_access(root, control_socket, qemu_user=self.config.qemu_user)
+        if witness is not SocketWitnessResult.SUCCESS:
+            raise RuntimeError(f"QEMU_SOCKET_WITNESS_{witness.name}")
 
     def _qemu_command(
         self, namespace: str, tap: str, workspace: Path, seed: Path, control_socket: Path, serial_log: Path

@@ -13,6 +13,7 @@ from sandboxer_v0.local_kvm import (
     LocalKvmConfig,
     LocalKvmRunnerProvider,
     QemuStartupFailure,
+    SocketWitnessResult,
     SubprocessLocalKvmHost,
 )
 from sandboxer_v0.runner_backend import ProductionRunnerBackend, ProvisioningFailed
@@ -41,7 +42,7 @@ class RecordingKvmHost:
         self.startup_failure: QemuStartupFailure | None = None
         self.qemu_stderr_paths: list[Path] = []
         self.socket_witnesses: list[tuple[Path, Path, str]] = []
-        self.socket_witness_ok = True
+        self.socket_witness_result = SocketWitnessResult.SUCCESS
         self.create_stale_control_socket = False
 
     def run(self, argv: tuple[str, ...], *, input_text: str | None = None, timeout_seconds: float = 10) -> CommandResult:
@@ -96,9 +97,9 @@ class RecordingKvmHost:
         self.next_pid += 1
         return pid
 
-    def verify_socket_access(self, directory: Path, control_socket: Path, *, qemu_user: str) -> bool:
+    def verify_socket_access(self, directory: Path, control_socket: Path, *, qemu_user: str) -> SocketWitnessResult:
         self.socket_witnesses.append((directory, control_socket, qemu_user))
-        return self.socket_witness_ok
+        return self.socket_witness_result
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
         del socket_path
@@ -244,12 +245,12 @@ def test_local_kvm_refuses_a_preexisting_control_socket_without_unlinking_it(tmp
 
 def test_local_kvm_requires_non_root_socket_create_unlink_witness_before_qemu(tmp_path: Path) -> None:
     provider, host = configured_provider(tmp_path)
-    host.socket_witness_ok = False
+    host.socket_witness_result = SocketWitnessResult.UNLINK_FAILED
 
     try:
         provider.provision("kvm-socket-witness", ("atlas", "borealis"))
     except ProvisioningFailed as error:
-        assert error.reason_code == "QEMU_SOCKET_WITNESS_FAILED"
+        assert error.reason_code == "QEMU_SOCKET_WITNESS_UNLINK_FAILED"
     else:  # pragma: no cover - explicit fail-closed contract
         raise AssertionError("an unproven QEMU socket directory must block the Runner")
 
@@ -320,12 +321,25 @@ def test_subprocess_host_socket_witness_uses_the_qemu_identity_without_a_shell(m
     directory = tmp_path / "runner"
     directory.mkdir()
 
-    assert host.verify_socket_access(directory, directory / "control.sock", qemu_user="sandboxer-runner") is True
+    assert host.verify_socket_access(directory, directory / "control.sock", qemu_user="sandboxer-runner") is SocketWitnessResult.SUCCESS
     assert len(commands) == 2
     assert all(command[:4] == ("setpriv", "--reuid=sandboxer-runner", "--regid=sandboxer-runner", "--init-groups") for command in commands)
     assert {command[4] for command in commands} == {"/usr/bin/touch", "/usr/bin/rm"}
     assert all("sh" not in command for command in commands)
     assert list(directory.iterdir()) == []
+
+
+def test_subprocess_host_socket_witness_reports_a_create_failure_by_category(monkeypatch, tmp_path: Path) -> None:
+    host = SubprocessLocalKvmHost()
+
+    def fake_run(_argv: tuple[str, ...], **_kwargs) -> CommandResult:
+        return CommandResult(1, "sensitive host detail", "sensitive host detail")
+
+    monkeypatch.setattr(host, "run", fake_run)
+    directory = tmp_path / "runner"
+    directory.mkdir()
+
+    assert host.verify_socket_access(directory, directory / "control.sock", qemu_user="sandboxer-runner") is SocketWitnessResult.CREATE_FAILED
 
 
 def test_local_kvm_quarantines_a_runner_while_its_ttl_timer_remains_active(tmp_path: Path) -> None:
