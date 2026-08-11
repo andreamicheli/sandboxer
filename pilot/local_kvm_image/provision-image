@@ -21,6 +21,13 @@ chmod 0700 /workspace
 # These mounts are runtime RAM state, never a host mount or Runner workspace.
 sed -i '1i::sysinit:/usr/local/libexec/sandboxer-mount-runtime' /etc/inittab
 touch /etc/cloud/cloud-init.disabled
+# The generic cloud image registers OpenRC's DHCP networking unit in the
+# default runlevel. It starts after our sysinit handler and could put a
+# default route back on eth0. Runtime setup alone owns the static Arena
+# address, so fail the image build unless that late network configurator is
+# absent.
+rc-update del networking default
+test ! -e /etc/runlevels/default/networking || { printf 'SANDBOXER_NETWORKING_SERVICE_REMAINS\n' > /dev/ttyS0; exit 1; }
 # The cloud build's user-data may install an authorized key and leaves its
 # seed/instance state behind.  None of that is a valid part of a Runner base.
 # Remove every credential-bearing category before the success marker; the

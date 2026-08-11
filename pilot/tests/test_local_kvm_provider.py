@@ -384,6 +384,30 @@ def test_local_kvm_does_not_mislabel_a_failed_blue_peer_witness_as_orchestrator_
     assert error.value.reason_code == "LOCAL_KVM_BLUE_PEER_ISOLATION_WITNESS_FAILED"
 
 
+def test_local_kvm_treats_a_reachable_undeclared_egress_target_as_a_blue_failure(tmp_path: Path) -> None:
+    """A denied target is safe; a successful external TCP connection is not."""
+    provider, host = configured_provider(tmp_path)
+    original_exchange = host.control_exchange
+
+    def reachable_egress_witness(socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
+        if payload.startswith("NETPROBE "):
+            _, nonce, phase = payload.split()
+            return (
+                f"NETWORK_PROBE nonce={nonce} phase={phase} peer_denied=1 toy_http=0 "
+                "alternate_denied=1 icmp_denied=1 egress_denied=0 orchestrator_denied=1\n"
+            )
+        return original_exchange(socket_path, payload, timeout_seconds=timeout_seconds)
+
+    host.control_exchange = reachable_egress_witness  # type: ignore[method-assign]
+
+    with pytest.raises(RunnerPreflightFailed) as error:
+        ProductionRunnerBackend(provider).rehearse(
+            match_id="kvm-blue-egress-witness", runner_names=("atlas", "borealis")
+        )
+
+    assert error.value.reason_code == "LOCAL_KVM_BLUE_EGRESS_WITNESS_FAILED"
+
+
 def test_local_kvm_waits_for_identity_exit_before_checking_the_overlay(tmp_path: Path) -> None:
     provider, host = configured_provider(tmp_path)
     runners = provider.provision("kvm-teardown-wait", ("atlas", "borealis"))

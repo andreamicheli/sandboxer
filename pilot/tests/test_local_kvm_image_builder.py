@@ -38,6 +38,12 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert "rm -rf /home/competitor/.ssh /home/competitor/.aws /home/competitor/.config/gcloud" in provision
     assert "rm -rf /var/lib/cloud /run/sandboxer-build" in provision
     assert 'test ! -e "$path"' in provision
+    # The generic cloud image starts OpenRC networking with eth0 DHCP after
+    # sysinit.  The Runner setup deliberately owns eth0 and removes its
+    # default route, so the immutable build must suppress that later DHCP
+    # unit rather than merely hoping the early setup wins a boot race.
+    assert "rc-update del networking default" in provision
+    assert "test ! -e /etc/runlevels/default/networking" in provision
     assert "sandboxer-mount-runtime" in provision
     assert "busybox httpd" in (rendered / "sandboxer-toy").read_text()
     assert "PROBE_OK" in control and "NETWORK_PROBE" in control
