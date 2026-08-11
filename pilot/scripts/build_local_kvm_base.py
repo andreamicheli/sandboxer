@@ -33,6 +33,7 @@ TEMPLATE_NAMES = (
     "sandboxer-runner.init",
     "provision-image",
 )
+POST_BUILD_SANITIZATION_PATHS = ("/var/lib/cloud", "/run/sandboxer-build")
 
 
 def sha256(path: Path) -> str:
@@ -53,6 +54,10 @@ def runtime_contract() -> dict[str, str]:
     }
 
 
+def post_build_sanitization() -> dict[str, object]:
+    return {"remove_paths": list(POST_BUILD_SANITIZATION_PATHS), "verify_absent": True}
+
+
 def build_plan(output: Path) -> dict[str, object]:
     return {
         "base_url": BASE_URL,
@@ -61,6 +66,7 @@ def build_plan(output: Path) -> dict[str, object]:
         "profile": os.fspath(output.with_suffix(".profile.json")),
         "manifest": os.fspath(output.with_suffix(".evidence.json")),
         "runtime_contract": runtime_contract(),
+        "post_build_sanitization": post_build_sanitization(),
     }
 
 
@@ -130,10 +136,65 @@ def wait_for_build(process: subprocess.Popen[bytes], serial_log: Path, timeout_s
         raise RuntimeError("BUILDER_VM_FAILED_AFTER_MARKER")
 
 
+def free_nbd_device() -> Path:
+    candidates = sorted(Path("/sys/class/block").glob("nbd*"), key=lambda path: path.name)
+    for candidate in candidates:
+        size = candidate / "size"
+        device = Path("/dev") / candidate.name
+        if device.exists() and size.read_text(encoding="ascii").strip() == "0":
+            return device
+    raise RuntimeError("BUILDER_NBD_DEVICE_UNAVAILABLE")
+
+
+def sanitize_promoted_image(image: Path) -> None:
+    """Remove build-time cloud state before an image can be promoted.
+
+    cloud-init may recreate its state after the guest provisioning script has
+    completed.  Attach only the unpromoted candidate, edit it in a dedicated
+    mount, and verify category absence before the final atomic rename.
+    """
+    device = free_nbd_device()
+    attached = False
+    mounted = False
+    failure: Exception | None = None
+    with tempfile.TemporaryDirectory(prefix="sandboxer-image-sanitize-", dir=image.parent) as directory:
+        mountpoint = Path(directory)
+        try:
+            run(("qemu-nbd", f"--connect={device}", os.fspath(image)))
+            attached = True
+            run(("mount", "-o", "rw,nosuid,nodev,noexec", os.fspath(device), os.fspath(mountpoint)))
+            mounted = True
+            for relative_path in POST_BUILD_SANITIZATION_PATHS:
+                target = mountpoint / relative_path.lstrip("/")
+                if target.is_symlink() or target.is_file():
+                    target.unlink()
+                elif target.is_dir():
+                    shutil.rmtree(target)
+            run(("sync",))
+            if any((mountpoint / relative_path.lstrip("/")).exists() for relative_path in POST_BUILD_SANITIZATION_PATHS):
+                raise RuntimeError("BUILDER_IMAGE_SANITIZATION_UNVERIFIED")
+        except Exception as error:
+            failure = error
+        finally:
+            cleanup_failures: list[str] = []
+            if mounted:
+                completed = subprocess.run(("umount", os.fspath(mountpoint)), text=True, capture_output=True, check=False)
+                if completed.returncode != 0:
+                    cleanup_failures.append("UNMOUNT")
+            if attached:
+                completed = subprocess.run(("qemu-nbd", "-d", os.fspath(device)), text=True, capture_output=True, check=False)
+                if completed.returncode != 0:
+                    cleanup_failures.append("NBD_DISCONNECT")
+            if cleanup_failures:
+                raise RuntimeError(f"BUILDER_IMAGE_SANITIZATION_CLEANUP_FAILED:{','.join(cleanup_failures)}") from failure
+    if failure is not None:
+        raise RuntimeError(f"BUILDER_IMAGE_SANITIZATION_FAILED:{type(failure).__name__}") from failure
+
+
 def build(output: Path, *, cache: Path, timeout_seconds: int) -> dict[str, object]:
     if os.geteuid() != 0:
         raise RuntimeError("BUILDER_REQUIRES_ROOT")
-    for command in ("curl", "qemu-img", "qemu-system-x86_64", "cloud-localds"):
+    for command in ("curl", "qemu-img", "qemu-system-x86_64", "cloud-localds", "qemu-nbd", "mount", "umount", "sync"):
         require(command)
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists() or output.with_suffix(".profile.json").exists() or output.with_suffix(".evidence.json").exists():
@@ -144,6 +205,7 @@ def build(output: Path, *, cache: Path, timeout_seconds: int) -> dict[str, objec
     with tempfile.TemporaryDirectory(prefix="sandboxer-image-build-", dir=output.parent) as temporary:
         work = Path(temporary)
         overlay, seed, serial = work / "build-overlay.qcow2", work / "build-seed.iso", work / "build-serial.log"
+        candidate = work / "promoted.qcow2"
         user_data, metadata = work / "user-data.yaml", work / "meta-data"
         user_data.write_text(render_cloud_config(), encoding="utf-8")
         metadata.write_text("instance-id: sandboxer-image-builder\nlocal-hostname: sandboxer-image-builder\n", encoding="ascii")
@@ -161,14 +223,22 @@ def build(output: Path, *, cache: Path, timeout_seconds: int) -> dict[str, objec
             if process.poll() is None:
                 process.kill()
                 process.wait()
-        run(("qemu-img", "convert", "-p", "-O", "qcow2", os.fspath(overlay), os.fspath(output)))
+        run(("qemu-img", "convert", "-p", "-O", "qcow2", os.fspath(overlay), os.fspath(candidate)))
+        sanitize_promoted_image(candidate)
+        info = subprocess.run(("qemu-img", "info", "--output=json", os.fspath(candidate)), text=True, capture_output=True, check=False)
+        if info.returncode != 0:
+            raise RuntimeError("BUILDER_IMAGE_INFO_FAILED")
+        image_info = json.loads(info.stdout)
+        if image_info.get("backing-filename"):
+            raise RuntimeError("BUILDER_IMAGE_HAS_BACKING_FILE")
+        candidate.chmod(0o444)
+        os.replace(candidate, output)
     info = subprocess.run(("qemu-img", "info", "--output=json", os.fspath(output)), text=True, capture_output=True, check=False)
     if info.returncode != 0:
         raise RuntimeError("BUILDER_IMAGE_INFO_FAILED")
     image_info = json.loads(info.stdout)
     if image_info.get("backing-filename"):
         raise RuntimeError("BUILDER_IMAGE_HAS_BACKING_FILE")
-    output.chmod(0o444)
     digest = sha256(output)
     profile = {"schema_version": 1, "image_sha256": digest, **runtime_contract()}
     profile_path = output.with_suffix(".profile.json")
@@ -177,6 +247,7 @@ def build(output: Path, *, cache: Path, timeout_seconds: int) -> dict[str, objec
         **build_plan(output), "image_sha256": digest, "image_info": image_info,
         "template_sha256": {name: hashlib.sha256(content.encode()).hexdigest() for name, content in templates().items()},
         "credentials_included": False,
+        "post_build_sanitization": post_build_sanitization(),
         "build_mode": "temporary-controlled-vm",
     }
     output.with_suffix(".evidence.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")

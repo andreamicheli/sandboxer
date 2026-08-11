@@ -175,3 +175,7 @@ def test_image_builder_plan_binds_the_exact_profile_to_its_output_digest_path(tm
         "control_protocol": "virtio-serial-v1",
         "toy_service": "synthetic-http",
     }
+    assert plan["post_build_sanitization"] == {
+        "remove_paths": ["/var/lib/cloud", "/run/sandboxer-build"],
+        "verify_absent": True,
+    }
