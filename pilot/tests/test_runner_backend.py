@@ -35,6 +35,20 @@ def test_simulated_contract_fixture_never_claims_a_remote_production_rehearsal()
     assert all(evidence.state.value == "destroyed" for evidence in report.teardown_evidence)
 
 
+def test_real_provider_can_remain_a_rehearsal_until_its_evidence_boundary_is_complete() -> None:
+    class IncompleteLocalFixture(SimulatedRunnerProvider):
+        simulated_fixture = False
+        production_ready = False
+
+    backend = ProductionRunnerBackend(IncompleteLocalFixture())
+
+    report = backend.rehearse(match_id="local-kvm-001", runner_names=("atlas", "borealis"))
+
+    assert report.terminal_code == "RUNNERS_DESTROYED"
+    assert report.simulated_fixture is False
+    assert report.production_ready is False
+
+
 def test_active_preflight_fails_closed_before_competitors_can_run() -> None:
     provider = SimulatedRunnerProvider(failing_probes={"orchestrator_unreachable"})
     backend = ProductionRunnerBackend(provider)
@@ -71,6 +85,22 @@ def test_red_network_drift_fails_closed_before_any_competitor_call() -> None:
     assert provider.quarantine_calls == ["rehearsal-network:atlas", "rehearsal-network:borealis"]
     assert all(evidence.state.value == "quarantined" for evidence in error.value.teardown_evidence)
     assert provider.competitor_calls == 0
+
+
+def test_provider_probe_exception_is_quarantined_instead_of_leaking_live_runners() -> None:
+    class BrokenProbeFixture(SimulatedRunnerProvider):
+        def probe(self, runners):  # type: ignore[no-untyped-def]
+            raise RuntimeError("host witness unavailable")
+
+    provider = BrokenProbeFixture()
+
+    with pytest.raises(RunnerPreflightFailed) as error:
+        ProductionRunnerBackend(provider).rehearse(
+            match_id="rehearsal-probe-error", runner_names=("atlas", "borealis")
+        )
+
+    assert error.value.reason_code == "PREFLIGHT_EXECUTION_FAILED"
+    assert provider.quarantine_calls == ["rehearsal-probe-error:atlas", "rehearsal-probe-error:borealis"]
 
 
 def test_teardown_failure_is_quarantined_and_reconciliation_retains_typed_evidence() -> None:

@@ -25,6 +25,7 @@ from .arena_safety import (
     TeardownEvidence,
     TeardownState,
 )
+from .local_kvm import LocalKvmConfig, LocalKvmRunnerProvider, SubprocessLocalKvmHost
 
 __all__ = [
     "ControlledCompetitor",
@@ -43,4 +44,7 @@ __all__ = [
     "ReconciliationLedger",
     "TeardownEvidence",
     "TeardownState",
+    "LocalKvmConfig",
+    "LocalKvmRunnerProvider",
+    "SubprocessLocalKvmHost",
 ]

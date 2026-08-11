@@ -75,6 +75,7 @@ class RunnerProvider(Protocol):
     """The sole cloud/runtime extension point; never exposed to a Runner."""
 
     simulated_fixture: bool
+    production_ready: bool
 
     def provision(self, match_id: str, names: tuple[str, str]) -> tuple[RunnerHandle, RunnerHandle]: ...
 
@@ -118,7 +119,14 @@ class ProductionRunnerBackend:
             raise ValueError("a Match requires exactly two distinct Runner names")
         runners = self._provider.provision(match_id, runner_names)
         self._known.update({runner.runner_id: runner for runner in runners})
-        checks = self._preflight(runners)
+        try:
+            checks = self._preflight(runners)
+        except Exception as error:
+            # A failed witness is not an unknown that can be retried in-place:
+            # these Runners are already live, so contain them before surfacing it.
+            raise RunnerPreflightFailed(
+                "PREFLIGHT_EXECUTION_FAILED", self._quarantine(runners, "PREFLIGHT_EXECUTION_FAILED")
+            ) from error
         failed = next((check for check in checks if not check.passed), None)
         if failed is not None:
             code = failed.reason_code or _REASON_BY_PROBE[failed.name]
@@ -136,7 +144,7 @@ class ProductionRunnerBackend:
         simulated = self._provider.simulated_fixture
         return RehearsalReport(
             terminal_code="SIMULATED_CONTRACT_PASSED" if simulated else "RUNNERS_DESTROYED",
-            production_ready=not simulated,
+            production_ready=not simulated and self._provider.production_ready,
             simulated_fixture=simulated,
             runner_ids=(runners[0].runner_id, runners[1].runner_id),
             preflight_checks=checks, teardown_evidence=evidence,
@@ -178,6 +186,7 @@ class SimulatedRunnerProvider:
     """Deterministic simulated contract fixture; it never contacts a cloud API."""
 
     simulated_fixture = True
+    production_ready = False
 
     def __init__(
         self, *, failing_probes: set[str] | None = None,
