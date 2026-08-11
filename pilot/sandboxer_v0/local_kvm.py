@@ -423,6 +423,7 @@ class _RunnerRecord:
     ttl_token: object | None
     nonce: str
     deadline: float
+    serial_evidence: str | None = None
     phase: Phase = Phase.BLUE
 
 
@@ -513,8 +514,10 @@ class LocalKvmRunnerProvider:
         try:
             responses = [self._control_probe(record) for record in records]
         except PreflightWitnessFailed:
+            self._capture_serial_stages(records)
             raise
         except Exception as error:
+            self._capture_serial_stages(records)
             raise PreflightWitnessFailed("LOCAL_KVM_CONTROL_SOCKET_UNAVAILABLE") from error
         if any(item.route_after_setup != "absent" for item in responses):
             raise PreflightWitnessFailed("LOCAL_KVM_BLUE_ROUTE_AFTER_SETUP_WITNESS_FAILED")
@@ -909,6 +912,31 @@ class LocalKvmRunnerProvider:
             raise RuntimeError("CONTROL_RESPONSE_TOO_LARGE")
         return parse_control(response, nonce, require_probe=require_probe)
 
+    def _capture_serial_stages(self, records: list[_RunnerRecord]) -> None:
+        """Persist only fixed stage labels before disposable roots are removed."""
+        allowed = {
+            "SANDBOXER_RUNTIME_BOOTSTRAP", "SANDBOXER_RUNTIME_MOUNTS_READY",
+            "SANDBOXER_STAGE_SETUP", "SANDBOXER_STAGE_TOY", "SANDBOXER_STAGE_CONTROL",
+            "SANDBOXER_RUNTIME_READY", "SANDBOXER_SETUP_FAILED", "SANDBOXER_TOY_FAILED",
+            "SANDBOXER_CONTROL_FAILED",
+        }
+        evidence_root = self.config.runner_root.parent / "evidence"
+        for record in records:
+            try:
+                raw = (record.root / "serial.log").read_text(encoding="ascii", errors="ignore")[-8192:]
+                labels = [line for line in raw.splitlines() if line in allowed or re.fullmatch(r"SANDBOXER_NETPROBE_STAGE=[a-z_]+", line)]
+                if not labels:
+                    continue
+                evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+                target = evidence_root / f"{hashlib.sha256(record.handle.runner_id.encode()).hexdigest()[:16]}.serial-stages"
+                descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(descriptor, "w", encoding="ascii") as output:
+                    output.write("\n".join(labels) + "\n")
+                os.chmod(target, 0o600)
+                record.serial_evidence = "SERIAL_STAGE_EVIDENCE"
+            except OSError:
+                record.serial_evidence = "SERIAL_STAGE_EVIDENCE_UNAVAILABLE"
+
     def _destroy_record(self, record: _RunnerRecord, reason_code: str | None) -> TeardownEvidence:
         failures: list[str] = []
         if record.ttl_token is not None:
@@ -943,7 +971,8 @@ class LocalKvmRunnerProvider:
                 if not self._remove_root(record.root.parent):
                     return TeardownEvidence(record.handle.runner_id, TeardownState.QUARANTINED, "MATCH_ROOT_REMAINS", reason_code or "MATCH_ROOT_REMAINS")
             self._records.pop(record.handle.runner_id, None)
-            return TeardownEvidence(record.handle.runner_id, TeardownState.DESTROYED, "QEMU stopped; workspace checked; Arena namespace and cgroup removed")
+            suffix = f"; {record.serial_evidence}" if record.serial_evidence else ""
+            return TeardownEvidence(record.handle.runner_id, TeardownState.DESTROYED, "QEMU stopped; workspace checked; Arena namespace and cgroup removed" + suffix)
         return TeardownEvidence(record.handle.runner_id, TeardownState.QUARANTINED, ";".join(failures), reason_code or failures[0])
 
     def _stop_pid(self, pid: int, identity: str) -> bool:
