@@ -510,6 +510,8 @@ class LocalKvmRunnerProvider:
             raise PreflightWitnessFailed("LOCAL_KVM_CONTROL_WITNESS_UNAVAILABLE") from error
         try:
             network = self._measure_network(records, Phase.BLUE)
+        except PreflightWitnessFailed:
+            raise
         except Exception as error:
             raise PreflightWitnessFailed("LOCAL_KVM_BLUE_NETWORK_WITNESS_UNAVAILABLE") from error
         all_alive = all(self._host.process_alive(record.pid) for record in records)
@@ -790,7 +792,16 @@ class LocalKvmRunnerProvider:
     def _measure_network(self, records: list[_RunnerRecord], phase: Phase) -> NetworkObservation:
         if phase is Phase.BLUE:
             # Separate Linux namespaces are the authoritative Blue boundary.
-            routes = [self._run(("ip", "-n", record.blue_namespace, "route", "show", "default"), "NETWORK_WITNESS_UNAVAILABLE") for record in records]
+            try:
+                routes = [
+                    self._run(
+                        ("ip", "-n", record.blue_namespace, "route", "show", "default"),
+                        "NETWORK_WITNESS_UNAVAILABLE",
+                    )
+                    for record in records
+                ]
+            except Exception as error:
+                raise PreflightWitnessFailed("LOCAL_KVM_BLUE_HOST_ROUTE_WITNESS_UNAVAILABLE") from error
             if any(item.stdout.strip() for item in routes):
                 return NetworkObservation(frozenset(), True, True, True)
             proofs = [self._network_proof(record, phase) for record in records]
@@ -838,10 +849,20 @@ class LocalKvmRunnerProvider:
         raise RuntimeError("CONTROL_BOOTSTRAP_TIMEOUT") from last_error
 
     def _network_proof(self, record: _RunnerRecord, phase: Phase) -> NetworkProof:
-        response = self._host.control_exchange(
-            record.control_socket, f"NETPROBE {record.nonce} {phase.value}\n", timeout_seconds=_NETWORK_PROBE_TIMEOUT_SECONDS
-        )
-        return parse_network_proof(response, record.nonce, phase.value)
+        try:
+            response = self._host.control_exchange(
+                record.control_socket,
+                f"NETPROBE {record.nonce} {phase.value}\n",
+                timeout_seconds=_NETWORK_PROBE_TIMEOUT_SECONDS,
+            )
+        except (TimeoutError, socket.timeout) as error:
+            raise PreflightWitnessFailed("LOCAL_KVM_BLUE_GUEST_NETPROBE_TIMEOUT") from error
+        except (FileNotFoundError, ConnectionRefusedError, OSError) as error:
+            raise PreflightWitnessFailed("LOCAL_KVM_BLUE_GUEST_NETPROBE_REQUEST_UNAVAILABLE") from error
+        try:
+            return parse_network_proof(response, record.nonce, phase.value)
+        except Exception as error:
+            raise PreflightWitnessFailed("LOCAL_KVM_BLUE_GUEST_NETPROBE_INVALID_RESPONSE") from error
 
     def _parse_control(self, response: str, nonce: str, *, require_probe: bool) -> ControlReady | ControlProbe:
         if len(response.encode("ascii", errors="ignore")) > _MAX_CONTROL_RESPONSE:

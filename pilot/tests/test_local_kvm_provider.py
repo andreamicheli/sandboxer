@@ -52,6 +52,9 @@ class RecordingKvmHost:
         self.terminate_leaves_process_alive = False
         self.wait_calls: list[tuple[int, str, float]] = []
         self.stop_order: list[str] = []
+        self.route_witness_failure = False
+        self.network_probe_failure: BaseException | None = None
+        self.network_probe_response: str | None = None
 
     def run(self, argv: tuple[str, ...], *, input_text: str | None = None, timeout_seconds: float = 10) -> CommandResult:
         del timeout_seconds
@@ -91,6 +94,8 @@ class RecordingKvmHost:
         if "addr" in argv and "show" in argv and "-j" in argv:
             return CommandResult(0, "[]", "")
         if "route" in argv and "default" in argv:
+            if self.route_witness_failure:
+                return CommandResult(1, "", "host route witness unavailable")
             return CommandResult(0, "", "")
         if "nft" in argv and "list" in argv:
             return CommandResult(0, self.inputs[-1] if self.inputs else "", "")
@@ -120,6 +125,10 @@ class RecordingKvmHost:
         self.control_requests.append(payload)
         self.control_timeouts.append((payload, timeout_seconds))
         if payload.startswith("NETPROBE "):
+            if self.network_probe_failure is not None:
+                raise self.network_probe_failure
+            if self.network_probe_response is not None:
+                return self.network_probe_response
             _, nonce, phase = payload.split()
             if phase == "blue":
                 return f"NETWORK_PROBE nonce={nonce} phase=blue peer_denied=1 toy_http=0 alternate_denied=1 icmp_denied=1 egress_denied=1 orchestrator_denied=1\n"
@@ -312,6 +321,42 @@ def test_local_kvm_labels_an_unavailable_blue_network_witness_without_generic_pr
         )
 
     assert error.value.reason_code == "LOCAL_KVM_BLUE_NETWORK_WITNESS_UNAVAILABLE"
+
+
+def test_local_kvm_labels_a_blue_host_route_witness_failure(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    host.route_witness_failure = True
+
+    with pytest.raises(RunnerPreflightFailed) as error:
+        ProductionRunnerBackend(provider).rehearse(
+            match_id="kvm-blue-host-route", runner_names=("atlas", "borealis")
+        )
+
+    assert error.value.reason_code == "LOCAL_KVM_BLUE_HOST_ROUTE_WITNESS_UNAVAILABLE"
+
+
+def test_local_kvm_labels_a_blue_guest_netprobe_timeout(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    host.network_probe_failure = TimeoutError("private detail")
+
+    with pytest.raises(RunnerPreflightFailed) as error:
+        ProductionRunnerBackend(provider).rehearse(
+            match_id="kvm-blue-netprobe-timeout", runner_names=("atlas", "borealis")
+        )
+
+    assert error.value.reason_code == "LOCAL_KVM_BLUE_GUEST_NETPROBE_TIMEOUT"
+
+
+def test_local_kvm_labels_a_blue_guest_netprobe_invalid_response(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    host.network_probe_response = "not a network proof\n"
+
+    with pytest.raises(RunnerPreflightFailed) as error:
+        ProductionRunnerBackend(provider).rehearse(
+            match_id="kvm-blue-netprobe-invalid", runner_names=("atlas", "borealis")
+        )
+
+    assert error.value.reason_code == "LOCAL_KVM_BLUE_GUEST_NETPROBE_INVALID_RESPONSE"
 
 
 def test_local_kvm_waits_for_identity_exit_before_checking_the_overlay(tmp_path: Path) -> None:
