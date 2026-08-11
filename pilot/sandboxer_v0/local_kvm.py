@@ -17,7 +17,6 @@ import signal
 import socket
 import stat
 import subprocess
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -143,18 +142,27 @@ class SubprocessLocalKvmHost:
         )
 
     def arm_ttl(self, cgroup: str, identity: str, seconds: int) -> object:
-        def expire() -> None:
-            pid = int(identity.split(":", 1)[0])
-            if self.process_identity(pid) == identity:
-                Path(cgroup, "cgroup.kill").write_text("1", encoding="ascii")
-        timer = threading.Timer(seconds, expire)
-        timer.daemon = True
-        timer.start()
-        return timer
+        pid, starttime = identity.split(":", 1)
+        unit = f"sandboxer-ttl-{hashlib.sha256(identity.encode()).hexdigest()[:16]}"
+        # A transient systemd unit is independent of the Orchestrator process:
+        # it survives a controller crash and kills only the verified cgroup if
+        # the PID still has the original start time.
+        script = (
+            f"sleep {seconds}; test -r /proc/{pid}/stat || exit 0; "
+            f"test \"$(awk '{{print $22}}' /proc/{pid}/stat)\" = \"{starttime}\" || exit 0; "
+            f"printf 1 > {cgroup}/cgroup.kill"
+        )
+        completed = subprocess.run(
+            ("systemd-run", "--unit", unit, "--collect", "--service-type=oneshot", "/bin/sh", "-ec", script),
+            text=True, capture_output=True, check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError("TTL_WATCHDOG_UNAVAILABLE")
+        return unit
 
     def cancel_ttl(self, token: object) -> None:
-        if isinstance(token, threading.Timer):
-            token.cancel()
+        if isinstance(token, str):
+            subprocess.run(("systemctl", "stop", token), text=True, capture_output=True, check=False)
 
     def terminate(self, pid: int) -> None:
         try:
@@ -254,6 +262,7 @@ class LocalKvmRunnerProvider:
         self._host = host or SubprocessLocalKvmHost()
         self._records: dict[str, _RunnerRecord] = {}
         self._terminal: dict[str, TeardownEvidence] = {}
+        self._partials: dict[str, tuple[Path, tuple[str, ...]]] = {}
 
     def provision(self, match_id: str, names: tuple[str, str]) -> tuple[RunnerHandle, RunnerHandle]:
         self._validate_identity(match_id, names)
@@ -294,7 +303,8 @@ class LocalKvmRunnerProvider:
                     "namespace deletion verified" if deleted.returncode == 0 and not remains else "namespace cleanup unverified",
                     None if deleted.returncode == 0 and not remains else "NAMESPACE_REMAINS",
                 ))
-            shutil.rmtree(match_root, ignore_errors=True)
+            if all(item.state is TeardownState.DESTROYED for item in evidence):
+                shutil.rmtree(match_root, ignore_errors=True)
             if isinstance(error, ProvisioningFailed):
                 evidence.extend(error.teardown_evidence)
             raise ProvisioningFailed(str(error), tuple(evidence)) from error
@@ -350,9 +360,7 @@ class LocalKvmRunnerProvider:
             evidence = TeardownEvidence(runner.runner_id, TeardownState.QUARANTINED, "local Runner state unavailable", reason_code)
         else:
             result = self._destroy_record(record, reason_code)
-            evidence = result if result.state is TeardownState.QUARANTINED else TeardownEvidence(
-                runner.runner_id, TeardownState.QUARANTINED, "Runner stopped and quarantined after failed preflight", reason_code
-            )
+            evidence = result
         self._terminal[runner.runner_id] = evidence
         return evidence
 
@@ -361,6 +369,19 @@ class LocalKvmRunnerProvider:
         if existing is not None and existing.state is TeardownState.DESTROYED:
             return existing
         record = self._records.get(runner_id)
+        partial = self._partials.get(runner_id)
+        if partial is not None:
+            root, namespaces = partial
+            failures = []
+            for namespace in namespaces:
+                deleted = self._run(("ip", "netns", "del", namespace), "", allow_failure=True)
+                if deleted.returncode != 0:
+                    failures.append(namespace)
+            if not failures:
+                shutil.rmtree(root, ignore_errors=True)
+                self._partials.pop(runner_id, None)
+                return TeardownEvidence(runner_id, TeardownState.DESTROYED, "partial Runner artifacts reconciled")
+            return TeardownEvidence(runner_id, TeardownState.QUARANTINED, "partial Runner remains", "RECONCILIATION_UNAVAILABLE")
         if record is None:
             return TeardownEvidence(runner_id, TeardownState.QUARANTINED, "cannot prove local artifact absence", "RECONCILIATION_UNAVAILABLE")
         evidence = self._destroy_record(record, "RECONCILIATION")
@@ -425,8 +446,11 @@ class LocalKvmRunnerProvider:
             if cgroup is not None:
                 self._host.destroy_cgroup(cgroup)
             self._run_quiet(("ip", "-n", blue_namespace, "link", "del", tap))
-            shutil.rmtree(root, ignore_errors=True)
             state = TeardownState.DESTROYED if pid is None or not self._host.process_alive(pid) else TeardownState.QUARANTINED
+            if state is TeardownState.DESTROYED:
+                shutil.rmtree(root, ignore_errors=True)
+            else:
+                self._partials[runner_id] = (root, (blue_namespace, red_namespace))
             raise ProvisioningFailed(
                 str(error),
                 (TeardownEvidence(runner_id, state, "partial Runner provisioning rollback attempted", str(error)),),
@@ -563,7 +587,13 @@ class LocalKvmRunnerProvider:
             failures.append("OVERLAY_INTEGRITY_UNVERIFIED")
         if not self._host.destroy_cgroup(record.cgroup):
             failures.append("CGROUP_REMAINS")
-        self._run_quiet(("ip", "netns", "del", record.blue_namespace))
+        blue_deleted = self._run(("ip", "netns", "del", record.blue_namespace), "", allow_failure=True)
+        blue_listed = self._run(("ip", "netns", "list"), "", allow_failure=True)
+        blue_remains = blue_listed.returncode != 0 or any(
+            line.split(maxsplit=1)[0] == record.blue_namespace for line in blue_listed.stdout.splitlines() if line.strip()
+        )
+        if blue_deleted.returncode != 0 or blue_remains:
+            failures.append("BLUE_NAMESPACE_REMAINS")
         another_runner_remains = any(
             candidate.handle.runner_id != record.handle.runner_id and candidate.match_id == record.match_id
             for candidate in self._records.values()
