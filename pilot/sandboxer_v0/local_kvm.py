@@ -17,6 +17,7 @@ import signal
 import socket
 import stat
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -147,13 +148,9 @@ class SubprocessLocalKvmHost:
         # A transient systemd unit is independent of the Orchestrator process:
         # it survives a controller crash and kills only the verified cgroup if
         # the PID still has the original start time.
-        script = (
-            f"sleep {seconds}; test -r /proc/{pid}/stat || exit 0; "
-            f"test \"$(awk '{{print $22}}' /proc/{pid}/stat)\" = \"{starttime}\" || exit 0; "
-            f"printf 1 > {cgroup}/cgroup.kill"
-        )
         completed = subprocess.run(
-            ("systemd-run", "--unit", unit, "--collect", "--service-type=oneshot", "/bin/sh", "-ec", script),
+            ("systemd-run", "--unit", unit, "--collect", "--service-type=oneshot", "--on-active", str(seconds), sys.executable,
+             "-m", "sandboxer_v0.local_kvm_watchdog", pid, starttime, cgroup),
             text=True, capture_output=True, check=False,
         )
         if completed.returncode != 0:
@@ -250,6 +247,18 @@ class _RunnerRecord:
     phase: Phase = Phase.BLUE
 
 
+@dataclass
+class _PartialRecord:
+    root: Path
+    namespaces: tuple[str, ...]
+    tap: str
+    control_socket: Path
+    pid: int | None
+    process_identity: str | None
+    cgroup: str | None
+    ttl_token: object | None
+
+
 class LocalKvmRunnerProvider:
     """A disposable, no-egress local KVM provider with an external control plane."""
 
@@ -262,7 +271,7 @@ class LocalKvmRunnerProvider:
         self._host = host or SubprocessLocalKvmHost()
         self._records: dict[str, _RunnerRecord] = {}
         self._terminal: dict[str, TeardownEvidence] = {}
-        self._partials: dict[str, tuple[Path, tuple[str, ...]]] = {}
+        self._partials: dict[str, _PartialRecord] = {}
 
     def provision(self, match_id: str, names: tuple[str, str]) -> tuple[RunnerHandle, RunnerHandle]:
         self._validate_identity(match_id, names)
@@ -303,10 +312,10 @@ class LocalKvmRunnerProvider:
                     "namespace deletion verified" if deleted.returncode == 0 and not remains else "namespace cleanup unverified",
                     None if deleted.returncode == 0 and not remains else "NAMESPACE_REMAINS",
                 ))
-            if all(item.state is TeardownState.DESTROYED for item in evidence):
-                shutil.rmtree(match_root, ignore_errors=True)
             if isinstance(error, ProvisioningFailed):
                 evidence.extend(error.teardown_evidence)
+            if all(item.state is TeardownState.DESTROYED for item in evidence):
+                shutil.rmtree(match_root, ignore_errors=True)
             raise ProvisioningFailed(str(error), tuple(evidence)) from error
         return records[0].handle, records[1].handle
 
@@ -371,14 +380,21 @@ class LocalKvmRunnerProvider:
         record = self._records.get(runner_id)
         partial = self._partials.get(runner_id)
         if partial is not None:
-            root, namespaces = partial
             failures = []
-            for namespace in namespaces:
+            if partial.ttl_token is not None:
+                self._host.cancel_ttl(partial.ttl_token)
+            if partial.pid is not None and partial.process_identity is not None:
+                self._stop_pid(partial.pid)
+                if self._host.process_identity(partial.pid) == partial.process_identity:
+                    failures.append("QEMU_PROCESS_SURVIVED")
+            if partial.cgroup is not None and not self._host.destroy_cgroup(partial.cgroup):
+                failures.append("CGROUP_REMAINS")
+            for namespace in partial.namespaces:
                 deleted = self._run(("ip", "netns", "del", namespace), "", allow_failure=True)
                 if deleted.returncode != 0:
                     failures.append(namespace)
             if not failures:
-                shutil.rmtree(root, ignore_errors=True)
+                shutil.rmtree(partial.root, ignore_errors=True)
                 self._partials.pop(runner_id, None)
                 return TeardownEvidence(runner_id, TeardownState.DESTROYED, "partial Runner artifacts reconciled")
             return TeardownEvidence(runner_id, TeardownState.QUARANTINED, "partial Runner remains", "RECONCILIATION_UNAVAILABLE")
@@ -401,7 +417,9 @@ class LocalKvmRunnerProvider:
         nonce = secrets.token_hex(32)
         tap = self._tap_name(match_id, name)
         pid: int | None = None
+        process_identity: str | None = None
         cgroup: str | None = None
+        ttl_token: object | None = None
         try:
             self._write_cloud_init(root, match_id, name, host_octet, nonce)
             self._run(
@@ -450,7 +468,10 @@ class LocalKvmRunnerProvider:
             if state is TeardownState.DESTROYED:
                 shutil.rmtree(root, ignore_errors=True)
             else:
-                self._partials[runner_id] = (root, (blue_namespace, red_namespace))
+                self._partials[runner_id] = _PartialRecord(
+                    root, (blue_namespace, red_namespace), tap, control_socket, pid,
+                    process_identity, cgroup, ttl_token,
+                )
             raise ProvisioningFailed(
                 str(error),
                 (TeardownEvidence(runner_id, state, "partial Runner provisioning rollback attempted", str(error)),),
