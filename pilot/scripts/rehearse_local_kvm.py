@@ -11,6 +11,13 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
+
+# This script is an operational entry point, so it must not depend on the
+# caller's current directory or a manually exported PYTHONPATH.
+PILOT_ROOT = Path(__file__).resolve().parents[1]
+if str(PILOT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PILOT_ROOT))
+
 from sandboxer_v0.local_kvm import LocalKvmConfig, LocalKvmRunnerProvider
 from sandboxer_v0.runner_backend import (
     ProductionRunnerBackend,
