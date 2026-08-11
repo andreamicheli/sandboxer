@@ -17,6 +17,7 @@ import signal
 import socket
 import stat
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +51,16 @@ class LocalKvmHost(Protocol):
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str: ...
 
     def process_alive(self, pid: int) -> bool: ...
+
+    def process_identity(self, pid: int) -> str | None: ...
+
+    def cgroup_contains(self, cgroup: str, pid: int) -> bool: ...
+
+    def cgroup_limited(self, cgroup: str, pid: int, memory_bytes: int, cpu_max: str, pids_max: int) -> bool: ...
+
+    def arm_ttl(self, cgroup: str, identity: str, seconds: int) -> object: ...
+
+    def cancel_ttl(self, token: object) -> None: ...
 
     def terminate(self, pid: int) -> None: ...
 
@@ -113,6 +124,37 @@ class SubprocessLocalKvmHost:
         except (FileNotFoundError, IndexError):
             return False
         return state != "Z"
+
+    def process_identity(self, pid: int) -> str | None:
+        try:
+            fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()
+            return f"{pid}:{fields[21]}" if fields[2] != "Z" else None
+        except (FileNotFoundError, IndexError):
+            return None
+
+    def cgroup_contains(self, cgroup: str, pid: int) -> bool:
+        return str(pid) in Path(cgroup, "cgroup.procs").read_text(encoding="ascii").split()
+
+    def cgroup_limited(self, cgroup: str, pid: int, memory_bytes: int, cpu_max: str, pids_max: int) -> bool:
+        return self.cgroup_contains(cgroup, pid) and (
+            Path(cgroup, "memory.max").read_text().strip() == str(memory_bytes)
+            and Path(cgroup, "cpu.max").read_text().strip() == cpu_max
+            and Path(cgroup, "pids.max").read_text().strip() == str(pids_max)
+        )
+
+    def arm_ttl(self, cgroup: str, identity: str, seconds: int) -> object:
+        def expire() -> None:
+            pid = int(identity.split(":", 1)[0])
+            if self.process_identity(pid) == identity:
+                Path(cgroup, "cgroup.kill").write_text("1", encoding="ascii")
+        timer = threading.Timer(seconds, expire)
+        timer.daemon = True
+        timer.start()
+        return timer
+
+    def cancel_ttl(self, token: object) -> None:
+        if isinstance(token, threading.Timer):
+            token.cancel()
 
     def terminate(self, pid: int) -> None:
         try:
@@ -192,7 +234,9 @@ class _RunnerRecord:
     workspace: Path
     control_socket: Path
     pid: int
+    process_identity: str
     cgroup: str
+    ttl_token: object
     nonce: str
     deadline: float
     phase: Phase = Phase.BLUE
@@ -220,6 +264,7 @@ class LocalKvmRunnerProvider:
         match_root.mkdir(parents=True, mode=0o711)
         red_namespace, red_bridge = self._network_names(match_id)
         records: list[_RunnerRecord] = []
+        blue_namespaces: list[str] = []
         try:
             self._run(("ip", "netns", "add", red_namespace), "NETWORK_NAMESPACE_CREATE_FAILED")
             self._run(("ip", "-n", red_namespace, "link", "add", red_bridge, "type", "bridge"), "BRIDGE_CREATE_FAILED")
@@ -228,6 +273,7 @@ class LocalKvmRunnerProvider:
             self._install_red_policy(red_namespace, "")
             for index, name in enumerate(names, start=11):
                 blue_namespace = self._blue_namespace(match_id, name)
+                blue_namespaces.append(blue_namespace)
                 self._run(("ip", "netns", "add", blue_namespace), "BLUE_NAMESPACE_CREATE_FAILED")
                 self._run(("ip", "-n", blue_namespace, "link", "set", "lo", "up"), "BLUE_LOOPBACK_ENABLE_FAILED")
                 record = self._provision_runner(match_id, name, index, match_root, blue_namespace, red_namespace, red_bridge)
@@ -238,11 +284,19 @@ class LocalKvmRunnerProvider:
             evidence: list[TeardownEvidence] = []
             for record in records:
                 evidence.append(self._destroy_record(record, "PROVISION_ROLLBACK"))
-            self._run_quiet(("ip", "netns", "del", red_namespace))
+            for namespace in (*blue_namespaces, red_namespace):
+                deleted = self._run(("ip", "netns", "del", namespace), "", allow_failure=True)
+                listed = self._run(("ip", "netns", "list"), "", allow_failure=True)
+                remains = listed.returncode != 0 or any(line.split(maxsplit=1)[0] == namespace for line in listed.stdout.splitlines() if line.strip())
+                evidence.append(TeardownEvidence(
+                    f"{match_id}:{namespace}",
+                    TeardownState.QUARANTINED if deleted.returncode != 0 or remains else TeardownState.DESTROYED,
+                    "namespace deletion verified" if deleted.returncode == 0 and not remains else "namespace cleanup unverified",
+                    None if deleted.returncode == 0 and not remains else "NAMESPACE_REMAINS",
+                ))
             shutil.rmtree(match_root, ignore_errors=True)
             if isinstance(error, ProvisioningFailed):
                 evidence.extend(error.teardown_evidence)
-            evidence.append(TeardownEvidence(f"{match_id}:arena", TeardownState.DESTROYED, "provisioning Arena namespace cleanup attempted"))
             raise ProvisioningFailed(str(error), tuple(evidence)) from error
         return records[0].handle, records[1].handle
 
@@ -262,8 +316,8 @@ class LocalKvmRunnerProvider:
             PreflightCheck("telemetry_egress", all(item.nonce == record.nonce for item, record in zip(responses, records)), "TELEMETRY_EGRESS_UNAVAILABLE"),
             PreflightCheck("clock", all(item.clock_epoch > 0 for item in responses), "CLOCK_UNVERIFIED"),
             PreflightCheck("ttl", all(record.deadline > now for record in records), "TTL_UNVERIFIED"),
-            PreflightCheck("health", all_alive and all(item.uid == 1001 for item in responses), "RUNNER_HEALTH_UNVERIFIED"),
-            PreflightCheck("cleanup_capability", all(bool(record.cgroup) for record in records), "CLEANUP_UNAVAILABLE"),
+            PreflightCheck("health", all_alive and all(item.uid == 1001 for item in responses) and all(self._host.cgroup_limited(record.cgroup, record.pid, self.config.memory_mib * 1024 * 1024, f"{self.config.vcpus * 100000} 100000", self.config.pids_max) for record in records), "RUNNER_HEALTH_UNVERIFIED"),
+            PreflightCheck("cleanup_capability", all(self._host.cgroup_contains(record.cgroup, record.pid) for record in records), "CLEANUP_UNAVAILABLE"),
         )
 
     def network_observation(
@@ -348,7 +402,8 @@ class LocalKvmRunnerProvider:
             self._run(("ip", "netns", "exec", blue_namespace, "ip", "tuntap", "add", "dev", tap, "mode", "tap", "user", str(self.config.qemu_uid)), "TAP_CREATE_FAILED")
             self._run(("ip", "-n", blue_namespace, "link", "set", tap, "up"), "TAP_ENABLE_FAILED")
             pid = self._host.start(self._qemu_command(blue_namespace, tap, workspace, seed, control_socket, root / "serial.log"))
-            if not self._host.process_alive(pid):
+            process_identity = self._host.process_identity(pid)
+            if process_identity is None:
                 raise RuntimeError("QEMU_PID_UNVERIFIED")
             cgroup = self._host.create_cgroup(
                 f"sandboxer-{hashlib.sha256(runner_id.encode()).hexdigest()[:12]}-{nonce[:8]}",
@@ -357,10 +412,13 @@ class LocalKvmRunnerProvider:
                 pids_max=self.config.pids_max,
             )
             self._host.attach_to_cgroup(cgroup, pid)
+            if not self._host.cgroup_contains(cgroup, pid):
+                raise RuntimeError("CGROUP_MEMBERSHIP_UNVERIFIED")
+            ttl_token = self._host.arm_ttl(cgroup, process_identity, self.config.ttl_seconds)
             response = self._control_exchange(control_socket, nonce)
             ready = self._parse_control(response, nonce, require_probe=False)
             handle = RunnerHandle(runner_id, name, ready.boot_id, ready.uid == 1001, True, True)
-            return _RunnerRecord(handle, match_id, blue_namespace, red_namespace, red_bridge, tap, root, workspace, control_socket, pid, cgroup, nonce, time.monotonic() + self.config.ttl_seconds)
+            return _RunnerRecord(handle, match_id, blue_namespace, red_namespace, red_bridge, tap, root, workspace, control_socket, pid, process_identity, cgroup, ttl_token, nonce, time.monotonic() + self.config.ttl_seconds)
         except Exception as error:
             if pid is not None:
                 self._stop_pid(pid)
@@ -378,7 +436,6 @@ class LocalKvmRunnerProvider:
         self, namespace: str, tap: str, workspace: Path, seed: Path, control_socket: Path, serial_log: Path
     ) -> tuple[str, ...]:
         return (
-            "timeout", "--signal=TERM", "--kill-after=5", str(self.config.ttl_seconds),
             "ip", "netns", "exec", namespace,
             "setpriv", f"--reuid={self.config.qemu_user}", f"--regid={self.config.qemu_user}", "--init-groups",
             self.config.qemu_binary,
@@ -497,8 +554,9 @@ class LocalKvmRunnerProvider:
 
     def _destroy_record(self, record: _RunnerRecord, reason_code: str | None) -> TeardownEvidence:
         failures: list[str] = []
+        self._host.cancel_ttl(record.ttl_token)
         self._stop_pid(record.pid)
-        if self._host.process_alive(record.pid):
+        if self._host.process_identity(record.pid) == record.process_identity:
             failures.append("QEMU_PROCESS_SURVIVED")
         check = self._run((self.config.qemu_img_binary, "check", "--output=json", os.fspath(record.workspace)), "", allow_failure=True)
         if check.returncode != 0:
@@ -556,6 +614,7 @@ class LocalKvmRunnerProvider:
             raise RuntimeError("BASE_IMAGE_PROFILE_INVALID") from error
         required_profile = {
             "schema_version": 1,
+            "image_sha256": self.config.base_image_sha256,
             "root_filesystem": "readonly",
             "workspace_mount": "/workspace",
             "control_protocol": "virtio-serial-v1",
@@ -565,28 +624,15 @@ class LocalKvmRunnerProvider:
             raise RuntimeError("BASE_IMAGE_PROFILE_INVALID")
 
     def _write_cloud_init(self, root: Path, match_id: str, name: str, host_octet: int, nonce: str) -> None:
-        (root / "meta-data.yaml").write_text(f"instance-id: {match_id}-{name}\nlocal-hostname: runner-{name}\n", encoding="ascii")
+        (root / "meta-data.yaml").write_text(
+            f"match={match_id}\nrunner={name}\nnonce={nonce}\nip=10.77.0.{host_octet}\n", encoding="ascii"
+        )
         (root / "network-config.yaml").write_text(
             "version: 2\nethernets:\n  eth0:\n    addresses:\n      - 10.77.0." + str(host_octet) + "/24\n", encoding="ascii"
         )
-        # The base image must provide this minimal handler; it exposes no shell,
-        # credentials, host filesystem, or IP control channel to a Competitor.
-        (root / "user-data.yaml").write_text(
-            "#cloud-config\nusers:\n  - name: competitor\n    uid: 1001\n    shell: /bin/ash\n    lock_passwd: true\n"
-            "ssh_pwauth: false\ndisable_root: true\nbootcmd:\n  - sysctl -w net.ipv6.conf.all.disable_ipv6=1\n"
-            "write_files:\n  - path: /usr/local/lib/sandboxer-control\n    permissions: '0555'\n    content: |\n"
-            "      #!/bin/ash\n      control=/dev/virtio-ports/org.sandboxer.control\n      [ -e \"$control\" ] || control=/dev/vport0p1\n"
-            "      exec 3<>\"$control\"\n      while IFS= read -r line <&3; do\n"
-            f"        if [ \"$line\" = \"PROBE {nonce}\" ]; then\n"
-            f"          printf 'READY nonce={nonce} uid=%s boot_id=%s no_credentials=1 private_mounts=1\\n' \"$(id -u)\" \"$(cat /proc/sys/kernel/random/boot_id)\" >&3\n"
-            f"          printf 'PROBE_OK nonce={nonce} uid=%s clock_epoch=%s\\n' \"$(id -u)\" \"$(date +%s)\" >&3\n"
-            "        else\n          printf 'CONTROL_DENIED\\n' >&3\n        fi\n      done\n"
-            # This is intentionally foregrounded.  Cloud-init otherwise tears
-            # down its background process group before the virtio handler can
-            # answer the host's first bounded probe.
-            "runcmd:\n  - [sh, -ec, 'control=/dev/virtio-ports/org.sandboxer.control; test -e $control || control=/dev/vport0p1; chown competitor:competitor $control; exec su competitor -s /bin/ash -c /usr/local/lib/sandboxer-control']\n",
-            encoding="ascii",
-        )
+        # Only a read-only metadata disk is generated at runtime. The immutable
+        # base owns the competitor, control handler, and synthetic toy service.
+        (root / "user-data.yaml").write_text("#cloud-config\n", encoding="ascii")
 
     def _require_records(self, runners: tuple[RunnerHandle, RunnerHandle]) -> list[_RunnerRecord]:
         records = [self._records.get(runner.runner_id) for runner in runners]
