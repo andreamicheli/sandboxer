@@ -157,13 +157,16 @@ def sanitize_promoted_image(image: Path) -> None:
     attached = False
     mounted = False
     failure: Exception | None = None
+    stage = "ATTACH"
     with tempfile.TemporaryDirectory(prefix="sandboxer-image-sanitize-", dir=image.parent) as directory:
         mountpoint = Path(directory)
         try:
             run(("qemu-nbd", f"--connect={device}", os.fspath(image)))
             attached = True
+            stage = "MOUNT"
             run(("mount", "-o", "rw,nosuid,nodev,noexec", os.fspath(device), os.fspath(mountpoint)))
             mounted = True
+            stage = "REMOVE"
             for relative_path in POST_BUILD_SANITIZATION_PATHS:
                 target = mountpoint / relative_path.lstrip("/")
                 if target.is_symlink() or target.is_file():
@@ -171,6 +174,7 @@ def sanitize_promoted_image(image: Path) -> None:
                 elif target.is_dir():
                     shutil.rmtree(target)
             run(("sync",))
+            stage = "VERIFY"
             if any((mountpoint / relative_path.lstrip("/")).exists() for relative_path in POST_BUILD_SANITIZATION_PATHS):
                 raise RuntimeError("BUILDER_IMAGE_SANITIZATION_UNVERIFIED")
         except Exception as error:
@@ -188,7 +192,7 @@ def sanitize_promoted_image(image: Path) -> None:
             if cleanup_failures:
                 raise RuntimeError(f"BUILDER_IMAGE_SANITIZATION_CLEANUP_FAILED:{','.join(cleanup_failures)}") from failure
     if failure is not None:
-        raise RuntimeError(f"BUILDER_IMAGE_SANITIZATION_FAILED:{type(failure).__name__}") from failure
+        raise RuntimeError(f"BUILDER_IMAGE_SANITIZATION_FAILED:{stage}") from failure
 
 
 def build(output: Path, *, cache: Path, timeout_seconds: int) -> dict[str, object]:
