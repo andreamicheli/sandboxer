@@ -15,9 +15,9 @@ tcp_http() {
 }
 
 tcp_connect() {
-    # Alpine's BusyBox nc has no -z option.  A zero-byte stdin still performs
-    # the TCP handshake; its own deadline plus timeout's hard kill make every
-    # negative witness finite even when neighbour discovery stalls.
+    # A zero-byte stdin performs only the TCP connect attempt.  Pair its own
+    # deadline with timeout's hard kill so every negative witness remains
+    # finite even when neighbour discovery stalls.
     /bin/busybox timeout -s KILL 1 /bin/busybox nc -w 1 "$1" "$2" </dev/null >/dev/null 2>&1
 }
 
