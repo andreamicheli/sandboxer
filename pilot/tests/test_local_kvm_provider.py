@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import subprocess
 from pathlib import Path
 
 from sandboxer_v0.arena_safety import Phase, TeardownState
-from sandboxer_v0.local_kvm import CommandResult, LocalKvmConfig, LocalKvmRunnerProvider, SubprocessLocalKvmHost
+from sandboxer_v0.local_kvm import (
+    CommandResult,
+    LocalKvmConfig,
+    LocalKvmRunnerProvider,
+    QemuStartupFailure,
+    SubprocessLocalKvmHost,
+)
 from sandboxer_v0.runner_backend import ProductionRunnerBackend, ProvisioningFailed
 
 
@@ -31,6 +38,8 @@ class RecordingKvmHost:
         self.ttl_cancellable = True
         self.ttl_timer_remains = False
         self.tap_cleanup_works = True
+        self.startup_failure: QemuStartupFailure | None = None
+        self.qemu_stderr_paths: list[Path] = []
 
     def run(self, argv: tuple[str, ...], *, input_text: str | None = None, timeout_seconds: float = 10) -> CommandResult:
         del timeout_seconds
@@ -72,8 +81,11 @@ class RecordingKvmHost:
             return CommandResult(0, self.inputs[-1] if self.inputs else "", "")
         return CommandResult(0, "", "")
 
-    def start(self, argv: tuple[str, ...]) -> int:
+    def start(self, argv: tuple[str, ...], *, stderr_path: Path) -> int:
         self.commands.append(argv)
+        self.qemu_stderr_paths.append(stderr_path)
+        if self.startup_failure is not None:
+            raise self.startup_failure
         pid = self.next_pid
         self.alive.add(pid)
         self.next_pid += 1
@@ -201,6 +213,53 @@ def test_local_kvm_rehearsal_uses_distinct_overlays_control_and_a_disposable_net
     assert any("tcp dport 8080" in rule_set for rule_set in host.inputs)
     assert len(host.destroyed_cgroups) == 2
     assert not (tmp_path / "runners" / "kvm-rehearsal-001").exists()
+    assert {path.name for path in host.qemu_stderr_paths} == {"qemu.stderr"}
+
+
+def test_local_kvm_preserves_a_sanitized_qemu_startup_diagnostic_in_typed_failure(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    host.startup_failure = QemuStartupFailure("Could not access /dev/kvm: API_KEY=do-not-disclose")
+
+    try:
+        provider.provision("kvm-startup-diagnostic", ("atlas", "borealis"))
+    except ProvisioningFailed as error:
+        assert error.reason_code == "QEMU_EXITED_DURING_STARTUP"
+        evidence = next(item for item in error.teardown_evidence if item.resource_id == "kvm-startup-diagnostic:atlas")
+    else:  # pragma: no cover - explicit fail-closed contract
+        raise AssertionError("a rejected QEMU must be a typed provisioning failure")
+
+    assert "Could not access <path>" in evidence.evidence
+    assert "do-not-disclose" not in evidence.evidence
+    assert not (tmp_path / "runners" / "kvm-startup-diagnostic").exists()
+
+
+def test_subprocess_host_bounds_and_sanitizes_qemu_stderr_on_immediate_exit(monkeypatch, tmp_path: Path) -> None:
+    class ImmediatelyExitedProcess:
+        pid = 4401
+        stderr = io.BytesIO(b"qemu-system: Could not access /dev/kvm: OPENAI_API_KEY=do-not-disclose\\n")
+
+        def poll(self) -> int:
+            return 1
+
+    def fake_popen(_argv, **kwargs):
+        assert kwargs["stderr"] is subprocess.PIPE
+        return ImmediatelyExitedProcess()
+
+    monkeypatch.setattr("sandboxer_v0.local_kvm.subprocess.Popen", fake_popen)
+    host = SubprocessLocalKvmHost()
+    diagnostic = tmp_path / "runner" / "qemu.stderr"
+    diagnostic.parent.mkdir()
+
+    try:
+        host.start(("qemu-system-x86_64",), stderr_path=diagnostic)
+    except QemuStartupFailure as error:
+        assert error.diagnostic.startswith("QEMU_STDERR:")
+        assert "Could not access <path>" in error.diagnostic
+        assert "do-not-disclose" not in error.diagnostic
+    else:  # pragma: no cover - explicit fail-closed contract
+        raise AssertionError("an immediate QEMU exit must preserve bounded diagnostics")
+
+    assert diagnostic.stat().st_size <= 1024
 
 
 def test_local_kvm_quarantines_a_runner_while_its_ttl_timer_remains_active(tmp_path: Path) -> None:

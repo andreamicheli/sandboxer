@@ -18,6 +18,7 @@ import socket
 import stat
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,11 @@ from .runner_backend import PreflightCheck, ProvisioningFailed, RunnerHandle
 _SAFE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 _MAX_CONTROL_RESPONSE = 4096
 _NETWORK_PROBE_TIMEOUT_SECONDS = 12
+_MAX_QEMU_STDERR_BYTES = 1024
+_SENSITIVE_DIAGNOSTIC_ASSIGNMENT = re.compile(
+    r"(?i)\b[\w.-]*(?:key|token|secret|password|credential)[\w.-]*\s*=\s*\S+"
+)
+_ABSOLUTE_PATH = re.compile(r"(?<!\w)/(?:[^\s:]+)")
 
 
 @dataclass(frozen=True)
@@ -40,6 +46,22 @@ class CommandResult:
     stderr: str
 
 
+def _sanitize_qemu_stderr(raw: bytes | str) -> str:
+    text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
+    text = _SENSITIVE_DIAGNOSTIC_ASSIGNMENT.sub("<redacted-assignment>", text)
+    text = _ABSOLUTE_PATH.sub("<path>", text)
+    text = " ".join(text.split())
+    return text[:_MAX_QEMU_STDERR_BYTES] or "no diagnostic output"
+
+
+class QemuStartupFailure(RuntimeError):
+    """Immediate QEMU rejection with an intentionally non-sensitive witness."""
+
+    def __init__(self, stderr: bytes | str) -> None:
+        super().__init__("QEMU_EXITED_DURING_STARTUP")
+        self.diagnostic = f"QEMU_STDERR:{_sanitize_qemu_stderr(stderr)}"
+
+
 class LocalKvmHost(Protocol):
     """Small host-privileged port; every command is argv-only, never a shell."""
 
@@ -47,7 +69,7 @@ class LocalKvmHost(Protocol):
         self, argv: tuple[str, ...], *, input_text: str | None = None, timeout_seconds: float = 10
     ) -> CommandResult: ...
 
-    def start(self, argv: tuple[str, ...]) -> int: ...
+    def start(self, argv: tuple[str, ...], *, stderr_path: Path) -> int: ...
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str: ...
 
@@ -79,6 +101,7 @@ class SubprocessLocalKvmHost:
 
     def __init__(self, *, cgroup_root: Path = Path("/sys/fs/cgroup/sandboxer")) -> None:
         self._cgroup_root = cgroup_root
+        self._diagnostic_threads: dict[int, threading.Thread] = {}
 
     def run(
         self, argv: tuple[str, ...], *, input_text: str | None = None, timeout_seconds: float = 10
@@ -88,16 +111,38 @@ class SubprocessLocalKvmHost:
         )
         return CommandResult(completed.returncode, completed.stdout, completed.stderr)
 
-    def start(self, argv: tuple[str, ...]) -> int:
-        process = subprocess.Popen(
-            argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+    def start(self, argv: tuple[str, ...], *, stderr_path: Path) -> int:
+        stderr_path.parent.mkdir(parents=True, exist_ok=True)
+        stderr_path.touch(mode=0o600, exist_ok=False)
+        os.chmod(stderr_path, 0o600)
+        try:
+            process = subprocess.Popen(
+                argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+        except OSError as error:
+            stderr_path.write_text(_sanitize_qemu_stderr(str(error)), encoding="utf-8")
+            raise QemuStartupFailure(str(error)) from error
+        assert process.stderr is not None
+
+        def capture() -> None:
+            captured = bytearray()
+            while chunk := process.stderr.read(256):
+                if len(captured) < _MAX_QEMU_STDERR_BYTES:
+                    captured.extend(chunk[:_MAX_QEMU_STDERR_BYTES - len(captured)])
+            stderr_path.write_text(_sanitize_qemu_stderr(bytes(captured)), encoding="utf-8")
+
+        collector = threading.Thread(target=capture, name=f"sandboxer-qemu-stderr-{process.pid}", daemon=True)
+        collector.start()
+        self._diagnostic_threads[process.pid] = collector
         # Do not mistake an immediately rejected QEMU configuration for a live
         # Runner.  Longer guest boot readiness is checked via virtio control.
         time.sleep(0.1)
         if process.poll() is not None:
-            raise RuntimeError("QEMU_EXITED_DURING_STARTUP")
+            collector.join(timeout=1)
+            diagnostic = stderr_path.read_text(encoding="utf-8", errors="replace")
+            self._diagnostic_threads.pop(process.pid, None)
+            raise QemuStartupFailure(diagnostic)
         return process.pid
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
@@ -467,7 +512,10 @@ class LocalKvmRunnerProvider:
             os.chown(seed, self.config.qemu_uid, -1)
             self._run(("ip", "netns", "exec", blue_namespace, "ip", "tuntap", "add", "dev", tap, "mode", "tap", "user", str(self.config.qemu_uid)), "TAP_CREATE_FAILED")
             self._run(("ip", "-n", blue_namespace, "link", "set", tap, "up"), "TAP_ENABLE_FAILED")
-            pid = self._host.start(self._qemu_command(blue_namespace, tap, workspace, seed, control_socket, root / "serial.log"))
+            pid = self._host.start(
+                self._qemu_command(blue_namespace, tap, workspace, seed, control_socket, root / "serial.log"),
+                stderr_path=root / "qemu.stderr",
+            )
             process_identity = self._host.process_identity(pid)
             if process_identity is None:
                 raise RuntimeError("QEMU_PID_UNVERIFIED")
@@ -515,11 +563,12 @@ class LocalKvmRunnerProvider:
                     root, (blue_namespace, red_namespace), tap, control_socket, pid,
                     process_identity, cgroup, ttl_token,
                 )
+            diagnostic = f";{error.diagnostic}" if isinstance(error, QemuStartupFailure) else ""
             raise ProvisioningFailed(
                 str(error),
                 (TeardownEvidence(
                     runner_id, state,
-                    "partial Runner provisioning rollback verified" if not failures else ";".join(failures),
+                    ("partial Runner provisioning rollback verified" if not failures else ";".join(failures)) + diagnostic,
                     str(error) if not failures else failures[0],
                 ),),
             ) from error
