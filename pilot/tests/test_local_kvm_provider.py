@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 from pathlib import Path
 
 from sandboxer_v0.arena_safety import Phase, TeardownState
-from sandboxer_v0.local_kvm import CommandResult, LocalKvmConfig, LocalKvmRunnerProvider
+from sandboxer_v0.local_kvm import CommandResult, LocalKvmConfig, LocalKvmRunnerProvider, SubprocessLocalKvmHost
 from sandboxer_v0.runner_backend import ProductionRunnerBackend, ProvisioningFailed
 
 
@@ -26,6 +27,7 @@ class RecordingKvmHost:
         self.namespace_delete_returns_nonzero = False
         self.cgroup_destroyable = True
         self.ttl_cancellable = True
+        self.ttl_timer_remains = False
         self.tap_cleanup_works = True
 
     def run(self, argv: tuple[str, ...], *, input_text: str | None = None, timeout_seconds: float = 10) -> CommandResult:
@@ -109,9 +111,10 @@ class RecordingKvmHost:
         return token
 
     def cancel_ttl(self, token: object) -> bool:
-        if not self.ttl_cancellable:
+        if not self.ttl_cancellable or self.ttl_timer_remains:
             return False
-        self.ttl_tokens.remove(token)
+        if token in self.ttl_tokens:
+            self.ttl_tokens.remove(token)
         return True
 
     def terminate(self, pid: int) -> None:
@@ -188,6 +191,54 @@ def test_local_kvm_rehearsal_uses_distinct_overlays_control_and_a_disposable_net
     assert any("tcp dport 8080" in rule_set for rule_set in host.inputs)
     assert len(host.destroyed_cgroups) == 2
     assert not (tmp_path / "runners" / "kvm-rehearsal-001").exists()
+
+
+def test_local_kvm_quarantines_a_runner_while_its_ttl_timer_remains_active(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    runners = provider.provision("kvm-rehearsal-ttl-timer", ("atlas", "borealis"))
+    host.ttl_timer_remains = True
+
+    quarantined = provider.destroy(runners[0])
+
+    assert quarantined.state is TeardownState.QUARANTINED
+    assert quarantined.reason_code == "TTL_WATCHDOG_REMAINS"
+    assert host.ttl_tokens
+
+    host.ttl_timer_remains = False
+    assert provider.reconcile(runners[0].runner_id).state is TeardownState.DESTROYED
+    assert provider.destroy(runners[1]).state is TeardownState.DESTROYED
+
+
+def test_local_kvm_accepts_an_already_absent_ttl_watchdog_as_cancelled(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    runners = provider.provision("kvm-rehearsal-ttl-absent", ("atlas", "borealis"))
+    host.ttl_tokens.clear()
+
+    assert provider.destroy(runners[0]).state is TeardownState.DESTROYED
+    assert provider.destroy(runners[1]).state is TeardownState.DESTROYED
+
+
+def test_systemd_watchdog_cancellation_requires_both_timer_and_service_to_be_inactive(monkeypatch) -> None:
+    host = SubprocessLocalKvmHost()
+    token = "sandboxer-ttl-fixture"
+    calls: list[tuple[str, ...]] = []
+    states = {f"{token}.timer": 3, f"{token}.service": 3}
+
+    def fake_run(argv: tuple[str, ...], **_kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, states.get(argv[-1], 1), "", "")
+
+    monkeypatch.setattr("sandboxer_v0.local_kvm.subprocess.run", fake_run)
+
+    assert host.cancel_ttl(token) is True
+    assert calls == [
+        ("systemctl", "stop", f"{token}.timer", f"{token}.service"),
+        ("systemctl", "is-active", "--quiet", f"{token}.timer"),
+        ("systemctl", "is-active", "--quiet", f"{token}.service"),
+    ]
+
+    states[f"{token}.timer"] = 0
+    assert host.cancel_ttl(token) is False
 
 
 def test_local_kvm_rejects_a_mutated_base_before_creating_runner_artifacts(tmp_path: Path) -> None:
