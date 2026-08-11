@@ -48,6 +48,19 @@ def test_ready_without_probe_is_a_distinct_typed_evidence_shape() -> None:
     assert not isinstance(ready, ControlProbe)
 
 
+def test_control_accepts_unknown_route_marker_but_rejects_invalid_value() -> None:
+    unknown = parse_control(
+        f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials=1 private_mounts=1 route_after_setup=absent route_at_control=unknown\n",
+        NONCE, require_probe=False,
+    )
+    assert unknown.route_at_control == "unknown"
+    with pytest.raises(RuntimeError, match="CONTROL_PROBE_INVALID"):
+        parse_control(
+            f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials=1 private_mounts=1 route_after_setup=absent route_at_control=maybe\n",
+            NONCE, require_probe=False,
+        )
+
+
 def test_network_proof_requires_all_active_denial_checks() -> None:
     proof = parse_network_proof(
         f"NETWORK_PROBE nonce={NONCE} phase=red peer_denied=0 toy_http=1 alternate_denied=1 icmp_denied=1 egress_denied=1 egress_reason=blocked orchestrator_denied=1\n",
