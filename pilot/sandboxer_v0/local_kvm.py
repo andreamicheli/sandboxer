@@ -527,6 +527,9 @@ class LocalKvmRunnerProvider:
             raise PreflightWitnessFailed("LOCAL_KVM_BLUE_ROUTE_AFTER_SETUP_WITNESS_FAILED")
         if any(item.route_at_control != "absent" for item in responses):
             self._capture_serial_stages(records)
+            origins = {item.route_origin for item in responses if item.route_at_control != "absent"}
+            if len(origins) == 1 and next(iter(origins)) in {"dhcp", "ra", "static", "other"}:
+                raise PreflightWitnessFailed(f"LOCAL_KVM_BLUE_ROUTE_AT_CONTROL_{next(iter(origins)).upper()}_WITNESS_FAILED")
             raise PreflightWitnessFailed("LOCAL_KVM_BLUE_ROUTE_AT_CONTROL_WITNESS_FAILED")
         try:
             network = self._measure_network(records, Phase.BLUE)
@@ -928,6 +931,9 @@ class LocalKvmRunnerProvider:
             "SANDBOXER_ROUTE_ABSENT_AFTER_TOY", "SANDBOXER_ROUTE_PRESENT_AFTER_TOY",
             "SANDBOXER_ROUTE_ABSENT_BEFORE_CONTROL", "SANDBOXER_ROUTE_PRESENT_BEFORE_CONTROL",
             "SANDBOXER_ROUTE_MARKER_UNAVAILABLE",
+            "SANDBOXER_ROUTE_ORIGIN_ABSENT", "SANDBOXER_ROUTE_ORIGIN_DHCP", "SANDBOXER_ROUTE_ORIGIN_RA",
+            "SANDBOXER_ROUTE_ORIGIN_STATIC", "SANDBOXER_ROUTE_ORIGIN_OTHER", "SANDBOXER_ROUTE_ORIGIN_UNKNOWN",
+            "SANDBOXER_DHCP_CLIENT_0", "SANDBOXER_DHCP_CLIENT_1", "SANDBOXER_DHCP_CLIENT_UNKNOWN",
         }
         evidence_root = self.config.runner_root.parent / "evidence"
         for record in records:

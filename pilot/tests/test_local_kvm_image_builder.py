@@ -179,6 +179,8 @@ def test_rendered_guest_control_bounds_hanging_netprobe_subcommands_and_keeps_th
 sandboxer_no_credentials() { return 0; }
 sandboxer_private_mounts() { return 0; }
 sandboxer_route_state() { printf '%s\\n' absent; }
+sandboxer_route_origin() { printf '%s\\n' absent; }
+sandboxer_dhcp_client_present() { printf '%s\\n' 0; }
 ip() { return 0; }
 ping() { return 1; }
 id() { printf '%s\\n' 1001; }
@@ -228,6 +230,8 @@ date() { printf '%s\\n' 1720000000; }
         # immediately accepts the next command.
         assert proof.orchestrator_denied and not proof.toy_http
         assert stage_log.read_text(encoding="ascii").splitlines() == [
+            "SANDBOXER_ROUTE_ORIGIN_ABSENT",
+            "SANDBOXER_DHCP_CLIENT_0",
             "SANDBOXER_NETPROBE_STAGE=start",
             "SANDBOXER_NETPROBE_STAGE=peer",
             "SANDBOXER_NETPROBE_STAGE=alternate",

@@ -74,15 +74,23 @@ while :; do
     # Compute the temporal control-start witness before accepting requests.
     # The first PROBE must only read fixed local markers, never invoke ip.
     sandboxer_route_state > /run/sandboxer-route-at-control || printf 'SANDBOXER_ROUTE_MARKER_UNAVAILABLE\n' >> /dev/ttyS0 2>/dev/null || true
+    route_origin="$(sandboxer_route_origin)" || route_origin=unknown
+    dhcp_client="$(sandboxer_dhcp_client_present)" || dhcp_client=unknown
+    case "$route_origin" in
+        absent|dhcp|ra|static|other) printf 'SANDBOXER_ROUTE_ORIGIN_%s\n' "$(printf '%s' "$route_origin" | tr a-z A-Z)" >> /dev/ttyS0 2>/dev/null || true ;;
+        *) printf 'SANDBOXER_ROUTE_ORIGIN_UNKNOWN\n' >> /dev/ttyS0 2>/dev/null || true ;;
+    esac
+    case "$dhcp_client" in 0|1) printf 'SANDBOXER_DHCP_CLIENT_%s\n' "$dhcp_client" >> /dev/ttyS0 2>/dev/null || true;; *) printf 'SANDBOXER_DHCP_CLIENT_UNKNOWN\n' >> /dev/ttyS0 2>/dev/null || true;; esac
     exec 3<> "$PORT"
     if IFS= read -r command <&3; then
         set -- $command
         if test "$1" = PROBE && test "${2:-}" = "$SANDBOXER_NONCE" && test "$#" -eq 2; then
-            printf 'READY nonce=%s uid=%s boot_id=%s no_credentials=%s private_mounts=%s route_after_setup=%s route_at_control=%s\n' \
+            printf 'READY nonce=%s uid=%s boot_id=%s no_credentials=%s private_mounts=%s route_after_setup=%s route_at_control=%s route_origin=%s dhcp_client=%s\n' \
                 "$SANDBOXER_NONCE" "$(id -u competitor)" "$(cat /proc/sys/kernel/random/boot_id)" \
                 "$(probe_bool sandboxer_no_credentials)" "$(probe_bool sandboxer_private_mounts)" \
                 "$(cat /run/sandboxer-route-after-setup 2>/dev/null || printf unknown)" \
-                "$(cat /run/sandboxer-route-at-control 2>/dev/null || { printf 'SANDBOXER_ROUTE_MARKER_UNAVAILABLE\n' >> /dev/ttyS0 2>/dev/null || true; printf unknown; })" >&3
+                "$(cat /run/sandboxer-route-at-control 2>/dev/null || { printf 'SANDBOXER_ROUTE_MARKER_UNAVAILABLE\n' >> /dev/ttyS0 2>/dev/null || true; printf unknown; })" \
+                "$route_origin" "$dhcp_client" >&3
             printf 'PROBE_OK nonce=%s uid=%s clock_epoch=%s\n' "$SANDBOXER_NONCE" "$(id -u competitor)" "$(date +%s)" >&3
         elif test "$1" = NETPROBE && test "${2:-}" = "$SANDBOXER_NONCE" && { test "${3:-}" = blue || test "${3:-}" = red; } && test "$#" -eq 3; then
             network_proof "$3" >&3

@@ -61,6 +61,19 @@ def test_control_accepts_unknown_route_marker_but_rejects_invalid_value() -> Non
         )
 
 
+def test_control_route_origin_diagnostics_are_categorical_and_strict() -> None:
+    ready = parse_control(
+        f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials=1 private_mounts=1 route_after_setup=absent route_at_control=present route_origin=dhcp dhcp_client=1\n",
+        NONCE, require_probe=False,
+    )
+    assert ready.route_origin == "dhcp" and ready.dhcp_client == "1"
+    with pytest.raises(RuntimeError, match="CONTROL_PROBE_INVALID"):
+        parse_control(
+            f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials=1 private_mounts=1 route_after_setup=absent route_at_control=present route_origin=10.77.0.1 dhcp_client=maybe\n",
+            NONCE, require_probe=False,
+        )
+
+
 def test_network_proof_requires_all_active_denial_checks() -> None:
     proof = parse_network_proof(
         f"NETWORK_PROBE nonce={NONCE} phase=red peer_denied=0 toy_http=1 alternate_denied=1 icmp_denied=1 egress_denied=1 egress_reason=blocked orchestrator_denied=1\n",
