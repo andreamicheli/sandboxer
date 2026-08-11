@@ -160,10 +160,17 @@ class SubprocessLocalKvmHost:
     def cancel_ttl(self, token: object) -> bool:
         if not isinstance(token, str):
             return False
-        # A successful synchronous stop is the authoritative acknowledgement
-        # that the independently-owned watchdog can no longer fire.
-        completed = subprocess.run(("systemctl", "stop", token), text=True, capture_output=True, check=False)
-        return completed.returncode == 0
+        timer, service = f"{token}.timer", f"{token}.service"
+        # State checks distinguish an idempotently absent unit from an active
+        # watchdog. A failed stop is harmless only if both checks prove this.
+        subprocess.run(("systemctl", "stop", timer, service), text=True, capture_output=True, check=False)
+        states = [
+            subprocess.run(("systemctl", "is-active", "--quiet", unit), text=True, capture_output=True, check=False)
+            for unit in (timer, service)
+        ]
+        # systemctl uses 3 for inactive and 4 for an absent unit. Other
+        # failures (including manager unavailability) are not proof.
+        return all(result.returncode in (3, 4) for result in states)
 
     def terminate(self, pid: int) -> None:
         try:
@@ -245,7 +252,7 @@ class _RunnerRecord:
     pid: int
     process_identity: str
     cgroup: str
-    ttl_token: object
+    ttl_token: object | None
     nonce: str
     deadline: float
     phase: Phase = Phase.BLUE
@@ -386,8 +393,11 @@ class LocalKvmRunnerProvider:
         partial = self._partials.get(runner_id)
         if partial is not None:
             failures: list[str] = []
-            if partial.ttl_token is not None and not self._cancel_ttl(partial.ttl_token):
-                failures.append("TTL_WATCHDOG_REMAINS")
+            if partial.ttl_token is not None:
+                if not self._cancel_ttl(partial.ttl_token):
+                    failures.append("TTL_WATCHDOG_REMAINS")
+                else:
+                    partial.ttl_token = None
             if partial.pid is not None and partial.process_identity is not None:
                 self._stop_pid(partial.pid)
                 if self._host.process_identity(partial.pid) == partial.process_identity:
@@ -635,8 +645,11 @@ class LocalKvmRunnerProvider:
 
     def _destroy_record(self, record: _RunnerRecord, reason_code: str | None) -> TeardownEvidence:
         failures: list[str] = []
-        if not self._cancel_ttl(record.ttl_token):
-            failures.append("TTL_WATCHDOG_REMAINS")
+        if record.ttl_token is not None:
+            if not self._cancel_ttl(record.ttl_token):
+                failures.append("TTL_WATCHDOG_REMAINS")
+            else:
+                record.ttl_token = None
         self._stop_pid(record.pid)
         if self._host.process_identity(record.pid) == record.process_identity:
             failures.append("QEMU_PROCESS_SURVIVED")
