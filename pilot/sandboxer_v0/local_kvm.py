@@ -7,9 +7,11 @@ the configured containment checks, not resistance to a hostile workload.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
+import pwd
 import re
 import secrets
 import shutil
@@ -34,6 +36,8 @@ _SAFE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 _MAX_CONTROL_RESPONSE = 4096
 _NETWORK_PROBE_TIMEOUT_SECONDS = 12
 _MAX_QEMU_STDERR_BYTES = 1024
+_SOCKET_WITNESS_TIMEOUT_SECONDS = 1.0
+_SOCKET_WITNESS_MESSAGE_BYTES = 64
 _SENSITIVE_DIAGNOSTIC_ASSIGNMENT = re.compile(
     r"(?i)\b[\w.-]*(?:key|token|secret|password|credential)[\w.-]*\s*=\s*\S+"
 )
@@ -73,11 +77,39 @@ class SocketWitnessStage(str, Enum):
 @dataclass(frozen=True)
 class SocketWitnessResult:
     stage: SocketWitnessStage
-    exit_status: int | None = None
+    errno: int | None = None
 
     @classmethod
     def success(cls) -> "SocketWitnessResult":
         return cls(SocketWitnessStage.SUCCESS)
+
+
+def _drop_socket_witness_identity(qemu_user: str) -> None:
+    identity = pwd.getpwnam(qemu_user)
+    os.initgroups(identity.pw_name, identity.pw_gid)
+    os.setgid(identity.pw_gid)
+    os.setuid(identity.pw_uid)
+
+
+def _socket_witness_child(directory: Path, qemu_user: str) -> SocketWitnessResult:
+    probe = directory / f".sandboxer-control-witness-{secrets.token_hex(8)}"
+    try:
+        _drop_socket_witness_identity(qemu_user)
+        descriptor = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        os.close(descriptor)
+    except OSError as error:
+        return SocketWitnessResult(SocketWitnessStage.CREATE_FAILED, error.errno or errno.EIO)
+    try:
+        os.unlink(probe)
+    except OSError as error:
+        return SocketWitnessResult(SocketWitnessStage.UNLINK_FAILED, error.errno or errno.EIO)
+    try:
+        os.lstat(probe)
+    except FileNotFoundError:
+        return SocketWitnessResult.success()
+    except OSError as error:
+        return SocketWitnessResult(SocketWitnessStage.ARTIFACT_REMAINS, error.errno or errno.EIO)
+    return SocketWitnessResult(SocketWitnessStage.ARTIFACT_REMAINS, errno.EEXIST)
 
 
 class LocalKvmHost(Protocol):
@@ -170,27 +202,47 @@ class SubprocessLocalKvmHost:
     def verify_socket_access(
         self, directory: Path, control_socket: Path, *, qemu_user: str
     ) -> SocketWitnessResult:
-        # Run as the exact setpriv identity used for QEMU. Fixed binaries and
-        # argv-only calls avoid a shell or a repository-path dependency while
-        # proving both directory create and unlink permissions.
-        probe = directory / f".sandboxer-control-witness-{secrets.token_hex(8)}"
-        create = self.run((
-            "setpriv", f"--reuid={qemu_user}", f"--regid={qemu_user}", "--init-groups",
-            "/usr/bin/touch", "--", os.fspath(probe),
-        ))
-        if create.returncode != 0:
-            return SocketWitnessResult(SocketWitnessStage.CREATE_FAILED, create.returncode)
-        remove = self.run((
-            "setpriv", f"--reuid={qemu_user}", f"--regid={qemu_user}", "--init-groups",
-            "/usr/bin/rm", "--", os.fspath(probe),
-        ))
-        if remove.returncode != 0:
-            return SocketWitnessResult(SocketWitnessStage.UNLINK_FAILED, remove.returncode)
+        del control_socket  # Its absence is checked by the Provider before this fork.
+        read_fd, write_fd = os.pipe()
         try:
-            os.lstat(probe)
-        except FileNotFoundError:
-            return SocketWitnessResult.success()
-        return SocketWitnessResult(SocketWitnessStage.ARTIFACT_REMAINS)
+            child = os.fork()
+        except OSError as error:
+            os.close(read_fd)
+            os.close(write_fd)
+            return SocketWitnessResult(SocketWitnessStage.CREATE_FAILED, error.errno or errno.EIO)
+        if child == 0:  # pragma: no cover - exercised through the parent seam
+            try:
+                os.close(read_fd)
+                result = _socket_witness_child(directory, qemu_user)
+                payload = f"{result.stage.value}:{result.errno if result.errno is not None else 0}".encode("ascii")
+                os.write(write_fd, payload[:_SOCKET_WITNESS_MESSAGE_BYTES])
+            finally:
+                os.close(write_fd)
+                os._exit(0)
+        os.close(write_fd)
+        deadline = time.monotonic() + _SOCKET_WITNESS_TIMEOUT_SECONDS
+        try:
+            while True:
+                completed, _status = os.waitpid(child, os.WNOHANG)
+                if completed == child:
+                    break
+                if time.monotonic() >= deadline:
+                    os.kill(child, signal.SIGKILL)
+                    os.waitpid(child, 0)
+                    return SocketWitnessResult(SocketWitnessStage.CREATE_FAILED, errno.ETIMEDOUT)
+                time.sleep(0.01)
+            payload = os.read(read_fd, _SOCKET_WITNESS_MESSAGE_BYTES).decode("ascii", errors="ignore")
+        finally:
+            os.close(read_fd)
+        stage_text, separator, errno_text = payload.partition(":")
+        if not separator:
+            return SocketWitnessResult(SocketWitnessStage.CREATE_FAILED, errno.EIO)
+        try:
+            stage = SocketWitnessStage(stage_text)
+            numeric_errno = int(errno_text)
+        except (ValueError, TypeError):
+            return SocketWitnessResult(SocketWitnessStage.CREATE_FAILED, errno.EIO)
+        return SocketWitnessResult(stage, None if stage is SocketWitnessStage.SUCCESS and numeric_errno == 0 else numeric_errno)
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -312,6 +364,7 @@ class LocalKvmConfig:
     qemu_user: str
     qemu_uid: int
     toy_service_port: int
+    qemu_gid: int | None = None
     memory_mib: int = 512
     vcpus: int = 1
     pids_max: int = 128
@@ -529,7 +582,7 @@ class LocalKvmRunnerProvider:
         runner_id = f"{match_id}:{name}"
         root = match_root / name
         root.mkdir(mode=0o700)
-        os.chown(root, self.config.qemu_uid, -1)
+        os.chown(root, self.config.qemu_uid, self.config.qemu_gid if self.config.qemu_gid is not None else -1)
         os.chmod(root, 0o700)
         workspace = root / "workspace.qcow2"
         seed = root / "seed.iso"
@@ -623,8 +676,13 @@ class LocalKvmRunnerProvider:
             ) from error
 
     def _verify_control_socket_prelaunch(self, root: Path, control_socket: Path) -> None:
-        mode = stat.S_IMODE(root.stat().st_mode)
-        if root.stat().st_uid != self.config.qemu_uid or mode != 0o700:
+        root_state = root.stat()
+        mode = stat.S_IMODE(root_state.st_mode)
+        if (
+            root_state.st_uid != self.config.qemu_uid
+            or (self.config.qemu_gid is not None and root_state.st_gid != self.config.qemu_gid)
+            or mode != 0o700
+        ):
             raise RuntimeError("QEMU_RUNTIME_DIRECTORY_UNSAFE")
         try:
             os.lstat(control_socket)
@@ -636,7 +694,7 @@ class LocalKvmRunnerProvider:
             raise RuntimeError("CONTROL_SOCKET_PREEXISTS")
         witness = self._host.verify_socket_access(root, control_socket, qemu_user=self.config.qemu_user)
         if witness.stage is not SocketWitnessStage.SUCCESS:
-            suffix = f"_EXIT_{witness.exit_status}" if witness.exit_status is not None else ""
+            suffix = f"_ERRNO_{witness.errno}" if witness.errno is not None else ""
             raise RuntimeError(f"QEMU_SOCKET_WITNESS_{witness.stage.name}{suffix}")
 
     def _qemu_command(

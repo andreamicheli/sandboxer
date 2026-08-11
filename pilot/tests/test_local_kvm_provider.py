@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import io
 import json
@@ -43,6 +44,7 @@ class RecordingKvmHost:
         self.startup_failure: QemuStartupFailure | None = None
         self.qemu_stderr_paths: list[Path] = []
         self.socket_witnesses: list[tuple[Path, Path, str]] = []
+        self.socket_witness_directory_metadata: list[tuple[int, int, int]] = []
         self.socket_witness_result = SocketWitnessResult.success()
         self.create_stale_control_socket = False
 
@@ -100,6 +102,8 @@ class RecordingKvmHost:
 
     def verify_socket_access(self, directory: Path, control_socket: Path, *, qemu_user: str) -> SocketWitnessResult:
         self.socket_witnesses.append((directory, control_socket, qemu_user))
+        state = directory.stat()
+        self.socket_witness_directory_metadata.append((state.st_uid, state.st_gid, state.st_mode & 0o777))
         return self.socket_witness_result
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
@@ -179,6 +183,7 @@ def configured_provider(tmp_path: Path) -> tuple[LocalKvmRunnerProvider, Recordi
         base_profile=profile,
         qemu_user="sandboxer-runner",
         qemu_uid=os.getuid(),
+        qemu_gid=os.getgid(),
         toy_service_port=8080,
     )
     host = RecordingKvmHost()
@@ -227,6 +232,10 @@ def test_local_kvm_rehearsal_uses_distinct_overlays_control_and_a_disposable_net
     assert {path.name for path in host.qemu_stderr_paths} == {"qemu.stderr"}
     assert len(host.socket_witnesses) == 2
     assert all(item[2] == "sandboxer-runner" for item in host.socket_witnesses)
+    assert all(
+        metadata == (provider.config.qemu_uid, provider.config.qemu_gid, 0o700)
+        for metadata in host.socket_witness_directory_metadata
+    )
 
 
 def test_local_kvm_refuses_a_preexisting_control_socket_without_unlinking_it(tmp_path: Path) -> None:
@@ -246,12 +255,12 @@ def test_local_kvm_refuses_a_preexisting_control_socket_without_unlinking_it(tmp
 
 def test_local_kvm_requires_non_root_socket_create_unlink_witness_before_qemu(tmp_path: Path) -> None:
     provider, host = configured_provider(tmp_path)
-    host.socket_witness_result = SocketWitnessResult(SocketWitnessStage.UNLINK_FAILED, 17)
+    host.socket_witness_result = SocketWitnessResult(SocketWitnessStage.UNLINK_FAILED, errno.EACCES)
 
     try:
         provider.provision("kvm-socket-witness", ("atlas", "borealis"))
     except ProvisioningFailed as error:
-        assert error.reason_code == "QEMU_SOCKET_WITNESS_UNLINK_FAILED_EXIT_17"
+        assert error.reason_code == "QEMU_SOCKET_WITNESS_UNLINK_FAILED_ERRNO_13"
     else:  # pragma: no cover - explicit fail-closed contract
         raise AssertionError("an unproven QEMU socket directory must block the Runner")
 
@@ -305,46 +314,30 @@ def test_subprocess_host_bounds_and_sanitizes_qemu_stderr_on_immediate_exit(monk
     assert diagnostic.stat().st_size <= 1024
 
 
-def test_subprocess_host_socket_witness_uses_the_qemu_identity_without_a_shell(monkeypatch, tmp_path: Path) -> None:
+def test_subprocess_host_socket_witness_forks_and_removes_its_private_probe(monkeypatch, tmp_path: Path) -> None:
     host = SubprocessLocalKvmHost()
-    commands: list[tuple[str, ...]] = []
-
-    def fake_run(argv: tuple[str, ...], **_kwargs) -> CommandResult:
-        commands.append(argv)
-        probe = Path(argv[-1])
-        if argv[-3:] == ("/usr/bin/touch", "--", str(probe)):
-            probe.touch()
-        elif argv[-3:] == ("/usr/bin/rm", "--", str(probe)):
-            probe.unlink()
-        return CommandResult(0, "", "")
-
-    monkeypatch.setattr(host, "run", fake_run)
+    monkeypatch.setattr("sandboxer_v0.local_kvm._drop_socket_witness_identity", lambda _user: None)
     directory = tmp_path / "runner"
     directory.mkdir()
 
     witness = host.verify_socket_access(directory, directory / "control.sock", qemu_user="sandboxer-runner")
     assert witness.stage is SocketWitnessStage.SUCCESS
-    assert witness.exit_status is None
-    assert len(commands) == 2
-    assert all(command[:4] == ("setpriv", "--reuid=sandboxer-runner", "--regid=sandboxer-runner", "--init-groups") for command in commands)
-    assert {command[4] for command in commands} == {"/usr/bin/touch", "/usr/bin/rm"}
-    assert all("sh" not in command for command in commands)
+    assert witness.errno is None
     assert list(directory.iterdir()) == []
 
 
 def test_subprocess_host_socket_witness_reports_a_create_failure_by_category(monkeypatch, tmp_path: Path) -> None:
     host = SubprocessLocalKvmHost()
-
-    def fake_run(_argv: tuple[str, ...], **_kwargs) -> CommandResult:
-        return CommandResult(1, "sensitive host detail", "sensitive host detail")
-
-    monkeypatch.setattr(host, "run", fake_run)
+    monkeypatch.setattr("sandboxer_v0.local_kvm._drop_socket_witness_identity", lambda _user: None)
+    def denied(*_args, **_kwargs):
+        raise OSError(errno.EACCES, "sensitive host detail")
+    monkeypatch.setattr("sandboxer_v0.local_kvm.os.open", denied)
     directory = tmp_path / "runner"
     directory.mkdir()
 
     witness = host.verify_socket_access(directory, directory / "control.sock", qemu_user="sandboxer-runner")
     assert witness.stage is SocketWitnessStage.CREATE_FAILED
-    assert witness.exit_status == 1
+    assert witness.errno == errno.EACCES
 
 
 def test_local_kvm_quarantines_a_runner_while_its_ttl_timer_remains_active(tmp_path: Path) -> None:

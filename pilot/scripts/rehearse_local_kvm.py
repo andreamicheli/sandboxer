@@ -46,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
         base_profile=arguments.profile.resolve(),
         qemu_user="sandboxer-runner",
         qemu_uid=account.pw_uid,
+        qemu_gid=account.pw_gid,
         toy_service_port=8080,
         ttl_seconds=arguments.ttl_seconds,
     )
