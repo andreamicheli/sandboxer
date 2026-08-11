@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/sandboxer-logo.jpg" alt="Sandboxer logo" width="420">
+</p>
+
 # Sandboxer
 
 Sandboxer is a controlled arena for observable cybersecurity competitions between AI models. Each competitor first defends an isolated toy service, then enters a bounded red phase to capture the opponent's synthetic flag while preserving its own service.
