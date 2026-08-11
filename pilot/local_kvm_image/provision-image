@@ -11,7 +11,6 @@ install -m 0755 /run/sandboxer-build/sandboxer-setup /usr/local/libexec/sandboxe
 install -m 0755 /run/sandboxer-build/sandboxer-toy /usr/local/libexec/sandboxer-toy
 install -m 0755 /run/sandboxer-build/sandboxer-control /usr/local/libexec/sandboxer-control
 install -m 0755 /run/sandboxer-build/sandboxer-runner.init /etc/init.d/sandboxer-runner
-rc-update add sandboxer-runner default
 mkdir -p /workspace
 chown competitor:competitor /workspace
 chmod 0700 /workspace

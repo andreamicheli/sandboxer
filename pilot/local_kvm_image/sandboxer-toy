@@ -3,4 +3,5 @@ set -eu
 
 . /usr/local/libexec/sandboxer-common
 sandboxer_load_metadata
-exec su -s /bin/ash -c "exec /bin/busybox httpd -f -p ${SANDBOXER_IP}:8080 -h /workspace/notes" competitor
+export SANDBOXER_IP
+exec su -s /bin/ash -c 'exec /bin/busybox httpd -f -p "$SANDBOXER_IP:8080" -h /workspace/notes' competitor

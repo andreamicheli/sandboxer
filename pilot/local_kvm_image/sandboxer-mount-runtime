@@ -6,7 +6,16 @@ printf 'SANDBOXER_RUNTIME_BOOTSTRAP\n' > /dev/ttyS0
 mountpoint -q /run || mount -t tmpfs -o rw,nosuid,nodev,mode=0755 tmpfs /run
 mountpoint -q /tmp || mount -t tmpfs -o rw,nosuid,nodev,noexec,mode=1777 tmpfs /tmp
 printf 'SANDBOXER_RUNTIME_MOUNTS_READY\n' > /dev/ttyS0
-# Alpine's default runlevel is intentionally best-effort on a read-only cloud
-# root. Start the preinstalled OpenRC handler explicitly after its mutable
-# runtime state exists; the later runlevel transition is then idempotent.
-/etc/init.d/sandboxer-runner start > /dev/ttyS0 2>&1 || printf 'SANDBOXER_RUNNER_START_FAILED\n' > /dev/ttyS0
+printf 'SANDBOXER_STAGE_SETUP\n' > /dev/ttyS0
+/usr/local/libexec/sandboxer-setup > /dev/ttyS0 2>&1 || { printf 'SANDBOXER_SETUP_FAILED\n' > /dev/ttyS0; exit 1; }
+printf 'SANDBOXER_STAGE_TOY\n' > /dev/ttyS0
+start-stop-daemon --start --background --make-pidfile --pidfile /run/sandboxer-toy.pid --exec /usr/local/libexec/sandboxer-toy || {
+    printf 'SANDBOXER_TOY_FAILED\n' > /dev/ttyS0
+    exit 1
+}
+printf 'SANDBOXER_STAGE_CONTROL\n' > /dev/ttyS0
+start-stop-daemon --start --background --make-pidfile --pidfile /run/sandboxer-control.pid --exec /usr/local/libexec/sandboxer-control || {
+    printf 'SANDBOXER_CONTROL_FAILED\n' > /dev/ttyS0
+    exit 1
+}
+printf 'SANDBOXER_RUNTIME_READY\n' > /dev/ttyS0

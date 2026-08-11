@@ -35,7 +35,13 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert "/workspace" in setup
     assert "ip addr add \"$SANDBOXER_IP/24\" dev eth0" in setup
     assert "ip route del default" in setup
-    assert "/etc/init.d/sandboxer-runner start" in bootstrap
+    assert "SANDBOXER_STAGE_SETUP" in bootstrap
+    assert "SANDBOXER_STAGE_TOY" in bootstrap
+    assert "SANDBOXER_STAGE_CONTROL" in bootstrap
+    assert "/usr/local/libexec/sandboxer-setup" in bootstrap
+    assert "/usr/local/libexec/sandboxer-toy" in bootstrap
+    assert "/usr/local/libexec/sandboxer-control" in bootstrap
+    assert "/etc/init.d/sandboxer-runner start" not in bootstrap
 
 
 def test_image_builder_plan_binds_the_exact_profile_to_its_output_digest_path(tmp_path: Path) -> None:
