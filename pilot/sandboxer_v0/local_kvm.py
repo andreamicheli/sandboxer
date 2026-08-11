@@ -71,6 +71,8 @@ class LocalKvmHost(Protocol):
 
     def start(self, argv: tuple[str, ...], *, stderr_path: Path) -> int: ...
 
+    def verify_socket_access(self, directory: Path, control_socket: Path, *, qemu_user: str) -> bool: ...
+
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str: ...
 
     def process_alive(self, pid: int) -> bool: ...
@@ -144,6 +146,17 @@ class SubprocessLocalKvmHost:
             self._diagnostic_threads.pop(process.pid, None)
             raise QemuStartupFailure(diagnostic)
         return process.pid
+
+    def verify_socket_access(self, directory: Path, control_socket: Path, *, qemu_user: str) -> bool:
+        # This helper runs as the exact setpriv identity used for QEMU. Its
+        # sole observable result is a categorical success marker; no host path
+        # or command line is copied into Match evidence.
+        result = self.run((
+            "setpriv", f"--reuid={qemu_user}", f"--regid={qemu_user}", "--init-groups",
+            sys.executable, "-m", "sandboxer_v0.local_kvm_socket_witness",
+            os.fspath(directory), os.fspath(control_socket),
+        ))
+        return result.returncode == 0 and result.stdout == "SOCKET_WITNESS_OK\n"
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -483,6 +496,7 @@ class LocalKvmRunnerProvider:
         root = match_root / name
         root.mkdir(mode=0o700)
         os.chown(root, self.config.qemu_uid, -1)
+        os.chmod(root, 0o700)
         workspace = root / "workspace.qcow2"
         seed = root / "seed.iso"
         control_socket = root / "control.sock"
@@ -510,6 +524,7 @@ class LocalKvmRunnerProvider:
                 "SEED_CREATE_FAILED",
             )
             os.chown(seed, self.config.qemu_uid, -1)
+            self._verify_control_socket_prelaunch(root, control_socket)
             self._run(("ip", "netns", "exec", blue_namespace, "ip", "tuntap", "add", "dev", tap, "mode", "tap", "user", str(self.config.qemu_uid)), "TAP_CREATE_FAILED")
             self._run(("ip", "-n", blue_namespace, "link", "set", tap, "up"), "TAP_ENABLE_FAILED")
             pid = self._host.start(
@@ -572,6 +587,21 @@ class LocalKvmRunnerProvider:
                     str(error) if not failures else failures[0],
                 ),),
             ) from error
+
+    def _verify_control_socket_prelaunch(self, root: Path, control_socket: Path) -> None:
+        mode = stat.S_IMODE(root.stat().st_mode)
+        if root.stat().st_uid != self.config.qemu_uid or mode != 0o700:
+            raise RuntimeError("QEMU_RUNTIME_DIRECTORY_UNSAFE")
+        try:
+            os.lstat(control_socket)
+        except FileNotFoundError:
+            pass
+        else:
+            # Never unlink an unexpected filesystem entry merely to make a
+            # Runner start. A fresh disposable root is the only valid state.
+            raise RuntimeError("CONTROL_SOCKET_PREEXISTS")
+        if not self._host.verify_socket_access(root, control_socket, qemu_user=self.config.qemu_user):
+            raise RuntimeError("QEMU_SOCKET_WITNESS_FAILED")
 
     def _qemu_command(
         self, namespace: str, tap: str, workspace: Path, seed: Path, control_socket: Path, serial_log: Path

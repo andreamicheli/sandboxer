@@ -40,6 +40,9 @@ class RecordingKvmHost:
         self.tap_cleanup_works = True
         self.startup_failure: QemuStartupFailure | None = None
         self.qemu_stderr_paths: list[Path] = []
+        self.socket_witnesses: list[tuple[Path, Path, str]] = []
+        self.socket_witness_ok = True
+        self.create_stale_control_socket = False
 
     def run(self, argv: tuple[str, ...], *, input_text: str | None = None, timeout_seconds: float = 10) -> CommandResult:
         del timeout_seconds
@@ -71,6 +74,8 @@ class RecordingKvmHost:
             Path(next(item for item in argv if item.endswith(".qcow2") and item != "qcow2")).touch()
         if argv[:1] == ("cloud-localds",):
             Path(next(item for item in argv if item.endswith(".iso"))).touch()
+            if self.create_stale_control_socket:
+                Path(next(item for item in argv if item.endswith(".iso"))).parent.joinpath("control.sock").touch()
         if argv[:3] == ("qemu-img", "check", "--output=json"):
             return CommandResult(0, '{"filename":"overlay","format":"qcow2"}', "")
         if "addr" in argv and "show" in argv and "-j" in argv:
@@ -90,6 +95,10 @@ class RecordingKvmHost:
         self.alive.add(pid)
         self.next_pid += 1
         return pid
+
+    def verify_socket_access(self, directory: Path, control_socket: Path, *, qemu_user: str) -> bool:
+        self.socket_witnesses.append((directory, control_socket, qemu_user))
+        return self.socket_witness_ok
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
         del socket_path
@@ -214,6 +223,38 @@ def test_local_kvm_rehearsal_uses_distinct_overlays_control_and_a_disposable_net
     assert len(host.destroyed_cgroups) == 2
     assert not (tmp_path / "runners" / "kvm-rehearsal-001").exists()
     assert {path.name for path in host.qemu_stderr_paths} == {"qemu.stderr"}
+    assert len(host.socket_witnesses) == 2
+    assert all(item[2] == "sandboxer-runner" for item in host.socket_witnesses)
+
+
+def test_local_kvm_refuses_a_preexisting_control_socket_without_unlinking_it(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    host.create_stale_control_socket = True
+
+    try:
+        provider.provision("kvm-stale-control", ("atlas", "borealis"))
+    except ProvisioningFailed as error:
+        assert error.reason_code == "CONTROL_SOCKET_PREEXISTS"
+    else:  # pragma: no cover - explicit fail-closed contract
+        raise AssertionError("a preexisting control socket must block the Runner")
+
+    assert not host.socket_witnesses
+    assert not any("qemu-system-x86_64" in command for command in host.commands)
+
+
+def test_local_kvm_requires_non_root_socket_create_unlink_witness_before_qemu(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    host.socket_witness_ok = False
+
+    try:
+        provider.provision("kvm-socket-witness", ("atlas", "borealis"))
+    except ProvisioningFailed as error:
+        assert error.reason_code == "QEMU_SOCKET_WITNESS_FAILED"
+    else:  # pragma: no cover - explicit fail-closed contract
+        raise AssertionError("an unproven QEMU socket directory must block the Runner")
+
+    assert len(host.socket_witnesses) == 1
+    assert not any("qemu-system-x86_64" in command for command in host.commands)
 
 
 def test_local_kvm_preserves_a_sanitized_qemu_startup_diagnostic_in_typed_failure(tmp_path: Path) -> None:
