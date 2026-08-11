@@ -110,9 +110,10 @@ ip() { return 0; }
 ping() { return 1; }
 id() { printf '%s\\n' 1001; }
 cat() {
-    if test "$1" = /run/sandboxer-route-after-setup; then printf '%s\\n' absent
-    else printf '%s\\n' 11111111-1111-1111-1111-111111111111
-    fi
+    case "$1" in
+        *sandboxer-route-after-setup|*sandboxer-route-at-control) printf '%s\\n' absent ;;
+        *) printf '%s\\n' 11111111-1111-1111-1111-111111111111 ;;
+    esac
 }
 date() { printf '%s\\n' 1720000000; }
 """,
@@ -123,11 +124,13 @@ date() { printf '%s\\n' 1720000000; }
     tty.setraw(slave)
     control_port = os.ttyname(slave)
     stage_log = tmp_path / "netprobe-stages.log"
+    route_at_control = tmp_path / "sandboxer-route-at-control"
     test_control = tmp_path / "sandboxer-control"
     test_control.write_text(
         (rendered / "sandboxer-control").read_text(encoding="utf-8")
         .replace("/usr/local/libexec/sandboxer-common", f"{libexec}/sandboxer-common")
         .replace("PORT=/dev/virtio-ports/org.sandboxer.control", f"PORT={control_port}")
+        .replace("/run/sandboxer-route-at-control", str(route_at_control))
         .replace("/bin/busybox nc -w 1 \"$1\" \"$2\" </dev/null >/dev/null 2>&1", "/bin/busybox sleep 30")
         .replace("ping -c 1 -W 1 \"$1\" >/dev/null 2>&1", "/bin/busybox sleep 30")
         .replace("/bin/busybox timeout -s KILL 1 ip route show default | grep -q .", "false")
