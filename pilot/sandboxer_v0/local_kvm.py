@@ -519,6 +519,9 @@ class LocalKvmRunnerProvider:
         except Exception as error:
             self._capture_serial_stages(records)
             raise PreflightWitnessFailed("LOCAL_KVM_CONTROL_SOCKET_UNAVAILABLE") from error
+        if any(item.route_after_setup == "unknown" or item.route_at_control == "unknown" for item in responses):
+            self._capture_serial_stages(records)
+            raise PreflightWitnessFailed("LOCAL_KVM_BLUE_ROUTE_MARKER_UNAVAILABLE")
         if any(item.route_after_setup != "absent" for item in responses):
             self._capture_serial_stages(records)
             raise PreflightWitnessFailed("LOCAL_KVM_BLUE_ROUTE_AFTER_SETUP_WITNESS_FAILED")
@@ -924,6 +927,7 @@ class LocalKvmRunnerProvider:
             "SANDBOXER_ROUTE_ABSENT_AFTER_SETUP", "SANDBOXER_ROUTE_PRESENT_AFTER_SETUP",
             "SANDBOXER_ROUTE_ABSENT_AFTER_TOY", "SANDBOXER_ROUTE_PRESENT_AFTER_TOY",
             "SANDBOXER_ROUTE_ABSENT_BEFORE_CONTROL", "SANDBOXER_ROUTE_PRESENT_BEFORE_CONTROL",
+            "SANDBOXER_ROUTE_MARKER_UNAVAILABLE",
         }
         evidence_root = self.config.runner_root.parent / "evidence"
         for record in records:

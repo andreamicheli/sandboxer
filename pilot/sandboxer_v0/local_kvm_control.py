@@ -66,7 +66,7 @@ def parse_control(response: str, nonce: str, *, require_probe: bool) -> ControlR
         raise RuntimeError("CONTROL_PROBE_INVALID")
     if fields["no_credentials"] not in {"0", "1"} or fields["private_mounts"] not in {"0", "1"}:
         raise RuntimeError("CONTROL_PROBE_INVALID")
-    if fields["route_after_setup"] not in {"absent", "present"} or fields["route_at_control"] not in {"absent", "present"}:
+    if fields["route_after_setup"] not in {"absent", "present", "unknown"} or fields["route_at_control"] not in {"absent", "present", "unknown"}:
         raise RuntimeError("CONTROL_PROBE_INVALID")
     try:
         ready = ControlReady(
