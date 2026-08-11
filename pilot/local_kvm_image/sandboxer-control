@@ -25,14 +25,6 @@ icmp_probe() {
     /bin/busybox timeout -s KILL 2 ping -c 1 -W 1 "$1" >/dev/null 2>&1
 }
 
-has_default_route() {
-    /bin/busybox timeout -s KILL 1 /sbin/ip route show default | grep -q .
-}
-
-route_state() {
-    if has_default_route; then printf present; else printf absent; fi
-}
-
 network_stage() {
     # Fixed labels only: serial evidence locates a stalled witness without
     # disclosing addresses, requests, service contents, or the nonce.
@@ -61,7 +53,7 @@ network_proof() {
     icmp_probe "$SANDBOXER_PEER_IP" || icmp_denied=1
     egress_denied=0
     network_stage egress
-    if has_default_route; then
+    if test "$(sandboxer_route_state)" = present; then
         egress_reason=default_route
     elif tcp_connect 198.51.100.1 81; then
         egress_reason=tcp_reachable
@@ -81,7 +73,7 @@ while :; do
     sandboxer_load_metadata || { sleep 1; continue; }
     # Compute the temporal control-start witness before accepting requests.
     # The first PROBE must only read fixed local markers, never invoke ip.
-    route_state > /run/sandboxer-route-at-control || printf 'SANDBOXER_ROUTE_MARKER_UNAVAILABLE\n' >> /dev/ttyS0 2>/dev/null || true
+    sandboxer_route_state > /run/sandboxer-route-at-control || printf 'SANDBOXER_ROUTE_MARKER_UNAVAILABLE\n' >> /dev/ttyS0 2>/dev/null || true
     exec 3<> "$PORT"
     if IFS= read -r command <&3; then
         set -- $command

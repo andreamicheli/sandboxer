@@ -117,8 +117,12 @@ def test_image_builder_renders_sanitized_and_bounded_network_probes(tmp_path: Pa
     control = (rendered / "sandboxer-control").read_text()
     assert "nc -z" not in control
     assert "/bin/busybox timeout -s KILL 1 /bin/busybox nc -w 1 \"$1\" \"$2\"" in control
-    assert "/bin/busybox timeout -s KILL 1 /sbin/ip route show default" in control
-    assert "/bin/busybox timeout -s KILL 1 ip route show default" not in control
+    common = (rendered / "sandboxer-common").read_text()
+    assert "/bin/busybox timeout -s KILL 1 /sbin/ip route show default" in common
+    assert "/bin/busybox timeout -s KILL 1 ip route show default" not in common
+    assert "sandboxer_route_state" in control
+    assert "has_default_route" not in control
+    assert "if sandboxer_route_state" not in control
     assert "/bin/busybox timeout -s KILL 2 ping -c 1 -W 1 \"$1\"" in control
     assert "SANDBOXER_NETPROBE_STAGE=" in control
     assert 'tcp_connect "$SANDBOXER_PEER_IP" 8080 || peer_denied=1' in control
@@ -128,6 +132,33 @@ def test_image_builder_renders_sanitized_and_bounded_network_probes(tmp_path: Pa
     assert "tcp_connect 10.77.0.1 1" in control
     assert "tcp_http \"$SANDBOXER_PEER_IP\" 8081" not in control
     assert "wget -q -T 2 -O /dev/null http://198.51.100.1:81/" not in control
+
+
+def test_rendered_route_state_is_a_value_contract_not_a_shell_predicate(tmp_path: Path) -> None:
+    """An empty successful route listing is absent; only command I/O is unknown."""
+    rendered = tmp_path / "rendered"
+    subprocess.run([sys.executable, str(BUILDER), "--render-only", str(rendered)], check=True)
+    fake_busybox = tmp_path / "busybox"
+    fake_ip = tmp_path / "ip"
+    fake_busybox.write_text("#!/bin/sh\nshift 4\nexec \"$@\"\n", encoding="ascii")
+    fake_ip.write_text("#!/bin/sh\nprintf '%s' \"${ROUTE_OUTPUT:-}\"\n", encoding="ascii")
+    fake_busybox.chmod(0o755); fake_ip.chmod(0o755)
+    common = (rendered / "sandboxer-common").read_text(encoding="utf-8")
+    common = common.replace("/bin/busybox", str(fake_busybox)).replace("/sbin/ip", str(fake_ip))
+    common_path = tmp_path / "sandboxer-common"; common_path.write_text(common, encoding="utf-8")
+
+    def state(*, output: str = "", fails: bool = False) -> subprocess.CompletedProcess[str]:
+        env = {**os.environ, "ROUTE_OUTPUT": output}
+        if fails:
+            fake_busybox.write_text("#!/bin/sh\nexit 1\n", encoding="ascii")
+        else:
+            fake_busybox.write_text("#!/bin/sh\nshift 4\nexec \"$@\"\n", encoding="ascii")
+        fake_busybox.chmod(0o755)
+        return subprocess.run(["/usr/bin/busybox", "ash", "-c", f". {common_path}; sandboxer_route_state"], text=True, capture_output=True, env=env)
+
+    assert (result := state()).returncode == 0 and result.stdout == "absent\n"
+    assert (result := state(output="default via 10.77.0.1\n")).returncode == 0 and result.stdout == "present\n"
+    assert (result := state(fails=True)).returncode != 0 and result.stdout == ""
 
 
 def test_rendered_guest_control_bounds_hanging_netprobe_subcommands_and_keeps_the_protocol_live(tmp_path: Path) -> None:
@@ -147,6 +178,7 @@ def test_rendered_guest_control_bounds_hanging_netprobe_subcommands_and_keeps_th
 }
 sandboxer_no_credentials() { return 0; }
 sandboxer_private_mounts() { return 0; }
+sandboxer_route_state() { printf '%s\\n' absent; }
 ip() { return 0; }
 ping() { return 1; }
 id() { printf '%s\\n' 1001; }
@@ -174,7 +206,6 @@ date() { printf '%s\\n' 1720000000; }
         .replace("/run/sandboxer-route-at-control", str(route_at_control))
         .replace("/bin/busybox nc -w 1 \"$1\" \"$2\" </dev/null >/dev/null 2>&1", "/bin/busybox sleep 30")
         .replace("ping -c 1 -W 1 \"$1\" >/dev/null 2>&1", "/bin/busybox sleep 30")
-        .replace("/bin/busybox timeout -s KILL 1 /sbin/ip route show default | grep -q .", "false")
         .replace("> /dev/ttyS0", f"> {stage_log}"),
         encoding="utf-8",
     )
@@ -227,12 +258,12 @@ def test_rendered_guest_control_emits_unknown_for_a_missing_route_marker(tmp_pat
     libexec = tmp_path / "libexec"; libexec.mkdir()
     (libexec / "sandboxer-common").write_text(
         "sandboxer_load_metadata() { SANDBOXER_NONCE=" + "a" * 64 + "; }\n"
-        "sandboxer_no_credentials() { return 0; }\nsandboxer_private_mounts() { return 0; }\n"
+        "sandboxer_no_credentials() { return 0; }\nsandboxer_private_mounts() { return 0; }\nsandboxer_route_state() { echo absent; }\n"
         "id() { echo 1001; }\ncat() { case \"$1\" in *after-setup) echo absent;; *at-control) return 1;; *) echo 11111111-1111-1111-1111-111111111111;; esac; }\ndate() { echo 1; }\n",
     )
     master, slave = pty.openpty(); tty.setraw(slave)
     stage = tmp_path / "stage"; port = os.ttyname(slave)
-    control = (rendered / "sandboxer-control").read_text().replace("/usr/local/libexec/sandboxer-common", str(libexec / "sandboxer-common")).replace("PORT=/dev/virtio-ports/org.sandboxer.control", f"PORT={port}").replace("route_state > /run/sandboxer-route-at-control", "false").replace(">> /dev/ttyS0", f">> {stage}")
+    control = (rendered / "sandboxer-control").read_text().replace("/usr/local/libexec/sandboxer-common", str(libexec / "sandboxer-common")).replace("PORT=/dev/virtio-ports/org.sandboxer.control", f"PORT={port}").replace("sandboxer_route_state > /run/sandboxer-route-at-control", "false").replace(">> /dev/ttyS0", f">> {stage}")
     path = tmp_path / "control"; path.write_text(control)
     process = subprocess.Popen(["/usr/bin/busybox", "ash", str(path)])
     try:

@@ -32,6 +32,18 @@ sandboxer_load_metadata() {
     esac
 }
 
+# Emit exactly one route-state value on success.  Callers must compare the
+# value; command failure deliberately has no value so the caller can record
+# an unavailable witness and fail closed.  Do not use this as an `if`
+# predicate: an empty successful route listing is the normal no-route case.
+sandboxer_route_state() {
+    sandboxer_route_listing="$(/bin/busybox timeout -s KILL 1 /sbin/ip route show default)" || return 1
+    case "$sandboxer_route_listing" in
+        '') printf '%s\n' absent ;;
+        *) printf '%s\n' present ;;
+    esac
+}
+
 sandboxer_private_mounts() {
     ! awk '$3 ~ /^(9p|virtiofs|nfs|nfs4|cifs|smbfs|fuse\\.sshfs)$/ { found = 1 } END { exit found ? 0 : 1 }' /proc/mounts
 }

@@ -2,16 +2,18 @@
 # OpenRC itself needs mutable run-state before it can process the default
 # runlevel. This runs from Alpine inittab immediately after the read-only root
 # is mounted and before OpenRC starts.
+. /usr/local/libexec/sandboxer-common
 printf 'SANDBOXER_RUNTIME_BOOTSTRAP\n' > /dev/ttyS0
 mountpoint -q /run || mount -t tmpfs -o rw,nosuid,nodev,mode=0755 tmpfs /run
 mountpoint -q /tmp || mount -t tmpfs -o rw,nosuid,nodev,noexec,mode=1777 tmpfs /tmp
 printf 'SANDBOXER_RUNTIME_MOUNTS_READY\n' > /dev/ttyS0
 route_marker() {
-    if ip route show default | grep -q .; then
-        printf 'SANDBOXER_ROUTE_PRESENT_%s\n' "$1" > /dev/ttyS0
-    else
-        printf 'SANDBOXER_ROUTE_ABSENT_%s\n' "$1" > /dev/ttyS0
-    fi
+    state="$(sandboxer_route_state)" || { printf 'SANDBOXER_ROUTE_MARKER_UNAVAILABLE\n' > /dev/ttyS0; return; }
+    case "$state" in
+        absent) printf 'SANDBOXER_ROUTE_ABSENT_%s\n' "$1" > /dev/ttyS0 ;;
+        present) printf 'SANDBOXER_ROUTE_PRESENT_%s\n' "$1" > /dev/ttyS0 ;;
+        *) printf 'SANDBOXER_ROUTE_MARKER_UNAVAILABLE\n' > /dev/ttyS0 ;;
+    esac
 }
 printf 'SANDBOXER_STAGE_SETUP\n' > /dev/ttyS0
 /usr/local/libexec/sandboxer-setup > /dev/ttyS0 2>&1 || { printf 'SANDBOXER_SETUP_FAILED\n' > /dev/ttyS0; exit 1; }
