@@ -11,6 +11,8 @@ import time
 import tty
 from pathlib import Path
 
+import pytest
+
 from sandboxer_v0.local_kvm_control import parse_control, parse_network_proof
 from scripts import build_local_kvm_base
 
@@ -37,6 +39,21 @@ def test_image_sanitizer_reports_only_the_failing_stage(monkeypatch, tmp_path: P
             assert "API_KEY" not in str(error) and "path" not in str(error)
         else:  # pragma: no cover
             raise AssertionError("sanitization failure must be typed")
+
+
+def test_image_sanitizer_labels_a_residual_target_as_verify_failure(monkeypatch, tmp_path: Path) -> None:
+    image = tmp_path / "candidate.qcow2"
+    image.touch()
+    original_exists = Path.exists
+    monkeypatch.setattr(build_local_kvm_base, "free_nbd_device", lambda: Path("/dev/nbd0"))
+    monkeypatch.setattr(build_local_kvm_base, "run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(build_local_kvm_base.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "", ""))
+    monkeypatch.setattr(Path, "exists", lambda path: str(path).endswith("/var/lib/cloud") or original_exists(path))
+
+    with pytest.raises(RuntimeError, match="^BUILDER_IMAGE_SANITIZATION_VERIFY_FAILED$") as error:
+        build_local_kvm_base.sanitize_promoted_image(image)
+
+    assert "/var/lib/cloud" not in str(error.value)
 
 
 def test_image_builder_renders_an_immutable_runner_contract_without_building_a_vm(tmp_path: Path) -> None:

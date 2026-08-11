@@ -192,6 +192,8 @@ def sanitize_promoted_image(image: Path) -> None:
             if cleanup_failures:
                 raise RuntimeError(f"BUILDER_IMAGE_SANITIZATION_CLEANUP_FAILED:{','.join(cleanup_failures)}") from failure
     if failure is not None:
+        if stage == "VERIFY":
+            raise RuntimeError("BUILDER_IMAGE_SANITIZATION_VERIFY_FAILED") from failure
         raise RuntimeError(f"BUILDER_IMAGE_SANITIZATION_FAILED:{stage}") from failure
 
 
