@@ -30,6 +30,7 @@ from .runner_backend import PreflightCheck, ProvisioningFailed, RunnerHandle
 
 _SAFE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 _MAX_CONTROL_RESPONSE = 4096
+_NETWORK_PROBE_TIMEOUT_SECONDS = 12
 
 
 @dataclass(frozen=True)
@@ -585,7 +586,7 @@ class LocalKvmRunnerProvider:
     def _measure_network(self, records: list[_RunnerRecord], phase: Phase) -> NetworkObservation:
         if phase is Phase.BLUE:
             # Separate Linux namespaces are the authoritative Blue boundary.
-            routes = [self._run(("ip", "-n", record.blue_namespace, "ip", "route", "show", "default"), "NETWORK_WITNESS_UNAVAILABLE") for record in records]
+            routes = [self._run(("ip", "-n", record.blue_namespace, "route", "show", "default"), "NETWORK_WITNESS_UNAVAILABLE") for record in records]
             if any(item.stdout.strip() for item in routes):
                 return NetworkObservation(frozenset(), True, True, True)
             proofs = [self._network_proof(record, phase) for record in records]
@@ -634,7 +635,7 @@ class LocalKvmRunnerProvider:
 
     def _network_proof(self, record: _RunnerRecord, phase: Phase) -> NetworkProof:
         response = self._host.control_exchange(
-            record.control_socket, f"NETPROBE {record.nonce} {phase.value}\n", timeout_seconds=5
+            record.control_socket, f"NETPROBE {record.nonce} {phase.value}\n", timeout_seconds=_NETWORK_PROBE_TIMEOUT_SECONDS
         )
         return parse_network_proof(response, record.nonce, phase.value)
 

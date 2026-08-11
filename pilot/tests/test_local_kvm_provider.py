@@ -20,6 +20,7 @@ class RecordingKvmHost:
         self.alive: set[int] = set()
         self.next_pid = 4100
         self.control_requests: list[str] = []
+        self.control_timeouts: list[tuple[str, float]] = []
         self.control_failures = 0
         self.destroyed_cgroups: list[str] = []
         self.ttl_tokens: list[object] = []
@@ -79,11 +80,12 @@ class RecordingKvmHost:
         return pid
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
-        del socket_path, timeout_seconds
+        del socket_path
         if self.control_failures:
             self.control_failures -= 1
             raise TimeoutError("guest control is not ready")
         self.control_requests.append(payload)
+        self.control_timeouts.append((payload, timeout_seconds))
         if payload.startswith("NETPROBE "):
             _, nonce, phase = payload.split()
             if phase == "blue":
@@ -173,6 +175,13 @@ def test_local_kvm_rehearsal_uses_distinct_overlays_control_and_a_disposable_net
     assert all(check.passed for check in report.preflight_checks)
     assert all(item.state is TeardownState.DESTROYED for item in report.teardown_evidence)
     assert len({request.split()[1] for request in host.control_requests}) == 2
+    assert {timeout for request, timeout in host.control_timeouts if request.startswith("PROBE ")} == {5}
+    assert {timeout for request, timeout in host.control_timeouts if request.startswith("NETPROBE ")} == {12}
+    blue_route_witnesses = [
+        command for command in host.commands
+        if len(command) == 6 and command[:2] == ("ip", "-n") and command[3:] == ("route", "show", "default")
+    ]
+    assert len({command[2] for command in blue_route_witnesses}) == 2
     qemu_commands = [command for command in host.commands if "qemu-system-x86_64" in command]
     assert len(qemu_commands) == 2
     assert all("setpriv" in command and any("sandboxer-runner" in item for item in command) for command in qemu_commands)
