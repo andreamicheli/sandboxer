@@ -22,6 +22,7 @@ from sandboxer_v0.local_kvm import (
     SocketWitnessStage,
     SubprocessLocalKvmHost,
 )
+from sandboxer_v0.local_kvm_control import parse_control
 from sandboxer_v0.runner_backend import ProductionRunnerBackend, ProvisioningFailed, RunnerPreflightFailed
 
 
@@ -527,6 +528,40 @@ def test_subprocess_host_returns_a_complete_netprobe_frame_without_waiting_for_e
 
     assert request_received.is_set()
     assert request == [b"NETPROBE aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blue\n"]
+
+
+def test_subprocess_host_preserves_temporal_ready_fields_through_a_persistent_socket(tmp_path: Path) -> None:
+    socket_path = tmp_path / "control.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    listener.listen(1)
+    response = (
+        b"READY nonce=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "
+        b"uid=1001 boot_id=11111111-1111-1111-1111-111111111111 no_credentials=1 private_mounts=1 "
+        b"route_after_setup=absent route_at_control=absent\n"
+        b"PROBE_OK nonce=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa uid=1001 clock_epoch=1720000000\n"
+    )
+    release = threading.Event()
+
+    def serve() -> None:
+        connection, _ = listener.accept()
+        with connection:
+            connection.recv(4096)
+            connection.sendall(response)
+            release.wait(timeout=2)
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    try:
+        actual = SubprocessLocalKvmHost().control_exchange(
+            socket_path, "PROBE " + "a" * 64 + "\n", timeout_seconds=0.1
+        )
+        probe = parse_control(actual, "a" * 64, require_probe=True)
+        assert probe.route_after_setup == probe.route_at_control == "absent"
+    finally:
+        release.set()
+        thread.join(timeout=2)
+        listener.close()
     assert actual == response.decode("ascii")
 
 
