@@ -303,6 +303,31 @@ def test_subprocess_host_bounds_and_sanitizes_qemu_stderr_on_immediate_exit(monk
     assert diagnostic.stat().st_size <= 1024
 
 
+def test_subprocess_host_socket_witness_uses_the_qemu_identity_without_a_shell(monkeypatch, tmp_path: Path) -> None:
+    host = SubprocessLocalKvmHost()
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run(argv: tuple[str, ...], **_kwargs) -> CommandResult:
+        commands.append(argv)
+        probe = Path(argv[-1])
+        if argv[-3:] == ("/usr/bin/touch", "--", str(probe)):
+            probe.touch()
+        elif argv[-3:] == ("/usr/bin/rm", "--", str(probe)):
+            probe.unlink()
+        return CommandResult(0, "", "")
+
+    monkeypatch.setattr(host, "run", fake_run)
+    directory = tmp_path / "runner"
+    directory.mkdir()
+
+    assert host.verify_socket_access(directory, directory / "control.sock", qemu_user="sandboxer-runner") is True
+    assert len(commands) == 2
+    assert all(command[:4] == ("setpriv", "--reuid=sandboxer-runner", "--regid=sandboxer-runner", "--init-groups") for command in commands)
+    assert {command[4] for command in commands} == {"/usr/bin/touch", "/usr/bin/rm"}
+    assert all("sh" not in command for command in commands)
+    assert list(directory.iterdir()) == []
+
+
 def test_local_kvm_quarantines_a_runner_while_its_ttl_timer_remains_active(tmp_path: Path) -> None:
     provider, host = configured_provider(tmp_path)
     runners = provider.provision("kvm-rehearsal-ttl-timer", ("atlas", "borealis"))

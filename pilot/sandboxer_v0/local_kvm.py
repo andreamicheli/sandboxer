@@ -148,15 +148,25 @@ class SubprocessLocalKvmHost:
         return process.pid
 
     def verify_socket_access(self, directory: Path, control_socket: Path, *, qemu_user: str) -> bool:
-        # This helper runs as the exact setpriv identity used for QEMU. Its
-        # sole observable result is a categorical success marker; no host path
-        # or command line is copied into Match evidence.
-        result = self.run((
+        # Run as the exact setpriv identity used for QEMU. Fixed binaries and
+        # argv-only calls avoid a shell or a repository-path dependency while
+        # proving both directory create and unlink permissions.
+        probe = directory / f".sandboxer-control-witness-{secrets.token_hex(8)}"
+        create = self.run((
             "setpriv", f"--reuid={qemu_user}", f"--regid={qemu_user}", "--init-groups",
-            sys.executable, "-m", "sandboxer_v0.local_kvm_socket_witness",
-            os.fspath(directory), os.fspath(control_socket),
+            "/usr/bin/touch", "--", os.fspath(probe),
         ))
-        return result.returncode == 0 and result.stdout == "SOCKET_WITNESS_OK\n"
+        if create.returncode != 0:
+            return False
+        remove = self.run((
+            "setpriv", f"--reuid={qemu_user}", f"--regid={qemu_user}", "--init-groups",
+            "/usr/bin/rm", "--", os.fspath(probe),
+        ))
+        try:
+            os.lstat(probe)
+        except FileNotFoundError:
+            return remove.returncode == 0
+        return False
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
