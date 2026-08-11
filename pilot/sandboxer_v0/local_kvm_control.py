@@ -32,6 +32,7 @@ class NetworkProof:
     alternate_denied: bool
     icmp_denied: bool
     egress_denied: bool
+    egress_reason: str
     orchestrator_denied: bool
 
 
@@ -76,7 +77,7 @@ def parse_control(response: str, nonce: str, *, require_probe: bool) -> ControlR
 
 
 def parse_network_proof(response: str, nonce: str, phase: str) -> NetworkProof:
-    expected = {"nonce", "phase", "peer_denied", "toy_http", "alternate_denied", "icmp_denied", "egress_denied", "orchestrator_denied"}
+    expected = {"nonce", "phase", "peer_denied", "toy_http", "alternate_denied", "icmp_denied", "egress_denied", "egress_reason", "orchestrator_denied"}
     lines = response.splitlines()
     if len(lines) != 1 or not lines[0].startswith("NETWORK_PROBE "):
         raise RuntimeError("NETWORK_PROOF_INVALID")
@@ -88,11 +89,17 @@ def parse_network_proof(response: str, nonce: str, phase: str) -> NetworkProof:
         fields[key] = value
     if fields.keys() != expected or fields["nonce"] != nonce or fields["phase"] != phase:
         raise RuntimeError("NETWORK_PROOF_INVALID")
-    if any(fields[key] not in {"0", "1"} for key in expected - {"nonce", "phase"}):
+    boolean_fields = expected - {"nonce", "phase", "egress_reason"}
+    if any(fields[key] not in {"0", "1"} for key in boolean_fields):
+        raise RuntimeError("NETWORK_PROOF_INVALID")
+    if fields["egress_reason"] not in {"blocked", "default_route", "tcp_reachable"}:
+        raise RuntimeError("NETWORK_PROOF_INVALID")
+    if (fields["egress_denied"] == "1") != (fields["egress_reason"] == "blocked"):
         raise RuntimeError("NETWORK_PROOF_INVALID")
     return NetworkProof(
         nonce=nonce, phase=phase,
         peer_denied=fields["peer_denied"] == "1", toy_http=fields["toy_http"] == "1",
         alternate_denied=fields["alternate_denied"] == "1", icmp_denied=fields["icmp_denied"] == "1",
-        egress_denied=fields["egress_denied"] == "1", orchestrator_denied=fields["orchestrator_denied"] == "1",
+        egress_denied=fields["egress_denied"] == "1", egress_reason=fields["egress_reason"],
+        orchestrator_denied=fields["orchestrator_denied"] == "1",
     )

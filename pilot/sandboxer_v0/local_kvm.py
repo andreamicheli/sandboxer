@@ -847,12 +847,15 @@ class LocalKvmRunnerProvider:
             ("LOCAL_KVM_BLUE_TOY_SERVICE_WITNESS_FAILED", lambda proof: not proof.toy_http),
             ("LOCAL_KVM_BLUE_ALTERNATE_PORT_WITNESS_FAILED", lambda proof: proof.alternate_denied),
             ("LOCAL_KVM_BLUE_ICMP_WITNESS_FAILED", lambda proof: proof.icmp_denied),
-            ("LOCAL_KVM_BLUE_EGRESS_WITNESS_FAILED", lambda proof: proof.egress_denied),
             ("LOCAL_KVM_BLUE_ORCHESTRATOR_WITNESS_FAILED", lambda proof: proof.orchestrator_denied),
         )
         for reason_code, passed in checks:
             if not all(passed(proof) for proof in proofs):
                 raise PreflightWitnessFailed(reason_code)
+        if not all(proof.egress_denied for proof in proofs):
+            if any(proof.egress_reason == "default_route" for proof in proofs):
+                raise PreflightWitnessFailed("LOCAL_KVM_BLUE_EGRESS_DEFAULT_ROUTE_WITNESS_FAILED")
+            raise PreflightWitnessFailed("LOCAL_KVM_BLUE_EGRESS_TCP_WITNESS_FAILED")
 
     def _control_probe(self, record: _RunnerRecord) -> ControlProbe:
         return self._parse_control(self._control_exchange(record.control_socket, record.nonce), record.nonce, require_probe=True)

@@ -122,6 +122,7 @@ date() { printf '%s\\n' 1720000000; }
         .replace("PORT=/dev/virtio-ports/org.sandboxer.control", f"PORT={control_port}")
         .replace("/bin/busybox nc -w 1 \"$1\" \"$2\" </dev/null >/dev/null 2>&1", "/bin/busybox sleep 30")
         .replace("ping -c 1 -W 1 \"$1\" >/dev/null 2>&1", "/bin/busybox sleep 30")
+        .replace("/bin/busybox timeout -s KILL 1 ip route show default | grep -q .", "false")
         .replace("> /dev/ttyS0", f"> {stage_log}"),
         encoding="utf-8",
     )
@@ -137,9 +138,11 @@ date() { printf '%s\\n' 1720000000; }
         assert time.monotonic() - started < 8
         proof = parse_network_proof(response, "a" * 64, "blue")
         assert proof.peer_denied and proof.alternate_denied and proof.icmp_denied
-        # The host test process still has its own default route, so it cannot
-        # assert the egress verdict.  It does prove that the guest emits the
-        # complete typed witness and immediately accepts the next command.
+        # The shell fixture supplies no default route and forces every TCP
+        # attempt to hit the timeout. That is the safe Blue egress outcome.
+        assert proof.egress_denied and proof.egress_reason == "blocked"
+        # It also proves that the guest emits the complete typed witness and
+        # immediately accepts the next command.
         assert proof.orchestrator_denied and not proof.toy_http
         assert stage_log.read_text(encoding="ascii").splitlines() == [
             "SANDBOXER_NETPROBE_STAGE=start",

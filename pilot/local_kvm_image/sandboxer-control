@@ -57,15 +57,20 @@ network_proof() {
     icmp_probe "$SANDBOXER_PEER_IP" || icmp_denied=1
     egress_denied=0
     network_stage egress
-    if ! has_default_route && ! tcp_connect 198.51.100.1 81; then
+    if has_default_route; then
+        egress_reason=default_route
+    elif tcp_connect 198.51.100.1 81; then
+        egress_reason=tcp_reachable
+    else
         egress_denied=1
+        egress_reason=blocked
     fi
     orchestrator_denied=0
     network_stage orchestrator
     tcp_connect 10.77.0.1 1 || orchestrator_denied=1
     network_stage emit
-    printf 'NETWORK_PROBE nonce=%s phase=%s peer_denied=%s toy_http=%s alternate_denied=%s icmp_denied=%s egress_denied=%s orchestrator_denied=%s\n' \
-        "$SANDBOXER_NONCE" "$phase" "$peer_denied" "$toy_http" "$alternate_denied" "$icmp_denied" "$egress_denied" "$orchestrator_denied"
+    printf 'NETWORK_PROBE nonce=%s phase=%s peer_denied=%s toy_http=%s alternate_denied=%s icmp_denied=%s egress_denied=%s egress_reason=%s orchestrator_denied=%s\n' \
+        "$SANDBOXER_NONCE" "$phase" "$peer_denied" "$toy_http" "$alternate_denied" "$icmp_denied" "$egress_denied" "$egress_reason" "$orchestrator_denied"
 }
 
 while :; do

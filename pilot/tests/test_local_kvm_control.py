@@ -50,9 +50,15 @@ def test_ready_without_probe_is_a_distinct_typed_evidence_shape() -> None:
 
 def test_network_proof_requires_all_active_denial_checks() -> None:
     proof = parse_network_proof(
-        f"NETWORK_PROBE nonce={NONCE} phase=red peer_denied=0 toy_http=1 alternate_denied=1 icmp_denied=1 egress_denied=1 orchestrator_denied=1\n",
+        f"NETWORK_PROBE nonce={NONCE} phase=red peer_denied=0 toy_http=1 alternate_denied=1 icmp_denied=1 egress_denied=1 egress_reason=blocked orchestrator_denied=1\n",
         NONCE, "red",
     )
     assert proof.toy_http is True
+    assert proof.egress_reason == "blocked"
+    with pytest.raises(RuntimeError, match="NETWORK_PROOF_INVALID"):
+        parse_network_proof(
+            f"NETWORK_PROBE nonce={NONCE} phase=red peer_denied=0 toy_http=1 alternate_denied=1 icmp_denied=1 egress_denied=1 egress_reason=default_route orchestrator_denied=1\n",
+            NONCE, "red",
+        )
     with pytest.raises(RuntimeError, match="NETWORK_PROOF_INVALID"):
         parse_network_proof(f"NETWORK_PROBE nonce={NONCE} phase=red toy_http=1\n", NONCE, "red")

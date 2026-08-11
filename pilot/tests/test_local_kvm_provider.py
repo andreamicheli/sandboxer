@@ -133,8 +133,8 @@ class RecordingKvmHost:
                 return self.network_probe_response
             _, nonce, phase = payload.split()
             if phase == "blue":
-                return f"NETWORK_PROBE nonce={nonce} phase=blue peer_denied=1 toy_http=0 alternate_denied=1 icmp_denied=1 egress_denied=1 orchestrator_denied=1\n"
-            return f"NETWORK_PROBE nonce={nonce} phase=red peer_denied=0 toy_http=1 alternate_denied=1 icmp_denied=1 egress_denied=1 orchestrator_denied=1\n"
+                return f"NETWORK_PROBE nonce={nonce} phase=blue peer_denied=1 toy_http=0 alternate_denied=1 icmp_denied=1 egress_denied=1 egress_reason=blocked orchestrator_denied=1\n"
+            return f"NETWORK_PROBE nonce={nonce} phase=red peer_denied=0 toy_http=1 alternate_denied=1 icmp_denied=1 egress_denied=1 egress_reason=blocked orchestrator_denied=1\n"
         runner_number = len(self.control_requests)
         boot_id = "11111111-1111-1111-1111-111111111111" if runner_number == 1 else "22222222-2222-2222-2222-222222222222"
         nonce = payload.split()[1]
@@ -370,7 +370,7 @@ def test_local_kvm_does_not_mislabel_a_failed_blue_peer_witness_as_orchestrator_
             _, nonce, phase = payload.split()
             return (
                 f"NETWORK_PROBE nonce={nonce} phase={phase} peer_denied=0 toy_http=0 "
-                "alternate_denied=1 icmp_denied=1 egress_denied=1 orchestrator_denied=1\n"
+                "alternate_denied=1 icmp_denied=1 egress_denied=1 egress_reason=blocked orchestrator_denied=1\n"
             )
         return original_exchange(socket_path, payload, timeout_seconds=timeout_seconds)
 
@@ -394,7 +394,7 @@ def test_local_kvm_treats_a_reachable_undeclared_egress_target_as_a_blue_failure
             _, nonce, phase = payload.split()
             return (
                 f"NETWORK_PROBE nonce={nonce} phase={phase} peer_denied=1 toy_http=0 "
-                "alternate_denied=1 icmp_denied=1 egress_denied=0 orchestrator_denied=1\n"
+                "alternate_denied=1 icmp_denied=1 egress_denied=0 egress_reason=tcp_reachable orchestrator_denied=1\n"
             )
         return original_exchange(socket_path, payload, timeout_seconds=timeout_seconds)
 
@@ -405,7 +405,30 @@ def test_local_kvm_treats_a_reachable_undeclared_egress_target_as_a_blue_failure
             match_id="kvm-blue-egress-witness", runner_names=("atlas", "borealis")
         )
 
-    assert error.value.reason_code == "LOCAL_KVM_BLUE_EGRESS_WITNESS_FAILED"
+    assert error.value.reason_code == "LOCAL_KVM_BLUE_EGRESS_TCP_WITNESS_FAILED"
+
+
+def test_local_kvm_labels_a_blue_default_route_as_egress_risk(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    original_exchange = host.control_exchange
+
+    def default_route_witness(socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
+        if payload.startswith("NETPROBE "):
+            _, nonce, phase = payload.split()
+            return (
+                f"NETWORK_PROBE nonce={nonce} phase={phase} peer_denied=1 toy_http=0 "
+                "alternate_denied=1 icmp_denied=1 egress_denied=0 egress_reason=default_route orchestrator_denied=1\n"
+            )
+        return original_exchange(socket_path, payload, timeout_seconds=timeout_seconds)
+
+    host.control_exchange = default_route_witness  # type: ignore[method-assign]
+
+    with pytest.raises(RunnerPreflightFailed) as error:
+        ProductionRunnerBackend(provider).rehearse(
+            match_id="kvm-blue-default-route-witness", runner_names=("atlas", "borealis")
+        )
+
+    assert error.value.reason_code == "LOCAL_KVM_BLUE_EGRESS_DEFAULT_ROUTE_WITNESS_FAILED"
 
 
 def test_local_kvm_waits_for_identity_exit_before_checking_the_overlay(tmp_path: Path) -> None:
@@ -478,7 +501,7 @@ def test_subprocess_host_returns_a_complete_netprobe_frame_without_waiting_for_e
     response = (
         b"NETWORK_PROBE nonce=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "
         b"phase=blue peer_denied=1 toy_http=0 alternate_denied=1 icmp_denied=1 "
-        b"egress_denied=1 orchestrator_denied=1\n"
+        b"egress_denied=1 egress_reason=blocked orchestrator_denied=1\n"
     )
 
     def serve() -> None:
