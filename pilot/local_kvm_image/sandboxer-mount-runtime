@@ -6,14 +6,24 @@ printf 'SANDBOXER_RUNTIME_BOOTSTRAP\n' > /dev/ttyS0
 mountpoint -q /run || mount -t tmpfs -o rw,nosuid,nodev,mode=0755 tmpfs /run
 mountpoint -q /tmp || mount -t tmpfs -o rw,nosuid,nodev,noexec,mode=1777 tmpfs /tmp
 printf 'SANDBOXER_RUNTIME_MOUNTS_READY\n' > /dev/ttyS0
+route_marker() {
+    if ip route show default | grep -q .; then
+        printf 'SANDBOXER_ROUTE_PRESENT_%s\n' "$1" > /dev/ttyS0
+    else
+        printf 'SANDBOXER_ROUTE_ABSENT_%s\n' "$1" > /dev/ttyS0
+    fi
+}
 printf 'SANDBOXER_STAGE_SETUP\n' > /dev/ttyS0
 /usr/local/libexec/sandboxer-setup > /dev/ttyS0 2>&1 || { printf 'SANDBOXER_SETUP_FAILED\n' > /dev/ttyS0; exit 1; }
+route_marker AFTER_SETUP
 printf 'SANDBOXER_STAGE_TOY\n' > /dev/ttyS0
 start-stop-daemon --start --background --make-pidfile --pidfile /run/sandboxer-toy.pid --exec /usr/local/libexec/sandboxer-toy || {
     printf 'SANDBOXER_TOY_FAILED\n' > /dev/ttyS0
     exit 1
 }
+route_marker AFTER_TOY
 printf 'SANDBOXER_STAGE_CONTROL\n' > /dev/ttyS0
+route_marker BEFORE_CONTROL
 start-stop-daemon --start --background --make-pidfile --pidfile /run/sandboxer-control.pid --exec /usr/local/libexec/sandboxer-control || {
     printf 'SANDBOXER_CONTROL_FAILED\n' > /dev/ttyS0
     exit 1
