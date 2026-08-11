@@ -1,0 +1,12 @@
+#!/bin/ash
+# OpenRC itself needs mutable run-state before it can process the default
+# runlevel. This runs from Alpine inittab immediately after the read-only root
+# is mounted and before OpenRC starts.
+printf 'SANDBOXER_RUNTIME_BOOTSTRAP\n' > /dev/ttyS0
+mountpoint -q /run || mount -t tmpfs -o rw,nosuid,nodev,mode=0755 tmpfs /run
+mountpoint -q /tmp || mount -t tmpfs -o rw,nosuid,nodev,noexec,mode=1777 tmpfs /tmp
+printf 'SANDBOXER_RUNTIME_MOUNTS_READY\n' > /dev/ttyS0
+# Alpine's default runlevel is intentionally best-effort on a read-only cloud
+# root. Start the preinstalled OpenRC handler explicitly after its mutable
+# runtime state exists; the later runlevel transition is then idempotent.
+/etc/init.d/sandboxer-runner start > /dev/ttyS0 2>&1 || printf 'SANDBOXER_RUNNER_START_FAILED\n' > /dev/ttyS0

@@ -26,13 +26,16 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert manifest["template_sha256"]["sandboxer-control"] == hashlib.sha256(control.encode()).hexdigest()
     assert "cloud-init.disabled" in provision
     assert "adduser -D -H -u 1001" in provision
+    assert "sandboxer-mount-runtime" in provision
     assert "busybox httpd" in (rendered / "sandboxer-toy").read_text()
     assert "PROBE_OK" in control and "NETWORK_PROBE" in control
     assert "sandboxer_no_credentials" in control and "sandboxer_private_mounts" in control
     setup = (rendered / "sandboxer-setup").read_text()
+    bootstrap = (rendered / "sandboxer-mount-runtime").read_text()
     assert "/workspace" in setup
     assert "ip addr add \"$SANDBOXER_IP/24\" dev eth0" in setup
     assert "ip route del default" in setup
+    assert "/etc/init.d/sandboxer-runner start" in bootstrap
 
 
 def test_image_builder_plan_binds_the_exact_profile_to_its_output_digest_path(tmp_path: Path) -> None:

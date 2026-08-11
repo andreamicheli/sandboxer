@@ -6,6 +6,7 @@ adduser -D -H -u 1001 -s /bin/ash competitor
 passwd -l competitor
 install -d -m 0755 /usr/local/libexec
 install -m 0755 /run/sandboxer-build/sandboxer-common /usr/local/libexec/sandboxer-common
+install -m 0755 /run/sandboxer-build/sandboxer-mount-runtime /usr/local/libexec/sandboxer-mount-runtime
 install -m 0755 /run/sandboxer-build/sandboxer-setup /usr/local/libexec/sandboxer-setup
 install -m 0755 /run/sandboxer-build/sandboxer-toy /usr/local/libexec/sandboxer-toy
 install -m 0755 /run/sandboxer-build/sandboxer-control /usr/local/libexec/sandboxer-control
@@ -14,8 +15,13 @@ rc-update add sandboxer-runner default
 mkdir -p /workspace
 chown competitor:competitor /workspace
 chmod 0700 /workspace
+# OpenRC needs mutable state even though the runtime root disk is read-only.
+# These mounts are runtime RAM state, never a host mount or Runner workspace.
+sed -i '1i::sysinit:/usr/local/libexec/sandboxer-mount-runtime' /etc/inittab
 touch /etc/cloud/cloud-init.disabled
 apk info -vv | sort > /etc/sandboxer-image-packages.txt
 printf 'SANDBOXER_BUILD_OK\n' > /dev/ttyS0
 sync
-poweroff -f
+# The promoted image must not need ext4 journal recovery at runtime, because
+# the Runner attaches its root disk read-only. This is deliberately graceful.
+poweroff

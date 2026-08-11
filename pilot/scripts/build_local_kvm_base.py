@@ -26,6 +26,7 @@ BASE_SHA256 = "6e2e6fe0572b6632527f268d3659e8fccebda4e1ee470fafe2c4d7b85b6a4df6"
 IMAGE_DIRECTORY = Path(__file__).parents[1] / "local_kvm_image"
 TEMPLATE_NAMES = (
     "sandboxer-common",
+    "sandboxer-mount-runtime",
     "sandboxer-setup",
     "sandboxer-toy",
     "sandboxer-control",
