@@ -22,7 +22,7 @@ from sandboxer_v0.local_kvm import (
     SocketWitnessStage,
     SubprocessLocalKvmHost,
 )
-from sandboxer_v0.local_kvm_control import parse_control
+from sandboxer_v0.local_kvm_control import ControlProbe, parse_control
 from sandboxer_v0.runner_backend import PreflightWitnessFailed, ProductionRunnerBackend, ProvisioningFailed, RunnerPreflightFailed
 
 
@@ -821,6 +821,19 @@ def test_local_kvm_serial_failure_evidence_is_allowlisted_external_and_survives_
     provider.destroy(runners[1])
     assert artifact.exists()
     assert not record.root.exists()
+
+
+def test_local_kvm_unknown_route_marker_fails_closed_and_captures_scoped_stages(tmp_path: Path, monkeypatch) -> None:
+    provider, _host = configured_provider(tmp_path)
+    runners = provider.provision("kvm-unknown-route", ("atlas", "borealis"))
+    record = provider._records[runners[0].runner_id]
+    (record.root / "serial.log").write_text("SANDBOXER_ROUTE_MARKER_UNAVAILABLE\nsecret\n", encoding="ascii")
+    probe = ControlProbe("n", 1001, "11111111-1111-1111-1111-111111111111", True, True, "absent", "unknown", 1)
+    monkeypatch.setattr(provider, "_control_probe", lambda _record: probe)
+    with pytest.raises(PreflightWitnessFailed, match="LOCAL_KVM_BLUE_ROUTE_MARKER_UNAVAILABLE"):
+        provider.probe(runners)
+    artifact = tmp_path / "evidence" / f"{hashlib.sha256(runners[0].runner_id.encode()).hexdigest()[:16]}.serial-stages"
+    assert artifact.read_text() == "SANDBOXER_ROUTE_MARKER_UNAVAILABLE\n"
 
 
 def test_runtime_metadata_never_asks_cloud_init_to_write_the_runner_root(tmp_path: Path) -> None:
