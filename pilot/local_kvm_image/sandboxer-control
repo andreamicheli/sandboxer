@@ -29,25 +29,41 @@ has_default_route() {
     /bin/busybox timeout -s KILL 1 ip route show default | grep -q .
 }
 
+network_stage() {
+    # Fixed labels only: serial evidence locates a stalled witness without
+    # disclosing addresses, requests, service contents, or the nonce.
+    printf 'SANDBOXER_NETPROBE_STAGE=%s\n' "$1" >> /dev/ttyS0 2>/dev/null || true
+}
+
 network_proof() {
     phase="$1"
+    # Blue has four one-second TCP attempts plus a two-second ICMP attempt;
+    # Red replaces one TCP attempt with a three-second HTTP request.  Both
+    # paths are therefore bounded below the host's 12-second control deadline.
+    network_stage start
     peer_denied=0
     toy_http=0
+    network_stage peer
     if test "$phase" = blue; then
         tcp_connect "$SANDBOXER_PEER_IP" 8080 || peer_denied=1
     else
         tcp_http "$SANDBOXER_PEER_IP" 8080 && toy_http=1
     fi
     alternate_denied=0
+    network_stage alternate
     tcp_connect "$SANDBOXER_PEER_IP" 8081 || alternate_denied=1
     icmp_denied=0
+    network_stage icmp
     icmp_probe "$SANDBOXER_PEER_IP" || icmp_denied=1
     egress_denied=0
+    network_stage egress
     if ! has_default_route && ! tcp_connect 198.51.100.1 81; then
         egress_denied=1
     fi
     orchestrator_denied=0
+    network_stage orchestrator
     tcp_connect 10.77.0.1 1 || orchestrator_denied=1
+    network_stage emit
     printf 'NETWORK_PROBE nonce=%s phase=%s peer_denied=%s toy_http=%s alternate_denied=%s icmp_denied=%s egress_denied=%s orchestrator_denied=%s\n' \
         "$SANDBOXER_NONCE" "$phase" "$peer_denied" "$toy_http" "$alternate_denied" "$icmp_denied" "$egress_denied" "$orchestrator_denied"
 }

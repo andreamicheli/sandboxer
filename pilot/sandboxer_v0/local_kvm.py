@@ -247,6 +247,7 @@ class SubprocessLocalKvmHost:
         return SocketWitnessResult(stage, None if stage is SocketWitnessStage.SUCCESS and numeric_errno == 0 else numeric_errno)
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
+        network_probe = payload.startswith("NETPROBE ")
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(timeout_seconds)
             client.connect(os.fspath(socket_path))
@@ -259,7 +260,12 @@ class SubprocessLocalKvmHost:
                     break
                 chunks.append(chunk)
                 received += len(chunk)
-                if b"PROBE_OK" in b"".join(chunks):
+                response = b"".join(chunks)
+                # The guest closes its virtio port between requests, but the
+                # QEMU chardev socket can remain open while it immediately
+                # reopens the port.  NETPROBE is a single newline-framed
+                # response, so EOF is not its completion signal.
+                if b"PROBE_OK" in response or (network_probe and b"\n" in response):
                     break
             if received > _MAX_CONTROL_RESPONSE:
                 raise RuntimeError("CONTROL_RESPONSE_TOO_LARGE")

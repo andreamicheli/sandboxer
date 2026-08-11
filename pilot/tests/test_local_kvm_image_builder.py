@@ -69,6 +69,7 @@ def test_image_builder_renders_sanitized_and_bounded_network_probes(tmp_path: Pa
     assert "nc -z" not in control
     assert "/bin/busybox timeout -s KILL 1 /bin/busybox nc -w 1 \"$1\" \"$2\"" in control
     assert "/bin/busybox timeout -s KILL 2 ping -c 1 -W 1 \"$1\"" in control
+    assert "SANDBOXER_NETPROBE_STAGE=" in control
     assert 'tcp_connect "$SANDBOXER_PEER_IP" 8080 || peer_denied=1' in control
     assert 'tcp_http "$SANDBOXER_PEER_IP" 8080 && toy_http=1' in control
     assert 'tcp_connect "$SANDBOXER_PEER_IP" 8081 || alternate_denied=1' in control
@@ -78,7 +79,7 @@ def test_image_builder_renders_sanitized_and_bounded_network_probes(tmp_path: Pa
     assert "wget -q -T 2 -O /dev/null http://198.51.100.1:81/" not in control
 
 
-def test_rendered_guest_control_returns_bounded_active_netprobe_then_next_protocol_message(tmp_path: Path) -> None:
+def test_rendered_guest_control_bounds_hanging_netprobe_subcommands_and_keeps_the_protocol_live(tmp_path: Path) -> None:
     """The immutable handler must not let one network witness stall virtio I/O."""
     rendered = tmp_path / "rendered"
     subprocess.run(
@@ -107,11 +108,15 @@ date() { printf '%s\\n' 1720000000; }
     master, slave = pty.openpty()
     tty.setraw(slave)
     control_port = os.ttyname(slave)
+    stage_log = tmp_path / "netprobe-stages.log"
     test_control = tmp_path / "sandboxer-control"
     test_control.write_text(
         (rendered / "sandboxer-control").read_text(encoding="utf-8")
         .replace("/usr/local/libexec/sandboxer-common", f"{libexec}/sandboxer-common")
-        .replace("PORT=/dev/virtio-ports/org.sandboxer.control", f"PORT={control_port}"),
+        .replace("PORT=/dev/virtio-ports/org.sandboxer.control", f"PORT={control_port}")
+        .replace("/bin/busybox nc -w 1 \"$1\" \"$2\" </dev/null >/dev/null 2>&1", "/bin/busybox sleep 30")
+        .replace("ping -c 1 -W 1 \"$1\" >/dev/null 2>&1", "/bin/busybox sleep 30")
+        .replace("> /dev/ttyS0", f"> {stage_log}"),
         encoding="utf-8",
     )
     process = subprocess.Popen(
@@ -122,18 +127,27 @@ date() { printf '%s\\n' 1720000000; }
         started = time.monotonic()
         assert process.poll() is None, process.stderr.read()
         os.write(master, b"NETPROBE aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blue\n")
-        response = _read_protocol_line(master, timeout_seconds=10)
-        assert time.monotonic() - started < 10
+        response = _read_protocol_line(master, timeout_seconds=8)
+        assert time.monotonic() - started < 8
         proof = parse_network_proof(response, "a" * 64, "blue")
         assert proof.peer_denied and proof.alternate_denied and proof.icmp_denied
         # The host test process still has its own default route, so it cannot
         # assert the egress verdict.  It does prove that the guest emits the
         # complete typed witness and immediately accepts the next command.
         assert proof.orchestrator_denied and not proof.toy_http
+        assert stage_log.read_text(encoding="ascii").splitlines() == [
+            "SANDBOXER_NETPROBE_STAGE=start",
+            "SANDBOXER_NETPROBE_STAGE=peer",
+            "SANDBOXER_NETPROBE_STAGE=alternate",
+            "SANDBOXER_NETPROBE_STAGE=icmp",
+            "SANDBOXER_NETPROBE_STAGE=egress",
+            "SANDBOXER_NETPROBE_STAGE=orchestrator",
+            "SANDBOXER_NETPROBE_STAGE=emit",
+        ]
 
         os.write(master, b"PROBE aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")
         ready = _read_protocol_line(master, timeout_seconds=1, minimum_lines=2)
-        assert time.monotonic() - started < 11
+        assert time.monotonic() - started < 9
         assert parse_control(ready, "a" * 64, require_probe=True).uid == 1001
     finally:
         process.terminate()

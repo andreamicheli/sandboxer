@@ -5,7 +5,9 @@ import hashlib
 import io
 import json
 import os
+import socket
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -415,6 +417,47 @@ def test_subprocess_host_bounds_and_sanitizes_qemu_stderr_on_immediate_exit(monk
         raise AssertionError("an immediate QEMU exit must preserve bounded diagnostics")
 
     assert diagnostic.stat().st_size <= 1024
+
+
+def test_subprocess_host_returns_a_complete_netprobe_frame_without_waiting_for_eof(tmp_path: Path) -> None:
+    """Virtio guest port reopening must not make the host lose a complete proof."""
+    socket_path = tmp_path / "control.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    listener.listen(1)
+    request_received = threading.Event()
+    release_connection = threading.Event()
+    request: list[bytes] = []
+    response = (
+        b"NETWORK_PROBE nonce=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "
+        b"phase=blue peer_denied=1 toy_http=0 alternate_denied=1 icmp_denied=1 "
+        b"egress_denied=1 orchestrator_denied=1\n"
+    )
+
+    def serve() -> None:
+        connection, _ = listener.accept()
+        with connection:
+            request.append(connection.recv(4096))
+            connection.sendall(response)
+            request_received.set()
+            release_connection.wait(timeout=2)
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    try:
+        actual = SubprocessLocalKvmHost().control_exchange(
+            socket_path,
+            "NETPROBE aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blue\n",
+            timeout_seconds=0.1,
+        )
+    finally:
+        release_connection.set()
+        thread.join(timeout=2)
+        listener.close()
+
+    assert request_received.is_set()
+    assert request == [b"NETPROBE aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blue\n"]
+    assert actual == response.decode("ascii")
 
 
 def test_subprocess_host_socket_witness_forks_and_removes_its_private_probe(monkeypatch, tmp_path: Path) -> None:
