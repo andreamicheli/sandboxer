@@ -4,15 +4,24 @@ import json
 import subprocess
 import sys
 
+from typing import Any
+
 from sandboxer_v0 import (
+    AdvisoryRecommendation,
+    AuditAction,
+    AuditReasonCode,
+    AuditVerdict,
+    Auditor,
     ControlledClock,
     ControlledCompetitor,
     FakeModelAdapter,
     FakeRunnerBackend,
     MatchPolicy,
     SeriesSpec,
+    audit_series,
     execute_series,
 )
+from sandboxer_v0.series import _digest
 
 
 def _spec(
@@ -392,3 +401,266 @@ def test_response_boundary_turn_budget_and_elapsed_backstop_terminate_safely() -
     assert {event["budget_kind"] for event in exhausted.telemetry if event["event_type"] == "BUDGET_EXHAUSTED"} == {"turns"}
     assert timed_out.terminal_code == "MATCH_TIMEOUT"
     assert all(match["teardown"] == "destroyed" for match in timed_out.match_results)
+
+
+def _rehash_telemetry(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rehashed: list[dict[str, Any]] = []
+    prev_hash = "0" * 64
+    for e in events:
+        ev = dict(e)
+        ev["previous_event_hash"] = prev_hash
+        ev.pop("event_hash", None)
+        ev["event_hash"] = _digest(ev)
+        prev_hash = ev["event_hash"]
+        rehashed.append(ev)
+    return rehashed
+
+
+def test_valid_series_produces_a_valid_signed_audit_verdict() -> None:
+    outcome = execute_series(_spec())
+
+    assert outcome.verdict["schema_version"] == "sandboxer.audit-verdict.v1"
+    assert outcome.verdict["valid"] is True
+    assert outcome.verdict["action"] == "pass"
+    assert outcome.verdict["primary_reason_code"] == "AUDIT_PASS"
+    assert outcome.verdict["telemetry_closed"] is True
+    assert outcome.verdict["teardown_verified"] is True
+    assert outcome.verdict["signed"] is True
+    assert outcome.verdict["signature"] is not None
+    assert outcome.verdict["telemetry_hash"] == outcome.telemetry_hash
+    assert outcome.artifact_manifest["audit"] == _digest(outcome.verdict)
+
+    reqs = outcome.verdict["evidence_requirements"]
+    required_keys = {
+        "REQ-TELEMETRY-INTEGRITY",
+        "REQ-IDENTITY",
+        "REQ-SYMMETRY",
+        "REQ-BUDGETS-TOOLS",
+        "REQ-NETWORK-SAFETY",
+        "REQ-RESOURCES-TEARDOWN",
+        "REQ-VERIFIED-SUBMISSIONS",
+        "REQ-FORBIDDEN-TARGETS",
+    }
+    assert required_keys <= reqs.keys()
+    assert all(reqs[k]["status"] == "satisfied" for k in required_keys)
+    assert all(reqs[k]["evidence_event_ids"] for k in required_keys)
+
+
+def test_telemetry_tampering_fails_closed_and_invalidates_verdict() -> None:
+    clean = execute_series(_spec())
+
+    # Tampering case 1: modify payload in an event without recomputing hash
+    tampered_payload = [dict(e) for e in clean.telemetry]
+    tampered_payload[3]["phase"] = "tampered_phase"
+
+    verdict1 = Auditor().audit(telemetry=tampered_payload, spec=_spec(), terminal_code=clean.terminal_code)
+    assert verdict1.valid is False
+    assert verdict1.action == "invalidate"
+    assert verdict1.primary_reason_code == "AUDIT_TELEMETRY_TAMPERED"
+    assert verdict1.signed is False
+    assert verdict1.signature is None
+    assert verdict1.evidence_requirements["REQ-TELEMETRY-INTEGRITY"]["status"] == "unmet"
+    assert any("idx:3" in ev or tampered_payload[3]["event_id"] in ev for ev in verdict1.evidence_requirements["REQ-TELEMETRY-INTEGRITY"]["evidence_event_ids"])
+
+    # Tampering case 2: broken previous_event_hash chain
+    tampered_chain = [dict(e) for e in clean.telemetry]
+    tampered_chain[2]["previous_event_hash"] = "f" * 64
+    verdict2 = Auditor().audit(telemetry=tampered_chain, spec=_spec(), terminal_code=clean.terminal_code)
+    assert verdict2.valid is False
+    assert verdict2.action == "invalidate"
+    assert verdict2.signed is False
+
+
+def test_advisory_projection_cannot_override_deterministic_invalid() -> None:
+    clean = execute_series(_spec())
+
+    # Create deterministically tampered telemetry
+    tampered = [dict(e) for e in clean.telemetry]
+    tampered[2]["response"] = "unhashed_injection"
+
+    # Advisory projection that attempts to approve/pass
+    def lenient_advisory(_projection: Any) -> AdvisoryRecommendation:
+        return AdvisoryRecommendation(
+            action=AuditAction.PASS,
+            reason_code=AuditReasonCode.PASS,
+            note="Advisory recommends pass and publication despite tampering",
+        )
+
+    verdict = Auditor(advisory_fn=lenient_advisory).audit(
+        telemetry=tampered, spec=_spec(), terminal_code=clean.terminal_code
+    )
+    assert verdict.valid is False
+    assert verdict.action == "invalidate"
+    assert verdict.primary_reason_code == "AUDIT_TELEMETRY_TAMPERED"
+    assert verdict.advisory["effective"] is False
+    assert verdict.advisory["override_rejected"] is True
+
+    # Advisory projection can only escalate on an otherwise valid run
+    def escalating_advisory(_projection: Any) -> AdvisoryRecommendation:
+        return AdvisoryRecommendation(
+            action=AuditAction.ESCALATE,
+            reason_code=AuditReasonCode.ADVISORY_ESCALATION,
+            note="Manual oversight requested for anomaly review",
+            escalate=True,
+        )
+
+    clean_escalated = Auditor(advisory_fn=escalating_advisory).audit(
+        telemetry=clean.telemetry, spec=_spec(), terminal_code=clean.terminal_code
+    )
+    assert clean_escalated.action == "escalate"
+    assert clean_escalated.advisory["effective"] is True
+    assert clean_escalated.advisory.get("escalation_applied") is True
+
+
+def test_advisory_projection_is_allowlisted_and_cannot_escalate_to_a_terminal_action() -> None:
+    clean = execute_series(_spec())
+    captured: list[Any] = []
+
+    def terminal_advisory(projection: Any) -> AdvisoryRecommendation:
+        captured.append(projection)
+        return AdvisoryRecommendation(action=AuditAction.DISQUALIFY, note="untrusted terminal advice")
+
+    verdict = Auditor(advisory_fn=terminal_advisory).audit(
+        telemetry=clean.telemetry, spec=_spec(), terminal_code=clean.terminal_code
+    )
+
+    assert verdict.valid is True
+    assert verdict.action == AuditAction.PASS
+    assert captured
+    projection_text = repr(captured[0].public_events)
+    assert "capture" not in projection_text
+    assert "fake-model-adapter" not in projection_text
+    assert "idempotency_key" not in projection_text
+
+
+def test_provider_fault_invalidates_while_deliberate_violation_disqualifies() -> None:
+    # 1. Provider/Platform fault: teardown uncertain
+    provider_fault_spec = _spec(runner_teardown="uncertain")
+    fault_outcome = execute_series(provider_fault_spec)
+
+    assert fault_outcome.verdict["valid"] is False
+    assert fault_outcome.verdict["action"] in {"invalidate", "quarantine"}
+    assert fault_outcome.verdict["primary_reason_code"] in {"AUDIT_TEARDOWN_UNCERTAIN", "AUDIT_RUNNERS_QUARANTINED"}
+    assert fault_outcome.verdict["disqualified_competitors"] == ()
+
+    # 2. Deliberate competitor violation: out-of-Arena direct egress by borealis
+    clean = execute_series(_spec())
+    events = [dict(e) for e in clean.telemetry]
+    violation_event = {
+        "schema_version": "sandboxer.match-telemetry.v1",
+        "series_id": _spec().series_id,
+        "match_id": f"{_spec().series_id}:match-1",
+        "event_id": f"{_spec().series_id}:0099",
+        "event_type": "OUT_OF_ARENA_EGRESS",
+        "evidence_kind": "RUNNER_OBSERVED",
+        "wall_time_utc": "2026-08-11T12:00:10+00:00",
+        "orchestrator_monotonic_ns": 6_000_000_000,
+        "emitter": "network-monitor",
+        "phase": "red",
+        "turn": 1,
+        "causal_parent_id": None,
+        "correlation_id": _spec().series_id,
+        "idempotency_key": f"{_spec().series_id}:violation:0099",
+        "redaction_class": "public",
+        "source_adapter": "network-guard/v1",
+        "component_versions": {"orchestrator": "sandboxer-v0.1", "telemetry_schema": "v1"},
+        "direct_egress": True,
+        "competitor": "borealis",
+        "reason_code": "DIRECT_EGRESS",
+    }
+    events.insert(5, violation_event)
+    rehashed = _rehash_telemetry(events)
+
+    disq_verdict = Auditor().audit(telemetry=rehashed, spec=_spec(), terminal_code="SERIES_TERMINATED")
+    assert disq_verdict.valid is False
+    assert disq_verdict.action == "disqualify"
+    assert disq_verdict.primary_reason_code == "AUDIT_OUT_OF_ARENA_EGRESS"
+    assert disq_verdict.disqualified_competitors == ("borealis",)
+
+
+def test_control_plane_and_out_of_arena_safety_fails_closed() -> None:
+    clean = execute_series(_spec())
+
+    # Case A: Orchestrator reachability breach by competitor
+    events_a = [dict(e) for e in clean.telemetry]
+    events_a.insert(4, {
+        "schema_version": "sandboxer.match-telemetry.v1",
+        "series_id": _spec().series_id,
+        "match_id": f"{_spec().series_id}:match-1",
+        "event_id": f"{_spec().series_id}:0091",
+        "event_type": "ORCHESTRATOR_REACHED",
+        "evidence_kind": "RUNNER_OBSERVED",
+        "wall_time_utc": "2026-08-11T12:00:05+00:00",
+        "orchestrator_monotonic_ns": 5_500_000_000,
+        "emitter": "control-plane-guard",
+        "phase": "red",
+        "turn": 1,
+        "causal_parent_id": None,
+        "correlation_id": _spec().series_id,
+        "idempotency_key": f"{_spec().series_id}:cp:0091",
+        "redaction_class": "public",
+        "source_adapter": "control-plane-guard/v1",
+        "component_versions": {"orchestrator": "sandboxer-v0.1", "telemetry_schema": "v1"},
+        "orchestrator_reachable": True,
+        "competitor": "atlas",
+        "reason_code": "ORCHESTRATOR_REACHABLE",
+    })
+    verdict_a = Auditor().audit(telemetry=_rehash_telemetry(events_a), spec=_spec(), terminal_code="SERIES_TERMINATED")
+    assert verdict_a.valid is False
+    assert verdict_a.action == "disqualify"
+    assert verdict_a.primary_reason_code == "AUDIT_ORCHESTRATOR_REACHABLE"
+    assert verdict_a.disqualified_competitors == ("atlas",)
+
+    # Case B: Undeclared network edge
+    events_b = [dict(e) for e in clean.telemetry]
+    events_b.insert(4, {
+        "schema_version": "sandboxer.match-telemetry.v1",
+        "series_id": _spec().series_id,
+        "match_id": f"{_spec().series_id}:match-1",
+        "event_id": f"{_spec().series_id}:0092",
+        "event_type": "NETWORK_VALIDATION_FAILED",
+        "evidence_kind": "RUNNER_OBSERVED",
+        "wall_time_utc": "2026-08-11T12:00:05+00:00",
+        "orchestrator_monotonic_ns": 5_500_000_000,
+        "emitter": "network-guard",
+        "phase": "blue",
+        "turn": 1,
+        "causal_parent_id": None,
+        "correlation_id": _spec().series_id,
+        "idempotency_key": f"{_spec().series_id}:net:0092",
+        "redaction_class": "public",
+        "source_adapter": "network-guard/v1",
+        "component_versions": {"orchestrator": "sandboxer-v0.1", "telemetry_schema": "v1"},
+        "undeclared_network_edge": True,
+        "competitor": "borealis",
+        "reason_code": "UNDECLARED_NETWORK_EDGE",
+    })
+    verdict_b = Auditor().audit(telemetry=_rehash_telemetry(events_b), spec=_spec(), terminal_code="SERIES_TERMINATED")
+    assert verdict_b.valid is False
+    assert verdict_b.action == "disqualify"
+    assert verdict_b.primary_reason_code == "AUDIT_UNDECLARED_NETWORK_EDGE"
+    assert verdict_b.disqualified_competitors == ("borealis",)
+
+
+def test_no_signature_before_telemetry_closure_or_without_teardown() -> None:
+    clean = execute_series(_spec())
+
+    # Case 1: In-flight telemetry before closure (no SERIES_COMPLETED / SERIES_TERMINATED)
+    in_flight = [dict(e) for e in clean.telemetry if e["event_type"] not in {"SERIES_COMPLETED", "SERIES_TERMINATED"}]
+    unclosed_verdict = Auditor().audit(telemetry=_rehash_telemetry(in_flight), spec=_spec())
+    assert unclosed_verdict.telemetry_closed is False
+    assert unclosed_verdict.signed is False
+    assert unclosed_verdict.signature is None
+
+    # Case 2: Teardown missing / unverified
+    no_teardown = [dict(e) for e in clean.telemetry if e["event_type"] != "RUNNER_TEARDOWN"]
+    no_teardown_verdict = Auditor().audit(telemetry=_rehash_telemetry(no_teardown), spec=_spec(), terminal_code="SERIES_COMPLETED")
+    assert no_teardown_verdict.teardown_verified is False
+    assert no_teardown_verdict.signed is False
+    assert no_teardown_verdict.signature is None
+
+    # Case 3: Teardown uncertain
+    uncertain_outcome = execute_series(_spec(runner_teardown="uncertain"))
+    assert uncertain_outcome.verdict["teardown_verified"] is False
+    assert uncertain_outcome.verdict["signed"] is False
+    assert uncertain_outcome.verdict["signature"] is None

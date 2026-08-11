@@ -11,6 +11,7 @@ from typing import Any
 
 from .calibration import diagnose_dry_run
 from .blue_briefs import BlueBrief, brief_manifest, select_blue_briefs
+from .auditor import audit_series
 
 
 def _digest(value: object) -> str:
@@ -142,6 +143,7 @@ class ReleaseBundle:
     broadcast_manifest: dict[str, Any]
     quarantined_runners: tuple[str, ...]
     calibration: dict[str, Any]
+    verdict: dict[str, Any] = field(default_factory=dict)
 
 
 class _Telemetry:
@@ -295,10 +297,18 @@ def _calibration(
 
 def _bundle(
     *, spec: SeriesSpec, terminal_code: str, winner: str | None, results: list[dict[str, Any]], telemetry: _Telemetry,
-    quarantined: tuple[str, ...] = (),
+    quarantined: tuple[str, ...] = (), verdict: dict[str, Any] | None = None,
 ) -> ReleaseBundle:
     telemetry_events = tuple(telemetry.events)
     telemetry_hash = _digest(telemetry_events)
+    if verdict is None:
+        verdict = audit_series(
+            spec=spec,
+            telemetry=telemetry_events,
+            terminal_code=terminal_code,
+            results=results,
+            quarantined=quarantined,
+        ).to_dict()
     calibration = _calibration(
         telemetry_events,
         spec.match_policy,
@@ -306,7 +316,7 @@ def _bundle(
         provider_credit_allowance=spec.command_code_credit_allowance,
         minimum_simulated_duration_seconds=spec.minimum_simulated_duration_seconds,
     )
-    eligible = terminal_code == "SERIES_COMPLETED"
+    eligible = terminal_code == "SERIES_COMPLETED" and verdict.get("valid", False)
     replay = {"schema": "sandboxer.replay.v1", "source_telemetry": telemetry_hash, "matches": len(results)}
     score_wins = {competitor.public_name: sum(result["winner"] == competitor.public_name for result in results) for competitor in spec.competitors}
     score_proof = {
@@ -330,11 +340,11 @@ def _bundle(
         "replay": _digest(replay),
         "report": _digest(report),
         "broadcast": _digest(broadcast),
-        "audit": _digest({"terminal_code": terminal_code, "matches": results}),
+        "audit": _digest(verdict),
     }
     bundle_hash = _digest({"spec": asdict(spec), "terminal_code": terminal_code, "winner": winner, "manifest": artifact_manifest, "calibration": calibration})
     artifact_manifest["release_bundle"] = bundle_hash
-    return ReleaseBundle(eligible, terminal_code, winner, len(results), tuple(results), telemetry_events, telemetry_hash, artifact_manifest, bundle_hash, replay, report, broadcast, quarantined, calibration)
+    return ReleaseBundle(eligible, terminal_code, winner, len(results), tuple(results), telemetry_events, telemetry_hash, artifact_manifest, bundle_hash, replay, report, broadcast, quarantined, calibration, verdict)
 
 
 class _LifecycleStore:
@@ -429,6 +439,13 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
             reason_code=code,
             winner=winner,
         )
+        verdict = audit_series(
+            spec=spec,
+            telemetry=telemetry.events,
+            terminal_code=code,
+            results=results,
+            quarantined=quarantined,
+        ).to_dict()
         return _bundle(
             spec=spec,
             terminal_code=code,
@@ -436,6 +453,7 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
             results=results,
             telemetry=telemetry,
             quarantined=quarantined,
+            verdict=verdict,
         )
 
     ordered_briefs = _brief_order(spec.seed)

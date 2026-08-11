@@ -25,6 +25,16 @@ from .arena_safety import (
     TeardownEvidence,
     TeardownState,
 )
+from .auditor import (
+    AdvisoryRecommendation,
+    AuditAction,
+    AuditFinding,
+    AuditReasonCode,
+    AuditVerdict,
+    Auditor,
+    RedactedProjection,
+    audit_series,
+)
 from .local_kvm import LocalKvmConfig, LocalKvmRunnerProvider, SubprocessLocalKvmHost
 from .runner_backend import ProvisioningFailed
 
@@ -45,6 +55,14 @@ __all__ = [
     "ReconciliationLedger",
     "TeardownEvidence",
     "TeardownState",
+    "AdvisoryRecommendation",
+    "AuditAction",
+    "AuditFinding",
+    "AuditReasonCode",
+    "AuditVerdict",
+    "Auditor",
+    "RedactedProjection",
+    "audit_series",
     "LocalKvmConfig",
     "LocalKvmRunnerProvider",
     "SubprocessLocalKvmHost",
