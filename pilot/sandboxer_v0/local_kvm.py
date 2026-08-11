@@ -437,6 +437,14 @@ class LocalKvmRunnerProvider:
         if match_root.exists():
             raise RuntimeError("MATCH_ARTIFACTS_ALREADY_EXIST")
         match_root.mkdir(parents=True, mode=0o711)
+        # mkdir applies the Orchestrator's umask. The QEMU user needs only
+        # traversal through this host-owned Match root to reach its 0700
+        # Runner root, so restore exactly 0711 rather than widening it.
+        os.chmod(match_root, 0o711)
+        match_state = match_root.stat()
+        if match_state.st_uid != os.geteuid() or stat.S_IMODE(match_state.st_mode) != 0o711:
+            self._remove_root(match_root)
+            raise RuntimeError("MATCH_ROOT_UNSAFE")
         red_namespace, red_bridge = self._network_names(match_id)
         records: list[_RunnerRecord] = []
         blue_namespaces: list[str] = []

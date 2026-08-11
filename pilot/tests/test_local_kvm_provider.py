@@ -238,6 +238,22 @@ def test_local_kvm_rehearsal_uses_distinct_overlays_control_and_a_disposable_net
     )
 
 
+def test_local_kvm_match_root_keeps_traversal_permission_under_a_restrictive_umask(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    previous_umask = os.umask(0o077)
+    try:
+        runners = provider.provision("kvm-umask-traversal", ("atlas", "borealis"))
+    finally:
+        os.umask(previous_umask)
+
+    match_root = host.socket_witnesses[0][0].parent
+    state = match_root.stat()
+    assert state.st_mode & 0o777 == 0o711
+    assert state.st_uid == os.geteuid()
+    assert provider.destroy(runners[0]).state is TeardownState.DESTROYED
+    assert provider.destroy(runners[1]).state is TeardownState.DESTROYED
+
+
 def test_local_kvm_refuses_a_preexisting_control_socket_without_unlinking_it(tmp_path: Path) -> None:
     provider, host = configured_provider(tmp_path)
     host.create_stale_control_socket = True
