@@ -35,6 +35,7 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert "/workspace" in setup
     assert "ip addr add \"$SANDBOXER_IP/24\" dev eth0" in setup
     assert "ip route del default" in setup
+    assert setup.index("mount -o rw,nosuid,nodev,noexec /dev/vdb /workspace") < setup.index("mkdir -p /workspace/notes")
     assert "SANDBOXER_STAGE_SETUP" in bootstrap
     assert "SANDBOXER_STAGE_TOY" in bootstrap
     assert "SANDBOXER_STAGE_CONTROL" in bootstrap
