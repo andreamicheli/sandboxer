@@ -26,7 +26,7 @@ icmp_probe() {
 }
 
 has_default_route() {
-    /bin/busybox timeout -s KILL 1 ip route show default | grep -q .
+    /bin/busybox timeout -s KILL 1 /sbin/ip route show default | grep -q .
 }
 
 route_state() {

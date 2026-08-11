@@ -117,6 +117,8 @@ def test_image_builder_renders_sanitized_and_bounded_network_probes(tmp_path: Pa
     control = (rendered / "sandboxer-control").read_text()
     assert "nc -z" not in control
     assert "/bin/busybox timeout -s KILL 1 /bin/busybox nc -w 1 \"$1\" \"$2\"" in control
+    assert "/bin/busybox timeout -s KILL 1 /sbin/ip route show default" in control
+    assert "/bin/busybox timeout -s KILL 1 ip route show default" not in control
     assert "/bin/busybox timeout -s KILL 2 ping -c 1 -W 1 \"$1\"" in control
     assert "SANDBOXER_NETPROBE_STAGE=" in control
     assert 'tcp_connect "$SANDBOXER_PEER_IP" 8080 || peer_denied=1' in control
@@ -172,7 +174,7 @@ date() { printf '%s\\n' 1720000000; }
         .replace("/run/sandboxer-route-at-control", str(route_at_control))
         .replace("/bin/busybox nc -w 1 \"$1\" \"$2\" </dev/null >/dev/null 2>&1", "/bin/busybox sleep 30")
         .replace("ping -c 1 -W 1 \"$1\" >/dev/null 2>&1", "/bin/busybox sleep 30")
-        .replace("/bin/busybox timeout -s KILL 1 ip route show default | grep -q .", "false")
+        .replace("/bin/busybox timeout -s KILL 1 /sbin/ip route show default | grep -q .", "false")
         .replace("> /dev/ttyS0", f"> {stage_log}"),
         encoding="utf-8",
     )
