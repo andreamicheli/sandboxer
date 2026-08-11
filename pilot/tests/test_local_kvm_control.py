@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+import pytest
+
+from sandboxer_v0.local_kvm_control import ControlProbe, ControlReady, parse_control, parse_network_proof
+
+
+NONCE = "a" * 64
+BOOT_ID = "11111111-1111-1111-1111-111111111111"
+
+
+def test_typed_control_probe_requires_exact_measured_fields() -> None:
+    response = (
+        f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials=1 private_mounts=1\n"
+        f"PROBE_OK nonce={NONCE} uid=1001 clock_epoch=1720000000\n"
+    )
+
+    probe = parse_control(response, NONCE, require_probe=True)
+
+    assert isinstance(probe, ControlProbe)
+    assert probe.uid == 1001
+    assert probe.private_mounts is True
+
+
+@pytest.mark.parametrize("invalid", ["yes", "true", "2"])
+def test_control_rejects_non_boolean_or_conflicting_claims(invalid: str) -> None:
+    response = f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials={invalid} private_mounts=1\n"
+
+    with pytest.raises(RuntimeError, match="CONTROL_PROBE_INVALID"):
+        parse_control(response, NONCE, require_probe=False)
+
+    conflicting = (
+        f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials=1 private_mounts=1\n"
+        f"PROBE_OK nonce={NONCE} uid=0 clock_epoch=1720000000\n"
+    )
+    with pytest.raises(RuntimeError, match="CONTROL_PROBE_INVALID"):
+        parse_control(conflicting, NONCE, require_probe=True)
+
+
+def test_ready_without_probe_is_a_distinct_typed_evidence_shape() -> None:
+    ready = parse_control(
+        f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials=1 private_mounts=1\n",
+        NONCE,
+        require_probe=False,
+    )
+
+    assert isinstance(ready, ControlReady)
+    assert not isinstance(ready, ControlProbe)
+
+
+def test_network_proof_requires_all_active_denial_checks() -> None:
+    proof = parse_network_proof(
+        f"NETWORK_PROBE nonce={NONCE} phase=red peer_denied=0 toy_http=1 alternate_denied=1 icmp_denied=1 egress_denied=1 orchestrator_denied=1\n",
+        NONCE, "red",
+    )
+    assert proof.toy_http is True
+    with pytest.raises(RuntimeError, match="NETWORK_PROOF_INVALID"):
+        parse_network_proof(f"NETWORK_PROBE nonce={NONCE} phase=red toy_http=1\n", NONCE, "red")

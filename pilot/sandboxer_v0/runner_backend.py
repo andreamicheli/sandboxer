@@ -71,6 +71,15 @@ class TeardownUncertain(RuntimeError):
         self.quarantined_runner_ids = tuple(item.resource_id for item in teardown_evidence if item.state is TeardownState.QUARANTINED)
 
 
+class ProvisioningFailed(RuntimeError):
+    """A preflight-safe provisioning failure with replayable cleanup evidence."""
+
+    def __init__(self, reason_code: str, teardown_evidence: tuple[TeardownEvidence, ...]) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+        self.teardown_evidence = teardown_evidence
+
+
 class RunnerProvider(Protocol):
     """The sole cloud/runtime extension point; never exposed to a Runner."""
 
