@@ -514,6 +514,10 @@ class LocalKvmRunnerProvider:
             responses = [self._control_probe(record) for record in records]
         except Exception as error:
             raise PreflightWitnessFailed("LOCAL_KVM_CONTROL_WITNESS_UNAVAILABLE") from error
+        if any(item.route_after_setup != "absent" for item in responses):
+            raise PreflightWitnessFailed("LOCAL_KVM_BLUE_ROUTE_AFTER_SETUP_WITNESS_FAILED")
+        if any(item.route_at_control != "absent" for item in responses):
+            raise PreflightWitnessFailed("LOCAL_KVM_BLUE_ROUTE_AT_CONTROL_WITNESS_FAILED")
         try:
             network = self._measure_network(records, Phase.BLUE)
         except PreflightWitnessFailed:

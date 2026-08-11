@@ -138,7 +138,7 @@ class RecordingKvmHost:
         runner_number = len(self.control_requests)
         boot_id = "11111111-1111-1111-1111-111111111111" if runner_number == 1 else "22222222-2222-2222-2222-222222222222"
         nonce = payload.split()[1]
-        return f"READY nonce={nonce} uid=1001 boot_id={boot_id} no_credentials=1 private_mounts=1\nPROBE_OK nonce={nonce} uid=1001 clock_epoch=1720000000\n"
+        return f"READY nonce={nonce} uid=1001 boot_id={boot_id} no_credentials=1 private_mounts=1 route_after_setup=absent route_at_control=absent\nPROBE_OK nonce={nonce} uid=1001 clock_epoch=1720000000\n"
 
     def process_alive(self, pid: int) -> bool:
         return pid in self.alive

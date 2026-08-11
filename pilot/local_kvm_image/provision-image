@@ -28,6 +28,20 @@ touch /etc/cloud/cloud-init.disabled
 # absent.
 rc-update del networking default
 test ! -e /etc/runlevels/default/networking || { printf 'SANDBOXER_NETWORKING_SERVICE_REMAINS\n' > /dev/ttyS0; exit 1; }
+# The marker disables most cloud-init stages, but hotplugd itself has no
+# marker guard. Remove every cloud-init service link and the inherited DHCP
+# interface declaration, so no post-sysinit process can recreate a route.
+rc-update del cloud-init-local boot
+rc-update del cloud-init-hotplugd default
+for service in cloud-init cloud-config cloud-final; do
+    rc-update del "$service" default
+done
+test ! -e /etc/runlevels/boot/cloud-init-local || { printf 'SANDBOXER_CLOUD_INIT_SERVICE_REMAINS\n' > /dev/ttyS0; exit 1; }
+for service in cloud-init cloud-config cloud-final cloud-init-hotplugd; do
+    test ! -e "/etc/runlevels/default/$service" || { printf 'SANDBOXER_CLOUD_INIT_SERVICE_REMAINS\n' > /dev/ttyS0; exit 1; }
+done
+test ! -e /etc/runlevels/default/cloud-init-hotplugd || { printf 'SANDBOXER_CLOUD_INIT_SERVICE_REMAINS\n' > /dev/ttyS0; exit 1; }
+printf '%s\n' 'auto lo' 'iface lo inet loopback' > /etc/network/interfaces
 # The cloud build's user-data may install an authorized key and leaves its
 # seed/instance state behind.  None of that is a valid part of a Runner base.
 # Remove every credential-bearing category before the success marker; the

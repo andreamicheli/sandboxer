@@ -11,7 +11,7 @@ BOOT_ID = "11111111-1111-1111-1111-111111111111"
 
 def test_typed_control_probe_requires_exact_measured_fields() -> None:
     response = (
-        f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials=1 private_mounts=1\n"
+        f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials=1 private_mounts=1 route_after_setup=absent route_at_control=absent\n"
         f"PROBE_OK nonce={NONCE} uid=1001 clock_epoch=1720000000\n"
     )
 
@@ -24,13 +24,13 @@ def test_typed_control_probe_requires_exact_measured_fields() -> None:
 
 @pytest.mark.parametrize("invalid", ["yes", "true", "2"])
 def test_control_rejects_non_boolean_or_conflicting_claims(invalid: str) -> None:
-    response = f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials={invalid} private_mounts=1\n"
+    response = f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials={invalid} private_mounts=1 route_after_setup=absent route_at_control=absent\n"
 
     with pytest.raises(RuntimeError, match="CONTROL_PROBE_INVALID"):
         parse_control(response, NONCE, require_probe=False)
 
     conflicting = (
-        f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials=1 private_mounts=1\n"
+        f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials=1 private_mounts=1 route_after_setup=absent route_at_control=absent\n"
         f"PROBE_OK nonce={NONCE} uid=0 clock_epoch=1720000000\n"
     )
     with pytest.raises(RuntimeError, match="CONTROL_PROBE_INVALID"):
@@ -39,7 +39,7 @@ def test_control_rejects_non_boolean_or_conflicting_claims(invalid: str) -> None
 
 def test_ready_without_probe_is_a_distinct_typed_evidence_shape() -> None:
     ready = parse_control(
-        f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials=1 private_mounts=1\n",
+        f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials=1 private_mounts=1 route_after_setup=absent route_at_control=absent\n",
         NONCE,
         require_probe=False,
     )

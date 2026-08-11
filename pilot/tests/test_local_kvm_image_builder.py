@@ -44,6 +44,9 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     # unit rather than merely hoping the early setup wins a boot race.
     assert "rc-update del networking default" in provision
     assert "test ! -e /etc/runlevels/default/networking" in provision
+    assert "rc-update del cloud-init-hotplugd default" in provision
+    assert "test ! -e /etc/runlevels/default/cloud-init-hotplugd" in provision
+    assert "iface eth0 inet dhcp" not in provision
     assert "sandboxer-mount-runtime" in provision
     assert "busybox httpd" in (rendered / "sandboxer-toy").read_text()
     assert "PROBE_OK" in control and "NETWORK_PROBE" in control
@@ -53,6 +56,7 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert "/workspace" in setup
     assert "ip addr add \"$SANDBOXER_IP/24\" dev eth0" in setup
     assert "ip route del default" in setup
+    assert "sandboxer-route-after-setup" in setup
     assert setup.index("mount -o rw,nosuid,nodev,noexec /dev/vdb /workspace") < setup.index("mkdir -p /workspace/notes")
     assert "SANDBOXER_STAGE_SETUP" in bootstrap
     assert "SANDBOXER_STAGE_TOY" in bootstrap
@@ -105,7 +109,11 @@ sandboxer_private_mounts() { return 0; }
 ip() { return 0; }
 ping() { return 1; }
 id() { printf '%s\\n' 1001; }
-cat() { printf '%s\\n' 11111111-1111-1111-1111-111111111111; }
+cat() {
+    if test "$1" = /run/sandboxer-route-after-setup; then printf '%s\\n' absent
+    else printf '%s\\n' 11111111-1111-1111-1111-111111111111
+    fi
+}
 date() { printf '%s\\n' 1720000000; }
 """,
         encoding="utf-8",

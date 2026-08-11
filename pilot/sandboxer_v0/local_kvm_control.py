@@ -16,6 +16,8 @@ class ControlReady:
     boot_id: str
     no_credentials: bool
     private_mounts: bool
+    route_after_setup: str
+    route_at_control: str
 
 
 @dataclass(frozen=True)
@@ -38,7 +40,7 @@ class NetworkProof:
 
 def parse_control(response: str, nonce: str, *, require_probe: bool) -> ControlReady | ControlProbe:
     fields: dict[str, str] = {}
-    known = {"nonce", "uid", "boot_id", "no_credentials", "private_mounts", "clock_epoch"}
+    known = {"nonce", "uid", "boot_id", "no_credentials", "private_mounts", "route_after_setup", "route_at_control", "clock_epoch"}
     saw_ready = False
     saw_probe = False
     for line in response.splitlines():
@@ -55,7 +57,7 @@ def parse_control(response: str, nonce: str, *, require_probe: bool) -> ControlR
             if not separator or key not in known or (key in fields and fields[key] != value):
                 raise RuntimeError("CONTROL_PROBE_INVALID")
             fields[key] = value
-    required = {"nonce", "uid", "boot_id", "no_credentials", "private_mounts"}
+    required = {"nonce", "uid", "boot_id", "no_credentials", "private_mounts", "route_after_setup", "route_at_control"}
     if require_probe:
         required.add("clock_epoch")
     if not saw_ready or (require_probe and not saw_probe) or required - fields.keys():
@@ -64,10 +66,13 @@ def parse_control(response: str, nonce: str, *, require_probe: bool) -> ControlR
         raise RuntimeError("CONTROL_PROBE_INVALID")
     if fields["no_credentials"] not in {"0", "1"} or fields["private_mounts"] not in {"0", "1"}:
         raise RuntimeError("CONTROL_PROBE_INVALID")
+    if fields["route_after_setup"] not in {"absent", "present"} or fields["route_at_control"] not in {"absent", "present"}:
+        raise RuntimeError("CONTROL_PROBE_INVALID")
     try:
         ready = ControlReady(
             nonce=fields["nonce"], uid=int(fields["uid"]), boot_id=fields["boot_id"],
             no_credentials=fields["no_credentials"] == "1", private_mounts=fields["private_mounts"] == "1",
+            route_after_setup=fields["route_after_setup"], route_at_control=fields["route_at_control"],
         )
         if require_probe:
             return ControlProbe(**ready.__dict__, clock_epoch=int(fields["clock_epoch"]))
