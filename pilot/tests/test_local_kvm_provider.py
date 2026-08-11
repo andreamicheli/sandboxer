@@ -23,7 +23,7 @@ from sandboxer_v0.local_kvm import (
     SubprocessLocalKvmHost,
 )
 from sandboxer_v0.local_kvm_control import parse_control
-from sandboxer_v0.runner_backend import ProductionRunnerBackend, ProvisioningFailed, RunnerPreflightFailed
+from sandboxer_v0.runner_backend import PreflightWitnessFailed, ProductionRunnerBackend, ProvisioningFailed, RunnerPreflightFailed
 
 
 class RecordingKvmHost:
@@ -793,6 +793,34 @@ def test_local_kvm_waits_for_a_bounded_guest_control_bootstrap(tmp_path: Path) -
 
     assert len(host.control_requests) == 2
     assert all(provider.destroy(runner).state is TeardownState.DESTROYED for runner in runners)
+
+
+def test_local_kvm_serial_failure_evidence_is_allowlisted_external_and_survives_teardown(tmp_path: Path, monkeypatch) -> None:
+    provider, _host = configured_provider(tmp_path)
+    runners = provider.provision("kvm-serial-evidence", ("atlas", "borealis"))
+    record = provider._records[runners[0].runner_id]
+    (record.root / "serial.log").write_text(
+        "SANDBOXER_STAGE_SETUP\nOPENAI_API_KEY=do-not-disclose\n"
+        "198.51.100.1 /private/path arbitrary text\nSANDBOXER_CONTROL_FAILED\n",
+        encoding="ascii",
+    )
+    monkeypatch.setattr(
+        provider, "_control_probe",
+        lambda _record: (_ for _ in ()).throw(PreflightWitnessFailed("LOCAL_KVM_CONTROL_INVALID_FRAME")),
+    )
+
+    with pytest.raises(PreflightWitnessFailed, match="LOCAL_KVM_CONTROL_INVALID_FRAME"):
+        provider.probe(runners)
+
+    artifact = tmp_path / "evidence" / f"{hashlib.sha256(runners[0].runner_id.encode()).hexdigest()[:16]}.serial-stages"
+    assert artifact.read_text(encoding="ascii") == "SANDBOXER_STAGE_SETUP\nSANDBOXER_CONTROL_FAILED\n"
+    assert artifact.stat().st_mode & 0o777 == 0o600
+    teardown = provider.destroy(runners[0])
+    assert "SERIAL_STAGE_EVIDENCE" in teardown.evidence
+    assert "serial-stages" not in teardown.evidence
+    provider.destroy(runners[1])
+    assert artifact.exists()
+    assert not record.root.exists()
 
 
 def test_runtime_metadata_never_asks_cloud_init_to_write_the_runner_root(tmp_path: Path) -> None:
