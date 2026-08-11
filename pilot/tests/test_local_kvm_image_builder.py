@@ -26,6 +26,10 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert manifest["template_sha256"]["sandboxer-control"] == hashlib.sha256(control.encode()).hexdigest()
     assert "cloud-init.disabled" in provision
     assert "adduser -D -H -u 1001" in provision
+    assert "rm -rf /root/.ssh /root/.aws /root/.config/gcloud" in provision
+    assert "rm -rf /home/competitor/.ssh /home/competitor/.aws /home/competitor/.config/gcloud" in provision
+    assert "rm -rf /var/lib/cloud /run/sandboxer-build" in provision
+    assert 'test ! -e "$path"' in provision
     assert "sandboxer-mount-runtime" in provision
     assert "busybox httpd" in (rendered / "sandboxer-toy").read_text()
     assert "PROBE_OK" in control and "NETWORK_PROBE" in control
@@ -43,6 +47,25 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert "/usr/local/libexec/sandboxer-toy" in bootstrap
     assert "/usr/local/libexec/sandboxer-control" in bootstrap
     assert "/etc/init.d/sandboxer-runner start" not in bootstrap
+
+
+def test_image_builder_renders_sanitized_and_bounded_network_probes(tmp_path: Path) -> None:
+    rendered = tmp_path / "rendered"
+
+    subprocess.run(
+        [sys.executable, str(BUILDER), "--render-only", str(rendered)],
+        check=True, text=True, capture_output=True,
+    )
+
+    control = (rendered / "sandboxer-control").read_text()
+    assert "/bin/busybox nc -z -w 1 \"$1\" \"$2\"" in control
+    assert 'tcp_connect "$SANDBOXER_PEER_IP" 8080 || peer_denied=1' in control
+    assert 'tcp_http "$SANDBOXER_PEER_IP" 8080 && toy_http=1' in control
+    assert 'tcp_connect "$SANDBOXER_PEER_IP" 8081 || alternate_denied=1' in control
+    assert "tcp_connect 198.51.100.1 81" in control
+    assert "tcp_connect 10.77.0.1 1" in control
+    assert "tcp_http \"$SANDBOXER_PEER_IP\" 8081" not in control
+    assert "wget -q -T 2 -O /dev/null http://198.51.100.1:81/" not in control
 
 
 def test_image_builder_plan_binds_the_exact_profile_to_its_output_digest_path(tmp_path: Path) -> None:

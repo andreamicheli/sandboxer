@@ -12,25 +12,29 @@ tcp_http() {
     /bin/busybox wget -q -T 2 -O /dev/null "http://$1:$2/"
 }
 
+tcp_connect() {
+    /bin/busybox nc -z -w 1 "$1" "$2" >/dev/null 2>&1
+}
+
 network_proof() {
     phase="$1"
     peer_denied=0
     toy_http=0
     if test "$phase" = blue; then
-        tcp_http "$SANDBOXER_PEER_IP" 8080 || peer_denied=1
+        tcp_connect "$SANDBOXER_PEER_IP" 8080 || peer_denied=1
     else
         tcp_http "$SANDBOXER_PEER_IP" 8080 && toy_http=1
     fi
     alternate_denied=0
-    tcp_http "$SANDBOXER_PEER_IP" 8081 || alternate_denied=1
+    tcp_connect "$SANDBOXER_PEER_IP" 8081 || alternate_denied=1
     icmp_denied=0
     ping -c 1 -W 1 "$SANDBOXER_PEER_IP" >/dev/null 2>&1 || icmp_denied=1
     egress_denied=0
-    if test -z "$(ip route show default)" && ! /bin/busybox wget -q -T 2 -O /dev/null http://198.51.100.1:81/; then
+    if test -z "$(ip route show default)" && ! tcp_connect 198.51.100.1 81; then
         egress_denied=1
     fi
     orchestrator_denied=0
-    /bin/busybox nc -z -w 1 10.77.0.1 1 >/dev/null 2>&1 || orchestrator_denied=1
+    tcp_connect 10.77.0.1 1 || orchestrator_denied=1
     printf 'NETWORK_PROBE nonce=%s phase=%s peer_denied=%s toy_http=%s alternate_denied=%s icmp_denied=%s egress_denied=%s orchestrator_denied=%s\n' \
         "$SANDBOXER_NONCE" "$phase" "$peer_denied" "$toy_http" "$alternate_denied" "$icmp_denied" "$egress_denied" "$orchestrator_denied"
 }

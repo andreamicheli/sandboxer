@@ -18,6 +18,16 @@ chmod 0700 /workspace
 # These mounts are runtime RAM state, never a host mount or Runner workspace.
 sed -i '1i::sysinit:/usr/local/libexec/sandboxer-mount-runtime' /etc/inittab
 touch /etc/cloud/cloud-init.disabled
+# The cloud build's user-data may install an authorized key and leaves its
+# seed/instance state behind.  None of that is a valid part of a Runner base.
+# Remove every credential-bearing category before the success marker; the
+# runtime control probe independently repeats this check after boot.
+rm -rf /root/.ssh /root/.aws /root/.config/gcloud
+rm -rf /home/competitor/.ssh /home/competitor/.aws /home/competitor/.config/gcloud
+rm -rf /var/lib/cloud /run/sandboxer-build
+for path in /root/.ssh /root/.aws /root/.config/gcloud /home/competitor/.ssh /home/competitor/.aws /home/competitor/.config/gcloud /var/lib/cloud /run/sandboxer-build; do
+    test ! -e "$path" || { printf 'SANDBOXER_BUILD_SANITIZATION_FAILED\n' > /dev/ttyS0; exit 1; }
+done
 apk info -vv | sort > /etc/sandboxer-image-packages.txt
 printf 'SANDBOXER_BUILD_OK\n' > /dev/ttyS0
 sync
