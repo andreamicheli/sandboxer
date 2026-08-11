@@ -30,10 +30,18 @@ class FakeModelAdapter:
     model_id: str
     responses: tuple[str, ...]
     output_tokens_per_response: int = 25
+    match_responses: tuple[tuple[str, str], ...] = ()
 
-    def response_for(self, phase: str) -> str:
+    def response_for(self, phase: str, *, match_number: int = 1, turn: int = 1) -> str:
+        if self.match_responses and match_number <= len(self.match_responses):
+            responses = self.match_responses[match_number - 1]
+            if phase == "blue":
+                return responses[0]
+            if phase == "red":
+                return responses[1] if turn == 1 else "finish"
         index = {"blue": 0, "red": 1}.get(phase, 0)
-        return self.responses[index] if index < len(self.responses) else "finish"
+        response = self.responses[index] if index < len(self.responses) else "finish"
+        return response if turn == 1 else "finish"
 
 
 @dataclass(frozen=True)
@@ -68,12 +76,15 @@ class MatchPolicy:
     output_token_budget: int
     turn_budget: int
     tool_budget: int
+    elapsed_time_backstop_seconds: int | float = 300
 
     def __post_init__(self) -> None:
         if self.best_of != 3:
             raise ValueError("dry run supports the canonical best-of-3 policy")
         if min(self.output_token_budget, self.turn_budget, self.tool_budget) < 1:
             raise ValueError("all competitive budgets must be positive")
+        if self.elapsed_time_backstop_seconds <= 0:
+            raise ValueError("elapsed time backstop must be positive")
 
 
 @dataclass(frozen=True)
@@ -81,10 +92,17 @@ class FakeRunnerBackend:
     """Controlled Runner port; teardown is explicit so uncertainty is testable."""
 
     teardown: str = "destroy"
+    final_health: tuple[tuple[str, bool], ...] = ()
 
     def __post_init__(self) -> None:
         if self.teardown not in {"destroy", "uncertain", "quarantine"}:
             raise ValueError("unknown fake Runner teardown outcome")
+        names = [name for name, _ in self.final_health]
+        if len(names) != len(set(names)):
+            raise ValueError("final Runner health must declare each Competitor at most once")
+
+    def final_health_for(self, competitor: str) -> bool:
+        return dict(self.final_health).get(competitor, True)
 
 
 @dataclass(frozen=True)
@@ -284,7 +302,22 @@ def _bundle(
     )
     eligible = terminal_code == "SERIES_COMPLETED"
     replay = {"schema": "sandboxer.replay.v1", "source_telemetry": telemetry_hash, "matches": len(results)}
-    report = {"schema": "sandboxer.series-report.v1", "winner": winner, "disclaimer": "experimental benchmark in a simulated CTF Arena"}
+    score_wins = {competitor.public_name: sum(result["winner"] == competitor.public_name for result in results) for competitor in spec.competitors}
+    score_proof = {
+        "schema": "sandboxer.score-proof.v1",
+        "wins": score_wins,
+        "matches": tuple(
+            {
+                "match_number": result["match_number"],
+                "winner": result["winner"],
+                "reason_code": result["reason_code"],
+                "verified_submission_event_ids": result.get("verified_submission_event_ids", ()),
+                "final_health_event_ids": result.get("final_health_event_ids", ()),
+            }
+            for result in results
+        ),
+    }
+    report = {"schema": "sandboxer.series-report.v1", "winner": winner, "disclaimer": "experimental benchmark in a simulated CTF Arena", "score_proof": score_proof}
     broadcast = {"schema": "sandboxer.broadcast-manifest.v1", "source_telemetry": telemetry_hash, "publication_eligible": eligible}
     artifact_manifest = {
         "telemetry": telemetry_hash,
@@ -399,8 +432,76 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
             quarantined=quarantined,
         )
 
-    for number, (brief, _) in enumerate(_brief_order(spec.seed), start=1):
-        roles = spec.competitors if number % 2 else tuple(reversed(spec.competitors))
+    ordered_briefs = _brief_order(spec.seed)
+    initial_roles = spec.competitors if int(_digest({"seed": spec.seed, "role": "match-1"})[0], 16) % 2 == 0 else tuple(reversed(spec.competitors))
+
+    def roles_for(number: int) -> tuple[ControlledCompetitor, ControlledCompetitor]:
+        if number == 1:
+            return initial_roles
+        if number == 2:
+            return tuple(reversed(initial_roles))
+        previous_winner = results[-1]["winner"]
+        if previous_winner is not None:
+            return (
+                next(competitor for competitor in spec.competitors if competitor.public_name != previous_winner),
+                next(competitor for competitor in spec.competitors if competitor.public_name == previous_winner),
+            )
+        # A tied Match has no loser.  Its fresh tie-break Match swaps the prior
+        # public ordering rather than leaking or inventing an internal alias.
+        return tuple(reversed(tuple(next(competitor for competitor in spec.competitors if competitor.public_name == name) for name in results[-1]["roles"])))
+
+    def emit_budget(
+        *, number: int, phase: str, turn: int, competitor: ControlledCompetitor, claim: dict[str, Any], usage: dict[str, dict[str, int]], response: str,
+    ) -> str | None:
+        tools = _tool_calls(response)
+        observed = {"output_tokens": competitor.adapter.output_tokens_per_response, "turns": 1, "tool_calls": tools}
+        telemetry.emit(
+            "BUDGET_OBSERVED", "ORCHESTRATOR_VERIFIED", match_number=number, phase=phase, turn=turn,
+            competitor=competitor.public_name, **observed, cumulative={key: usage[competitor.public_name][key] + value for key, value in observed.items()}, causal_parent_id=claim["event_id"],
+        )
+        limits = {
+            "output_tokens": spec.match_policy.output_token_budget,
+            "turns": spec.match_policy.turn_budget,
+            "tool_calls": spec.match_policy.tool_budget,
+        }
+        for kind, amount in observed.items():
+            usage[competitor.public_name][kind] += amount
+            if usage[competitor.public_name][kind] > limits[kind]:
+                return kind
+        return None
+
+    def collect_round(
+        *, number: int, phase: str, turn: int, active: list[ControlledCompetitor],
+    ) -> list[tuple[ControlledCompetitor, str, dict[str, Any]]]:
+        """Collect a fixture round from one shared pre-round observation state.
+
+        The controlled adapter is synchronous, so this deliberately records
+        coordinated collection rather than claiming provider-level parallelism.
+        No response is processed until every active Competitor has responded.
+        """
+        telemetry.emit(
+            "PHASE_ROUND_OPENED", "ORCHESTRATOR_VERIFIED", match_number=number, phase=phase, turn=turn,
+            competitors=tuple(competitor.public_name for competitor in active), execution_mode="coordinated_rounds",
+            peer_response_visible=False,
+        )
+        collected = [(competitor, competitor.adapter.response_for(phase, match_number=number, turn=turn)) for competitor in active]
+        claims: list[tuple[ControlledCompetitor, str, dict[str, Any]]] = []
+        for competitor, response in collected:
+            claims.append((competitor, response, telemetry.emit(
+                "MODEL_RESPONSE", "MODEL_CLAIMED", match_number=number, emitter="fake-model-adapter", phase=phase,
+                turn=turn, competitor=competitor.public_name, response=response, redaction_class="restricted",
+                source_adapter=competitor.adapter.model_id, peer_response_visible=False,
+            )))
+        return claims
+
+    def close_round(*, number: int, phase: str, turn: int, competitors: list[ControlledCompetitor]) -> None:
+        telemetry.emit(
+            "PHASE_ROUND_CLOSED", "ORCHESTRATOR_VERIFIED", match_number=number, phase=phase, turn=turn,
+            competitors=tuple(competitor.public_name for competitor in competitors), execution_mode="coordinated_rounds",
+        )
+
+    for number, (brief, _) in enumerate(ordered_briefs, start=1):
+        roles = roles_for(number)
         runner_names = tuple(f"{competitor.public_name}-runner-{number}" for competitor in roles)
         match_started = telemetry.emit(
             "MATCH_STARTED",
@@ -417,109 +518,68 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
             runners=runner_names,
             causal_parent_id=match_started["event_id"],
         )
+        usage = {competitor.public_name: {"output_tokens": 0, "turns": 0, "tool_calls": 0} for competitor in roles}
         budget_failure: dict[str, Any] | None = None
-        for competitor in roles:
-            blue = competitor.adapter.response_for("blue")
-            claim = telemetry.emit(
-                "MODEL_RESPONSE",
-                "MODEL_CLAIMED",
-                match_number=number,
-                emitter="fake-model-adapter",
-                phase="blue",
-                turn=1,
-                competitor=competitor.public_name,
-                response=blue,
-                redaction_class="restricted",
-                source_adapter=competitor.adapter.model_id,
-            )
-            telemetry.emit(
-                "RUNNER_HEALTH",
-                "RUNNER_OBSERVED",
-                match_number=number,
-                emitter="fake-runner-backend",
-                phase="blue",
-                competitor=competitor.public_name,
-                healthy=True,
-                causal_parent_id=claim["event_id"],
-                source_adapter="fake-runner-backend/v1",
-            )
-            tools = _tool_calls(blue)
-            telemetry.emit(
-                "BUDGET_OBSERVED",
-                "ORCHESTRATOR_VERIFIED",
-                match_number=number,
-                phase="blue",
-                turn=1,
-                competitor=competitor.public_name,
-                output_tokens=competitor.adapter.output_tokens_per_response,
-                turns=1,
-                tool_calls=tools,
-                causal_parent_id=claim["event_id"],
-            )
-            if competitor.adapter.output_tokens_per_response > spec.match_policy.output_token_budget:
-                budget_failure = {"competitor": competitor.public_name, "budget_kind": "output_tokens"}
-            elif 1 > spec.match_policy.turn_budget:
-                budget_failure = {"competitor": competitor.public_name, "budget_kind": "turns"}
-            elif tools > spec.match_policy.tool_budget:
-                budget_failure = {"competitor": competitor.public_name, "budget_kind": "tool_calls"}
-        if not interview_transitioned:
+        telemetry.emit("PHASE_GATE_OPENED", "ORCHESTRATOR_VERIFIED", match_number=number, phase="blue", competitors=tuple(competitor.public_name for competitor in roles), execution_mode="coordinated_rounds", causal_parent_id=match_started["event_id"])
+        blue_active = list(roles)
+        blue_turn = 1
+        while budget_failure is None and blue_active:
+            round_claims = collect_round(number=number, phase="blue", turn=blue_turn, active=blue_active)
+            for competitor, _, claim in round_claims:
+                telemetry.emit("RUNNER_HEALTH", "RUNNER_OBSERVED", match_number=number, emitter="fake-runner-backend", phase="blue", turn=blue_turn, competitor=competitor.public_name, healthy=True, causal_parent_id=claim["event_id"], source_adapter="fake-runner-backend/v1")
+            for competitor, blue, claim in round_claims:
+                budget_kind = emit_budget(number=number, phase="blue", turn=blue_turn, competitor=competitor, claim=claim, usage=usage, response=blue)
+                if budget_kind is not None and budget_failure is None:
+                    budget_failure = {"competitor": competitor.public_name, "budget_kind": budget_kind, "phase": "blue"}
+            close_round(number=number, phase="blue", turn=blue_turn, competitors=blue_active)
+            blue_active = [competitor for competitor, response, _ in round_claims if "continue" in response.lower()]
+            blue_turn += 1
+        if budget_failure is None and not interview_transitioned:
             transition("INTERVIEW")
             interview_transitioned = True
-        telemetry.emit(
-            "INTERVIEW_RECORDED",
-            "MODEL_CLAIMED",
-            match_number=number,
-            emitter="fake-model-adapter",
-            phase="interview",
-            turn=1,
-            tool_access=False,
-            redaction_class="restricted",
-        )
-        if not red_transitioned:
+        for competitor in (roles if budget_failure is None else ()):
+            telemetry.emit("INTERVIEW_RECORDED", "MODEL_CLAIMED", match_number=number, emitter="fake-model-adapter", phase="interview", turn=1, competitor=competitor.public_name, tool_access=False, opponent_context_included=False, competitive_accounting_included=False, redaction_class="restricted", source_adapter=competitor.adapter.model_id)
+        if budget_failure is None and not red_transitioned:
             transition("RED")
             red_transitioned = True
+        submissions: list[tuple[str, str]] = []
+        finished: set[str] = set()
+        active = list(roles)
+        red_turn = 1
         if budget_failure is None:
-            for competitor in roles:
-                red = competitor.adapter.response_for("red")
-                tools = _tool_calls(red)
-                claim = telemetry.emit(
-                    "MODEL_RESPONSE",
-                    "MODEL_CLAIMED",
-                    match_number=number,
-                    emitter="fake-model-adapter",
-                    phase="red",
-                    turn=1,
-                    competitor=competitor.public_name,
-                    response=red,
-                    redaction_class="restricted",
-                    source_adapter=competitor.adapter.model_id,
-                )
-                telemetry.emit(
-                    "BUDGET_OBSERVED",
-                    "ORCHESTRATOR_VERIFIED",
-                    match_number=number,
-                    phase="red",
-                    turn=1,
-                    competitor=competitor.public_name,
-                    output_tokens=competitor.adapter.output_tokens_per_response,
-                    turns=1,
-                    tool_calls=tools,
-                    causal_parent_id=claim["event_id"],
-                )
-                if competitor.adapter.output_tokens_per_response > spec.match_policy.output_token_budget:
-                    budget_failure = {"competitor": competitor.public_name, "budget_kind": "output_tokens"}
-                elif 1 > spec.match_policy.turn_budget:
-                    budget_failure = {"competitor": competitor.public_name, "budget_kind": "turns"}
-                elif tools > spec.match_policy.tool_budget:
-                    budget_failure = {"competitor": competitor.public_name, "budget_kind": "tool_calls"}
+            telemetry.emit("PHASE_GATE_OPENED", "ORCHESTRATOR_VERIFIED", match_number=number, phase="red", competitors=tuple(competitor.public_name for competitor in roles), execution_mode="coordinated_rounds")
+        while budget_failure is None and active:
+            elapsed = (spec.clock.at(len(telemetry.events))[1] - match_started["orchestrator_monotonic_ns"]) / 1_000_000_000
+            if elapsed > spec.match_policy.elapsed_time_backstop_seconds:
+                budget_failure = {"competitor": None, "budget_kind": "elapsed_time", "reason_code": "MATCH_TIMEOUT"}
+                break
+            round_claims = collect_round(number=number, phase="red", turn=red_turn, active=active)
+            for competitor, red, claim in round_claims:
+                budget_kind = emit_budget(number=number, phase="red", turn=red_turn, competitor=competitor, claim=claim, usage=usage, response=red)
+                if budget_kind is not None and budget_failure is None:
+                    budget_failure = {"competitor": competitor.public_name, "budget_kind": budget_kind, "phase": "red"}
+            close_round(number=number, phase="red", turn=red_turn, competitors=active)
+            if budget_failure is None:
+                next_active: list[ControlledCompetitor] = []
+                for competitor, red, claim in round_claims:
+                    if _capture(red):
+                        submissions.append((competitor.public_name, claim["event_id"]))
+                    elif "finish" in red.lower():
+                        finished.add(competitor.public_name)
+                    else:
+                        next_active.append(competitor)
+                active = next_active
+            red_turn += 1
         if budget_failure is not None:
+            failure_payload = {key: value for key, value in budget_failure.items() if key not in {"reason_code", "phase"}}
+            code = budget_failure.get("reason_code", "COMPETITIVE_BUDGET_EXHAUSTED")
             telemetry.emit(
-                "BUDGET_EXHAUSTED",
+                "MATCH_TIMEOUT" if code == "MATCH_TIMEOUT" else "BUDGET_EXHAUSTED",
                 "ORCHESTRATOR_VERIFIED",
                 match_number=number,
-                phase="red",
-                reason_code="COMPETITIVE_BUDGET_EXHAUSTED",
-                **budget_failure,
+                phase=budget_failure.get("phase", "red"),
+                reason_code=code,
+                **failure_payload,
             )
             telemetry.emit(
                 "RUNNER_TEARDOWN",
@@ -531,12 +591,31 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
                 runners=runner_names,
                 source_adapter="fake-runner-backend/v1",
             )
-            results.append({"match_number": number, "blue_brief": brief, "roles": tuple(competitor.public_name for competitor in roles), "winner": None, "captures": None, "teardown": "destroyed"})
-            telemetry.emit("MATCH_FINISHED", "ORCHESTRATOR_VERIFIED", match_number=number, phase="finalizing", reason_code="COMPETITIVE_BUDGET_EXHAUSTED")
-            return terminal("COMPETITIVE_BUDGET_EXHAUSTED")
-        captures = {competitor.public_name: _capture(competitor.adapter.response_for("red")) for competitor in roles}
-        captured = [name for name, value in captures.items() if value]
-        winner = captured[0] if len(captured) == 1 else None
+            results.append({"match_number": number, "blue_brief": brief, "roles": tuple(competitor.public_name for competitor in roles), "winner": None, "captures": None, "teardown": "destroyed", "reason_code": code})
+            telemetry.emit("MATCH_FINISHED", "ORCHESTRATOR_VERIFIED", match_number=number, phase="finalizing", reason_code=code)
+            return terminal(code)
+        verified_submission_events = []
+        for submission_order, (competitor, claim_id) in enumerate(submissions, start=1):
+            verified_submission_events.append(telemetry.emit("SUBMISSION_VERIFIED", "ORCHESTRATOR_VERIFIED", match_number=number, phase="red", competitor=competitor, claimed_response_event_id=claim_id, submission_order=submission_order, verified=True, synthetic_flag_proof=_digest({"match": number, "competitor": competitor})))
+        captures = {competitor.public_name: any(submitter == competitor.public_name for submitter, _ in submissions) for competitor in roles}
+        captured = [event["competitor"] for event in verified_submission_events]
+        final_health_events = [
+            telemetry.emit("RUNNER_HEALTH", "RUNNER_OBSERVED", match_number=number, emitter="fake-runner-backend", phase="finalizing", competitor=competitor.public_name, healthy=spec.runner_backend.final_health_for(competitor.public_name), probe="controlled-final-functional-health", source_adapter="fake-runner-backend/v1")
+            for competitor in roles
+        ]
+        health = {event["competitor"]: event["healthy"] for event in final_health_events}
+        if len(captured) == 1:
+            winner, reason_code = captured[0], "SOLE_CAPTURE"
+        elif len(captured) == 2 and health[captured[0]] != health[captured[1]]:
+            winner = next(name for name in captured if health[name])
+            reason_code = "DUAL_CAPTURE_HEALTH"
+        elif len(captured) == 2:
+            winner, reason_code = captured[0], "DUAL_CAPTURE_SUBMISSION_ORDER"
+        elif health[roles[0].public_name] != health[roles[1].public_name]:
+            winner = next(competitor.public_name for competitor in roles if health[competitor.public_name])
+            reason_code = "NO_CAPTURE_AVAILABILITY"
+        else:
+            winner, reason_code = None, "EXACT_TIE"
         teardown = "destroyed" if spec.runner_backend.teardown == "destroy" else "quarantined"
         telemetry.emit(
             "RUNNER_TEARDOWN",
@@ -548,22 +627,23 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
             runners=runner_names,
             source_adapter="fake-runner-backend/v1",
         )
-        results.append({"match_number": number, "blue_brief": brief, "roles": tuple(competitor.public_name for competitor in roles), "winner": winner, "captures": captures, "teardown": teardown})
+        results.append({"match_number": number, "blue_brief": brief, "roles": tuple(competitor.public_name for competitor in roles), "winner": winner, "captures": captures, "final_health": health, "submission_order": tuple(captured), "verified_submission_event_ids": tuple(event["event_id"] for event in verified_submission_events), "final_health_event_ids": tuple(event["event_id"] for event in final_health_events), "teardown": teardown, "reason_code": reason_code, "finished": tuple(sorted(finished))})
         telemetry.emit(
             "MATCH_FINISHED",
             "ORCHESTRATOR_VERIFIED",
             match_number=number,
             phase="finalizing",
             winner=winner,
-            reason_code="SOLE_CAPTURE" if winner is not None else "SCORING_DEFERRED",
+            reason_code=reason_code,
         )
         if spec.runner_backend.teardown != "destroy":
             code = "TEARDOWN_UNCERTAIN" if spec.runner_backend.teardown == "uncertain" else "RUNNERS_QUARANTINED"
             return terminal(code, quarantined=runner_names)
         if winner is None:
-            code = "SCORING_RULE_DEFERRED_DUAL_CAPTURE" if len(captured) == 2 else "SCORING_RULE_DEFERRED_NO_CAPTURE"
-            return terminal(code)
+            if number < len(ordered_briefs):
+                telemetry.emit("TIE_BREAK_MATCH_SCHEDULED", "ORCHESTRATOR_VERIFIED", match_number=number, phase="finalizing", next_match_number=number + 1, role_swapped=True)
+            continue
         wins[winner] += 1
         if wins[winner] == 2:
             return terminal("SERIES_COMPLETED", winner=winner)
-    return terminal("NO_UNIQUE_WINNER")
+    return terminal("EXACT_TIE_UNRESOLVED")
