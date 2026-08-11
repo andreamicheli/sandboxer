@@ -14,6 +14,7 @@ from sandboxer_v0.local_kvm import (
     LocalKvmRunnerProvider,
     QemuStartupFailure,
     SocketWitnessResult,
+    SocketWitnessStage,
     SubprocessLocalKvmHost,
 )
 from sandboxer_v0.runner_backend import ProductionRunnerBackend, ProvisioningFailed
@@ -42,7 +43,7 @@ class RecordingKvmHost:
         self.startup_failure: QemuStartupFailure | None = None
         self.qemu_stderr_paths: list[Path] = []
         self.socket_witnesses: list[tuple[Path, Path, str]] = []
-        self.socket_witness_result = SocketWitnessResult.SUCCESS
+        self.socket_witness_result = SocketWitnessResult.success()
         self.create_stale_control_socket = False
 
     def run(self, argv: tuple[str, ...], *, input_text: str | None = None, timeout_seconds: float = 10) -> CommandResult:
@@ -245,12 +246,12 @@ def test_local_kvm_refuses_a_preexisting_control_socket_without_unlinking_it(tmp
 
 def test_local_kvm_requires_non_root_socket_create_unlink_witness_before_qemu(tmp_path: Path) -> None:
     provider, host = configured_provider(tmp_path)
-    host.socket_witness_result = SocketWitnessResult.UNLINK_FAILED
+    host.socket_witness_result = SocketWitnessResult(SocketWitnessStage.UNLINK_FAILED, 17)
 
     try:
         provider.provision("kvm-socket-witness", ("atlas", "borealis"))
     except ProvisioningFailed as error:
-        assert error.reason_code == "QEMU_SOCKET_WITNESS_UNLINK_FAILED"
+        assert error.reason_code == "QEMU_SOCKET_WITNESS_UNLINK_FAILED_EXIT_17"
     else:  # pragma: no cover - explicit fail-closed contract
         raise AssertionError("an unproven QEMU socket directory must block the Runner")
 
@@ -321,7 +322,9 @@ def test_subprocess_host_socket_witness_uses_the_qemu_identity_without_a_shell(m
     directory = tmp_path / "runner"
     directory.mkdir()
 
-    assert host.verify_socket_access(directory, directory / "control.sock", qemu_user="sandboxer-runner") is SocketWitnessResult.SUCCESS
+    witness = host.verify_socket_access(directory, directory / "control.sock", qemu_user="sandboxer-runner")
+    assert witness.stage is SocketWitnessStage.SUCCESS
+    assert witness.exit_status is None
     assert len(commands) == 2
     assert all(command[:4] == ("setpriv", "--reuid=sandboxer-runner", "--regid=sandboxer-runner", "--init-groups") for command in commands)
     assert {command[4] for command in commands} == {"/usr/bin/touch", "/usr/bin/rm"}
@@ -339,7 +342,9 @@ def test_subprocess_host_socket_witness_reports_a_create_failure_by_category(mon
     directory = tmp_path / "runner"
     directory.mkdir()
 
-    assert host.verify_socket_access(directory, directory / "control.sock", qemu_user="sandboxer-runner") is SocketWitnessResult.CREATE_FAILED
+    witness = host.verify_socket_access(directory, directory / "control.sock", qemu_user="sandboxer-runner")
+    assert witness.stage is SocketWitnessStage.CREATE_FAILED
+    assert witness.exit_status == 1
 
 
 def test_local_kvm_quarantines_a_runner_while_its_ttl_timer_remains_active(tmp_path: Path) -> None:

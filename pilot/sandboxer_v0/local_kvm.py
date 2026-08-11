@@ -63,11 +63,21 @@ class QemuStartupFailure(RuntimeError):
         self.diagnostic = f"QEMU_STDERR:{_sanitize_qemu_stderr(stderr)}"
 
 
-class SocketWitnessResult(str, Enum):
+class SocketWitnessStage(str, Enum):
     SUCCESS = "success"
     CREATE_FAILED = "create_failed"
     UNLINK_FAILED = "unlink_failed"
     ARTIFACT_REMAINS = "artifact_remains"
+
+
+@dataclass(frozen=True)
+class SocketWitnessResult:
+    stage: SocketWitnessStage
+    exit_status: int | None = None
+
+    @classmethod
+    def success(cls) -> "SocketWitnessResult":
+        return cls(SocketWitnessStage.SUCCESS)
 
 
 class LocalKvmHost(Protocol):
@@ -169,18 +179,18 @@ class SubprocessLocalKvmHost:
             "/usr/bin/touch", "--", os.fspath(probe),
         ))
         if create.returncode != 0:
-            return SocketWitnessResult.CREATE_FAILED
+            return SocketWitnessResult(SocketWitnessStage.CREATE_FAILED, create.returncode)
         remove = self.run((
             "setpriv", f"--reuid={qemu_user}", f"--regid={qemu_user}", "--init-groups",
             "/usr/bin/rm", "--", os.fspath(probe),
         ))
         if remove.returncode != 0:
-            return SocketWitnessResult.UNLINK_FAILED
+            return SocketWitnessResult(SocketWitnessStage.UNLINK_FAILED, remove.returncode)
         try:
             os.lstat(probe)
         except FileNotFoundError:
-            return SocketWitnessResult.SUCCESS
-        return SocketWitnessResult.ARTIFACT_REMAINS
+            return SocketWitnessResult.success()
+        return SocketWitnessResult(SocketWitnessStage.ARTIFACT_REMAINS)
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -625,8 +635,9 @@ class LocalKvmRunnerProvider:
             # Runner start. A fresh disposable root is the only valid state.
             raise RuntimeError("CONTROL_SOCKET_PREEXISTS")
         witness = self._host.verify_socket_access(root, control_socket, qemu_user=self.config.qemu_user)
-        if witness is not SocketWitnessResult.SUCCESS:
-            raise RuntimeError(f"QEMU_SOCKET_WITNESS_{witness.name}")
+        if witness.stage is not SocketWitnessStage.SUCCESS:
+            suffix = f"_EXIT_{witness.exit_status}" if witness.exit_status is not None else ""
+            raise RuntimeError(f"QEMU_SOCKET_WITNESS_{witness.stage.name}{suffix}")
 
     def _qemu_command(
         self, namespace: str, tap: str, workspace: Path, seed: Path, control_socket: Path, serial_log: Path
