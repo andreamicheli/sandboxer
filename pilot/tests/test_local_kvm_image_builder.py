@@ -12,9 +12,31 @@ import tty
 from pathlib import Path
 
 from sandboxer_v0.local_kvm_control import parse_control, parse_network_proof
+from scripts import build_local_kvm_base
 
 
 BUILDER = Path(__file__).parents[1] / "scripts" / "build_local_kvm_base.py"
+
+
+def test_image_sanitizer_reports_only_the_failing_stage(monkeypatch, tmp_path: Path) -> None:
+    image = tmp_path / "candidate.qcow2"
+    image.touch()
+    monkeypatch.setattr(build_local_kvm_base, "free_nbd_device", lambda: Path("/dev/nbd0"))
+    monkeypatch.setattr(build_local_kvm_base.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "", ""))
+
+    for command, expected in (("qemu-nbd", "ATTACH"), ("mount", "MOUNT"), ("sync", "REMOVE")):
+        def fail(argv, **_kwargs):
+            if argv[0] == command:
+                raise RuntimeError("API_KEY=not-disclosed /private/path")
+
+        monkeypatch.setattr(build_local_kvm_base, "run", fail)
+        try:
+            build_local_kvm_base.sanitize_promoted_image(image)
+        except RuntimeError as error:
+            assert str(error) == f"BUILDER_IMAGE_SANITIZATION_FAILED:{expected}"
+            assert "API_KEY" not in str(error) and "path" not in str(error)
+        else:  # pragma: no cover
+            raise AssertionError("sanitization failure must be typed")
 
 
 def test_image_builder_renders_an_immutable_runner_contract_without_building_a_vm(tmp_path: Path) -> None:
