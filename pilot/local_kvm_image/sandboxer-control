@@ -9,11 +9,24 @@ probe_bool() {
 }
 
 tcp_http() {
-    /bin/busybox wget -q -T 2 -O /dev/null "http://$1:$2/"
+    # wget has an application timeout, and BusyBox timeout is the independent
+    # hard bound if DNS/TCP teardown ever fails to honour it.
+    /bin/busybox timeout -s KILL 3 /bin/busybox wget -q -T 2 -O /dev/null "http://$1:$2/"
 }
 
 tcp_connect() {
-    /bin/busybox nc -z -w 1 "$1" "$2" >/dev/null 2>&1
+    # Alpine's BusyBox nc has no -z option.  A zero-byte stdin still performs
+    # the TCP handshake; its own deadline plus timeout's hard kill make every
+    # negative witness finite even when neighbour discovery stalls.
+    /bin/busybox timeout -s KILL 1 /bin/busybox nc -w 1 "$1" "$2" </dev/null >/dev/null 2>&1
+}
+
+icmp_probe() {
+    /bin/busybox timeout -s KILL 2 ping -c 1 -W 1 "$1" >/dev/null 2>&1
+}
+
+has_default_route() {
+    /bin/busybox timeout -s KILL 1 ip route show default | grep -q .
 }
 
 network_proof() {
@@ -28,9 +41,9 @@ network_proof() {
     alternate_denied=0
     tcp_connect "$SANDBOXER_PEER_IP" 8081 || alternate_denied=1
     icmp_denied=0
-    ping -c 1 -W 1 "$SANDBOXER_PEER_IP" >/dev/null 2>&1 || icmp_denied=1
+    icmp_probe "$SANDBOXER_PEER_IP" || icmp_denied=1
     egress_denied=0
-    if test -z "$(ip route show default)" && ! tcp_connect 198.51.100.1 81; then
+    if ! has_default_route && ! tcp_connect 198.51.100.1 81; then
         egress_denied=1
     fi
     orchestrator_denied=0

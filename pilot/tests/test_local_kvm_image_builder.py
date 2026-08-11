@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import pty
+import select
 import subprocess
 import sys
+import time
+import tty
 from pathlib import Path
+
+from sandboxer_v0.local_kvm_control import parse_control, parse_network_proof
 
 
 BUILDER = Path(__file__).parents[1] / "scripts" / "build_local_kvm_base.py"
@@ -26,6 +33,7 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert manifest["template_sha256"]["sandboxer-control"] == hashlib.sha256(control.encode()).hexdigest()
     assert "cloud-init.disabled" in provision
     assert "adduser -D -H -u 1001" in provision
+    assert "/bin/busybox timeout --help" in provision
     assert "rm -rf /root/.ssh /root/.aws /root/.config/gcloud" in provision
     assert "rm -rf /home/competitor/.ssh /home/competitor/.aws /home/competitor/.config/gcloud" in provision
     assert "rm -rf /var/lib/cloud /run/sandboxer-build" in provision
@@ -58,7 +66,9 @@ def test_image_builder_renders_sanitized_and_bounded_network_probes(tmp_path: Pa
     )
 
     control = (rendered / "sandboxer-control").read_text()
-    assert "/bin/busybox nc -z -w 1 \"$1\" \"$2\"" in control
+    assert "nc -z" not in control
+    assert "/bin/busybox timeout -s KILL 1 /bin/busybox nc -w 1 \"$1\" \"$2\"" in control
+    assert "/bin/busybox timeout -s KILL 2 ping -c 1 -W 1 \"$1\"" in control
     assert 'tcp_connect "$SANDBOXER_PEER_IP" 8080 || peer_denied=1' in control
     assert 'tcp_http "$SANDBOXER_PEER_IP" 8080 && toy_http=1' in control
     assert 'tcp_connect "$SANDBOXER_PEER_IP" 8081 || alternate_denied=1' in control
@@ -66,6 +76,86 @@ def test_image_builder_renders_sanitized_and_bounded_network_probes(tmp_path: Pa
     assert "tcp_connect 10.77.0.1 1" in control
     assert "tcp_http \"$SANDBOXER_PEER_IP\" 8081" not in control
     assert "wget -q -T 2 -O /dev/null http://198.51.100.1:81/" not in control
+
+
+def test_rendered_guest_control_returns_bounded_active_netprobe_then_next_protocol_message(tmp_path: Path) -> None:
+    """The immutable handler must not let one network witness stall virtio I/O."""
+    rendered = tmp_path / "rendered"
+    subprocess.run(
+        [sys.executable, str(BUILDER), "--render-only", str(rendered)],
+        check=True, text=True, capture_output=True,
+    )
+    libexec = tmp_path / "libexec"
+    libexec.mkdir()
+    (libexec / "sandboxer-common").write_text(
+        """sandboxer_load_metadata() {
+    SANDBOXER_NONCE=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    SANDBOXER_IP=10.77.0.11
+    SANDBOXER_PEER_IP=10.77.0.12
+}
+sandboxer_no_credentials() { return 0; }
+sandboxer_private_mounts() { return 0; }
+ip() { return 0; }
+ping() { return 1; }
+id() { printf '%s\\n' 1001; }
+cat() { printf '%s\\n' 11111111-1111-1111-1111-111111111111; }
+date() { printf '%s\\n' 1720000000; }
+""",
+        encoding="utf-8",
+    )
+
+    master, slave = pty.openpty()
+    tty.setraw(slave)
+    control_port = os.ttyname(slave)
+    test_control = tmp_path / "sandboxer-control"
+    test_control.write_text(
+        (rendered / "sandboxer-control").read_text(encoding="utf-8")
+        .replace("/usr/local/libexec/sandboxer-common", f"{libexec}/sandboxer-common")
+        .replace("PORT=/dev/virtio-ports/org.sandboxer.control", f"PORT={control_port}"),
+        encoding="utf-8",
+    )
+    process = subprocess.Popen(
+        ["/usr/bin/busybox", "ash", str(test_control)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        started = time.monotonic()
+        assert process.poll() is None, process.stderr.read()
+        os.write(master, b"NETPROBE aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blue\n")
+        response = _read_protocol_line(master, timeout_seconds=10)
+        assert time.monotonic() - started < 10
+        proof = parse_network_proof(response, "a" * 64, "blue")
+        assert proof.peer_denied and proof.alternate_denied and proof.icmp_denied
+        # The host test process still has its own default route, so it cannot
+        # assert the egress verdict.  It does prove that the guest emits the
+        # complete typed witness and immediately accepts the next command.
+        assert proof.orchestrator_denied and not proof.toy_http
+
+        os.write(master, b"PROBE aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")
+        ready = _read_protocol_line(master, timeout_seconds=1, minimum_lines=2)
+        assert time.monotonic() - started < 11
+        assert parse_control(ready, "a" * 64, require_probe=True).uid == 1001
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+        os.close(master)
+        os.close(slave)
+
+
+def _read_protocol_line(file_descriptor: int, *, timeout_seconds: float, minimum_lines: int = 1) -> str:
+    deadline = time.monotonic() + timeout_seconds
+    response = b""
+    while response.count(b"\n") < minimum_lines:
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, "guest control did not answer before its bounded deadline"
+        readable, _, _ = select.select([file_descriptor], [], [], remaining)
+        assert readable, "guest control did not answer before its bounded deadline"
+        response += os.read(file_descriptor, 4096)
+    return response.decode("ascii")
 
 
 def test_image_builder_plan_binds_the_exact_profile_to_its_output_digest_path(tmp_path: Path) -> None:

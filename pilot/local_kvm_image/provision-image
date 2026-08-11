@@ -2,6 +2,9 @@
 set -eu
 
 apk add --no-cache e2fsprogs iproute2 iputils busybox-extras
+# NETPROBE relies on BusyBox timeout as its non-bypassable upper bound.  Fail
+# the controlled build rather than promote an image without that applet.
+/bin/busybox timeout --help >/dev/null
 adduser -D -H -u 1001 -s /bin/ash competitor
 passwd -l competitor
 install -d -m 0755 /usr/local/libexec
