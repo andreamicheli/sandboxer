@@ -221,6 +221,29 @@ date() { printf '%s\\n' 1720000000; }
         os.close(slave)
 
 
+def test_rendered_guest_control_emits_unknown_for_a_missing_route_marker(tmp_path: Path) -> None:
+    rendered = tmp_path / "rendered"
+    subprocess.run([sys.executable, str(BUILDER), "--render-only", str(rendered)], check=True)
+    libexec = tmp_path / "libexec"; libexec.mkdir()
+    (libexec / "sandboxer-common").write_text(
+        "sandboxer_load_metadata() { SANDBOXER_NONCE=" + "a" * 64 + "; }\n"
+        "sandboxer_no_credentials() { return 0; }\nsandboxer_private_mounts() { return 0; }\n"
+        "id() { echo 1001; }\ncat() { case \"$1\" in *after-setup) echo absent;; *at-control) return 1;; *) echo 11111111-1111-1111-1111-111111111111;; esac; }\ndate() { echo 1; }\n",
+    )
+    master, slave = pty.openpty(); tty.setraw(slave)
+    stage = tmp_path / "stage"; port = os.ttyname(slave)
+    control = (rendered / "sandboxer-control").read_text().replace("/usr/local/libexec/sandboxer-common", str(libexec / "sandboxer-common")).replace("PORT=/dev/virtio-ports/org.sandboxer.control", f"PORT={port}").replace("route_state > /run/sandboxer-route-at-control", "false").replace(">> /dev/ttyS0", f">> {stage}")
+    path = tmp_path / "control"; path.write_text(control)
+    process = subprocess.Popen(["/usr/bin/busybox", "ash", str(path)])
+    try:
+        os.write(master, b"PROBE " + b"a" * 64 + b"\n")
+        response = _read_protocol_line(master, timeout_seconds=2, minimum_lines=2)
+        assert parse_control(response, "a" * 64, require_probe=True).route_at_control == "unknown"
+        assert "SANDBOXER_ROUTE_MARKER_UNAVAILABLE" in stage.read_text()
+    finally:
+        process.terminate(); process.wait(timeout=2); os.close(master); os.close(slave)
+
+
 def _read_protocol_line(file_descriptor: int, *, timeout_seconds: float, minimum_lines: int = 1) -> str:
     deadline = time.monotonic() + timeout_seconds
     response = b""
