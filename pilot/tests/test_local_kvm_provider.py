@@ -1,0 +1,205 @@
+from __future__ import annotations
+
+import hashlib
+import os
+from pathlib import Path
+
+from sandboxer_v0.arena_safety import Phase, TeardownState
+from sandboxer_v0.local_kvm import CommandResult, LocalKvmConfig, LocalKvmRunnerProvider
+from sandboxer_v0.runner_backend import ProductionRunnerBackend
+
+
+class RecordingKvmHost:
+    """External-process fixture at the LocalKvmRunnerProvider boundary."""
+
+    def __init__(self) -> None:
+        self.commands: list[tuple[str, ...]] = []
+        self.inputs: list[str] = []
+        self.alive: set[int] = set()
+        self.next_pid = 4100
+        self.control_requests: list[str] = []
+        self.control_failures = 0
+        self.destroyed_cgroups: list[str] = []
+
+    def run(self, argv: tuple[str, ...], *, input_text: str | None = None, timeout_seconds: float = 10) -> CommandResult:
+        del timeout_seconds
+        self.commands.append(argv)
+        if input_text is not None:
+            self.inputs.append(input_text)
+        if argv[:2] == ("qemu-img", "create"):
+            Path(argv[-1]).touch()
+        if argv[:1] == ("cloud-localds",):
+            Path(next(item for item in argv if item.endswith(".iso"))).touch()
+        if argv[:3] == ("qemu-img", "check", "--output=json"):
+            return CommandResult(0, '{"filename":"overlay","format":"qcow2"}', "")
+        if "addr" in argv and "show" in argv and "-j" in argv:
+            return CommandResult(0, "[]", "")
+        if "route" in argv and "default" in argv:
+            return CommandResult(0, "", "")
+        if "nft" in argv and "list" in argv:
+            return CommandResult(0, self.inputs[-1] if self.inputs else "", "")
+        return CommandResult(0, "", "")
+
+    def start(self, argv: tuple[str, ...]) -> int:
+        self.commands.append(argv)
+        pid = self.next_pid
+        self.alive.add(pid)
+        self.next_pid += 1
+        return pid
+
+    def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
+        del socket_path, timeout_seconds
+        if self.control_failures:
+            self.control_failures -= 1
+            raise TimeoutError("guest control is not ready")
+        self.control_requests.append(payload)
+        runner_number = len(self.control_requests)
+        boot_id = "11111111-1111-1111-1111-111111111111" if runner_number == 1 else "22222222-2222-2222-2222-222222222222"
+        nonce = payload.split()[1]
+        return f"READY nonce={nonce} uid=1001 boot_id={boot_id} no_credentials=1 private_mounts=1\nPROBE_OK nonce={nonce} uid=1001 clock_epoch=1720000000\n"
+
+    def process_alive(self, pid: int) -> bool:
+        return pid in self.alive
+
+    def terminate(self, pid: int) -> None:
+        self.alive.discard(pid)
+
+    def kill(self, pid: int) -> None:
+        self.alive.discard(pid)
+
+    def create_cgroup(self, name: str, *, memory_max_bytes: int, cpu_max: str, pids_max: int) -> str:
+        assert memory_max_bytes == 512 * 1024 * 1024
+        assert cpu_max == "100000 100000"
+        assert pids_max == 128
+        return f"/sys/fs/cgroup/sandboxer/{name}"
+
+    def attach_to_cgroup(self, cgroup: str, pid: int) -> None:
+        assert cgroup.startswith("/sys/fs/cgroup/sandboxer/")
+        assert pid in self.alive
+
+    def destroy_cgroup(self, cgroup: str) -> bool:
+        self.destroyed_cgroups.append(cgroup)
+        return True
+
+
+def configured_provider(tmp_path: Path) -> tuple[LocalKvmRunnerProvider, RecordingKvmHost]:
+    base = tmp_path / "immutable-base.qcow2"
+    base.write_bytes(b"known-good-qcow2-base")
+    config = LocalKvmConfig(
+        runner_root=tmp_path / "runners",
+        base_image=base,
+        base_image_sha256=hashlib.sha256(base.read_bytes()).hexdigest(),
+        qemu_user="sandboxer-runner",
+        qemu_uid=os.getuid(),
+        toy_service_port=8080,
+    )
+    host = RecordingKvmHost()
+    return LocalKvmRunnerProvider(config, host), host
+
+
+def test_local_kvm_rehearsal_uses_distinct_overlays_control_and_a_disposable_network(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+
+    report = ProductionRunnerBackend(provider).rehearse(
+        match_id="kvm-rehearsal-001", runner_names=("atlas", "borealis")
+    )
+
+    assert report.terminal_code == "RUNNERS_DESTROYED"
+    assert report.simulated_fixture is False
+    assert report.production_ready is False
+    assert all(check.passed for check in report.preflight_checks)
+    assert all(item.state is TeardownState.DESTROYED for item in report.teardown_evidence)
+    assert len({request.split()[1] for request in host.control_requests}) == 2
+    qemu_commands = [command for command in host.commands if "qemu-system-x86_64" in command]
+    assert len(qemu_commands) == 2
+    assert all("setpriv" in command and any("sandboxer-runner" in item for item in command) for command in qemu_commands)
+    assert all("-runas" not in command for command in qemu_commands)
+    assert all("-daemonize" not in command and "-pidfile" not in command for command in qemu_commands)
+    assert all("-sandbox" in command and "-nodefaults" in command for command in qemu_commands)
+    assert all("-virtfs" not in command and "hostfwd" not in " ".join(command) for command in qemu_commands)
+    seed_commands = [command for command in host.commands if command[:1] == ("cloud-localds",)]
+    assert all(any(item.startswith("--network-config=") for item in command) for command in seed_commands)
+    assert any("policy drop" in rule_set for rule_set in host.inputs)
+    assert any("tcp dport 8080" in rule_set for rule_set in host.inputs)
+    assert len(host.destroyed_cgroups) == 2
+    assert not (tmp_path / "runners" / "kvm-rehearsal-001").exists()
+
+
+def test_local_kvm_rejects_a_mutated_base_before_creating_runner_artifacts(tmp_path: Path) -> None:
+    provider, _host = configured_provider(tmp_path)
+    provider.config.base_image.write_bytes(b"mutated-after-config")
+
+    try:
+        provider.provision("kvm-rehearsal-002", ("atlas", "borealis"))
+    except RuntimeError as error:
+        assert str(error) == "BASE_IMAGE_DIGEST_MISMATCH"
+    else:  # pragma: no cover - makes the safety outcome explicit
+        raise AssertionError("a changed base image must fail closed")
+
+    assert not (tmp_path / "runners").exists()
+
+
+def test_local_kvm_network_observation_fails_closed_when_host_measurement_is_incomplete(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+
+    runners = provider.provision("kvm-rehearsal-003", ("atlas", "borealis"))
+    host.run = lambda argv, **kwargs: CommandResult(1, "", "unavailable")  # type: ignore[method-assign]
+
+    observation = provider.network_observation(Phase.BLUE, runners)
+
+    assert observation.edges == frozenset()
+    assert observation.direct_egress is True
+    assert observation.public_ingress is True
+    assert observation.orchestrator_reachable is True
+    for runner in runners:
+        provider.destroy(runner)
+
+
+def test_destroying_one_runner_never_removes_its_opponents_live_artifacts(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    runners = provider.provision("kvm-rehearsal-004", ("atlas", "borealis"))
+
+    first = provider.destroy(runners[0])
+
+    assert first.state is TeardownState.DESTROYED
+    assert host.process_alive(4101)
+    assert (tmp_path / "runners" / "kvm-rehearsal-004" / "borealis" / "runner.qcow2").exists()
+    assert provider.destroy(runners[1]).state is TeardownState.DESTROYED
+    assert not (tmp_path / "runners" / "kvm-rehearsal-004").exists()
+
+
+def test_partial_provision_rolls_back_a_qemu_process_when_control_proof_is_invalid(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    host.control_exchange = lambda *args, **kwargs: "CONTROL_DENIED\n"  # type: ignore[method-assign]
+
+    try:
+        provider.provision("kvm-rehearsal-005", ("atlas", "borealis"))
+    except RuntimeError as error:
+        assert str(error) == "CONTROL_PROBE_INVALID"
+    else:  # pragma: no cover - makes the no-partial-Runner guarantee explicit
+        raise AssertionError("invalid control proof must abort provisioning")
+
+    assert not host.alive
+    assert host.destroyed_cgroups
+    assert not (tmp_path / "runners" / "kvm-rehearsal-005").exists()
+
+
+def test_local_kvm_waits_for_a_bounded_guest_control_bootstrap(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    host.control_failures = 1
+
+    runners = provider.provision("kvm-rehearsal-006", ("atlas", "borealis"))
+
+    assert len(host.control_requests) == 2
+    assert all(provider.destroy(runner).state is TeardownState.DESTROYED for runner in runners)
+
+
+def test_guest_control_has_a_minimal_alpine_device_path_fallback(tmp_path: Path) -> None:
+    provider, _host = configured_provider(tmp_path)
+    runners = provider.provision("kvm-rehearsal-007", ("atlas", "borealis"))
+
+    user_data = (tmp_path / "runners" / "kvm-rehearsal-007" / "atlas" / "user-data.yaml").read_text()
+
+    assert "/dev/virtio-ports/org.sandboxer.control" in user_data
+    assert "/dev/vport0p1" in user_data
+    assert all(provider.destroy(runner).state is TeardownState.DESTROYED for runner in runners)
