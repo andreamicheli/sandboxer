@@ -21,12 +21,39 @@ class RecordingKvmHost:
         self.control_failures = 0
         self.destroyed_cgroups: list[str] = []
         self.ttl_tokens: list[object] = []
+        self.namespaces: set[str] = set()
+        self.taps: dict[str, str] = {}
+        self.namespace_delete_returns_nonzero = False
+        self.cgroup_destroyable = True
+        self.ttl_cancellable = True
+        self.tap_cleanup_works = True
 
     def run(self, argv: tuple[str, ...], *, input_text: str | None = None, timeout_seconds: float = 10) -> CommandResult:
         del timeout_seconds
         self.commands.append(argv)
         if input_text is not None:
             self.inputs.append(input_text)
+        if argv[:3] == ("ip", "netns", "add"):
+            self.namespaces.add(argv[-1])
+        if argv[:3] == ("ip", "netns", "del"):
+            namespace = argv[-1]
+            self.namespaces.discard(namespace)
+            self.taps = {tap: owner for tap, owner in self.taps.items() if owner != namespace}
+            if self.namespace_delete_returns_nonzero:
+                return CommandResult(1, "", "already absent")
+        if argv[:3] == ("ip", "netns", "list"):
+            return CommandResult(0, "".join(f"{namespace}\n" for namespace in sorted(self.namespaces)), "")
+        if "tuntap" in argv and "add" in argv:
+            self.taps[argv[argv.index("dev") + 1]] = argv[argv.index("exec") + 1]
+        if "link" in argv and "del" in argv and any(item.startswith("tap-") for item in argv):
+            tap = next(item for item in argv if item.startswith("tap-"))
+            if self.tap_cleanup_works:
+                self.taps.pop(tap, None)
+            else:
+                return CommandResult(1, "", "tap deletion unavailable")
+        if "link" in argv and "show" in argv and any(item.startswith("tap-") for item in argv):
+            tap = next(item for item in argv if item.startswith("tap-"))
+            return CommandResult(0 if tap in self.taps else 1, "" if tap not in self.taps else tap, "" if tap in self.taps else "Device does not exist")
         if argv[:2] == ("qemu-img", "create"):
             Path(next(item for item in argv if item.endswith(".qcow2") and item != "qcow2")).touch()
         if argv[:1] == ("cloud-localds",):
@@ -81,8 +108,11 @@ class RecordingKvmHost:
         self.ttl_tokens.append(token)
         return token
 
-    def cancel_ttl(self, token: object) -> None:
+    def cancel_ttl(self, token: object) -> bool:
+        if not self.ttl_cancellable:
+            return False
         self.ttl_tokens.remove(token)
+        return True
 
     def terminate(self, pid: int) -> None:
         self.alive.discard(pid)
@@ -102,7 +132,7 @@ class RecordingKvmHost:
 
     def destroy_cgroup(self, cgroup: str) -> bool:
         self.destroyed_cgroups.append(cgroup)
-        return True
+        return self.cgroup_destroyable
 
 
 def configured_provider(tmp_path: Path) -> tuple[LocalKvmRunnerProvider, RecordingKvmHost]:
@@ -236,6 +266,58 @@ def test_partial_provision_rolls_back_a_qemu_process_when_control_proof_is_inval
     assert any(item.resource_id == "kvm-rehearsal-005:atlas" for item in failure.teardown_evidence)
     assert any(item.resource_id.startswith("kvm-rehearsal-005:sbb-") for item in failure.teardown_evidence)
     assert not (tmp_path / "runners" / "kvm-rehearsal-005").exists()
+
+
+def test_partial_cleanup_treats_an_already_absent_namespace_as_destroyed(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    host.control_exchange = lambda *args, **kwargs: "CONTROL_DENIED\n"  # type: ignore[method-assign]
+    host.namespace_delete_returns_nonzero = True
+    host.cgroup_destroyable = False
+
+    try:
+        provider.provision("kvm-rehearsal-005b", ("atlas", "borealis"))
+    except ProvisioningFailed as error:
+        assert any(item.state is TeardownState.QUARANTINED for item in error.teardown_evidence)
+    else:  # pragma: no cover
+        raise AssertionError("invalid control proof must abort provisioning")
+
+    # The namespace command is idempotently non-zero but the authoritative
+    # namespace listing proves absence. Reconciliation must not quarantine it.
+    host.cgroup_destroyable = True
+    evidence = provider.reconcile("kvm-rehearsal-005b:atlas")
+
+    assert evidence.state is TeardownState.DESTROYED
+    assert not (tmp_path / "runners" / "kvm-rehearsal-005b").exists()
+
+
+def test_partial_provision_retains_unproven_cleanup_until_reconciliation_succeeds(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    host.control_exchange = lambda *args, **kwargs: "CONTROL_DENIED\n"  # type: ignore[method-assign]
+    host.cgroup_destroyable = False
+    host.ttl_cancellable = False
+    host.tap_cleanup_works = False
+
+    try:
+        provider.provision("kvm-rehearsal-005d", ("atlas", "borealis"))
+    except ProvisioningFailed as error:
+        partial = next(item for item in error.teardown_evidence if item.resource_id == "kvm-rehearsal-005d:atlas")
+        assert partial.state is TeardownState.QUARANTINED
+        assert {"TTL_WATCHDOG_REMAINS", "CGROUP_REMAINS", "TAP_REMAINS"} <= set(partial.evidence.split(";"))
+    else:  # pragma: no cover
+        raise AssertionError("invalid control proof must abort provisioning")
+
+    root = tmp_path / "runners" / "kvm-rehearsal-005d"
+    assert root.exists()
+    assert host.ttl_tokens
+
+    host.cgroup_destroyable = True
+    host.ttl_cancellable = True
+    host.tap_cleanup_works = True
+    evidence = provider.reconcile("kvm-rehearsal-005d:atlas")
+
+    assert evidence.state is TeardownState.DESTROYED
+    assert not host.ttl_tokens
+    assert not root.exists()
 
 
 def test_local_kvm_waits_for_a_bounded_guest_control_bootstrap(tmp_path: Path) -> None:
