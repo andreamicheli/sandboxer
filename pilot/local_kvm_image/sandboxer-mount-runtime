@@ -39,13 +39,12 @@ if ! sandboxer_load_metadata || ! sandboxer_local_address_ready "$SANDBOXER_IP";
     toy_outcome address_unavailable
     exit 1
 fi
-start-stop-daemon --start --background --make-pidfile --pidfile /run/sandboxer-toy.pid \
-    --chdir /workspace/notes --chuid competitor --exec /usr/sbin/httpd -- \
-    -f -p 8080 -h /workspace/notes >/dev/null 2>&1 || {
-    toy_outcome exec_failed
+if ! /usr/sbin/httpd -p 8080 -u competitor -h /workspace/notes >/dev/null 2>&1; then
+    toy_outcome httpd_bind_exit
     exit 1
-}
-if ! test -s /run/sandboxer-toy.pid || ! kill -0 "$(cat /run/sandboxer-toy.pid)" 2>/dev/null; then
+fi
+toy_pid="$(pidof httpd 2>/dev/null | awk '{print $1}')"
+if test -z "$toy_pid" || ! kill -0 "$toy_pid" 2>/dev/null; then
     toy_outcome exec_failed
 else
     if ! sandboxer_load_metadata; then
@@ -56,7 +55,6 @@ else
     elif sandboxer_toy_http_ready 127.0.0.1; then
         toy_outcome ready
     else
-        toy_pid="$(cat /run/sandboxer-toy.pid)"
         process_outcome="$(cat /run/sandboxer-toy-process-outcome 2>/dev/null || printf unknown)"
         case "$process_outcome" in
             root_failed|exec_failed|address_unavailable|httpd_bind_exit|exited_other) toy_outcome "$process_outcome" ;;
