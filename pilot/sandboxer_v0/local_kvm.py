@@ -890,6 +890,7 @@ class LocalKvmRunnerProvider:
     @staticmethod
     def _require_red_network_proofs(proofs: list[NetworkProof]) -> None:
         checks = (
+            ("LOCAL_KVM_RED_LOCAL_TOY_SERVICE_WITNESS_FAILED", lambda proof: proof.local_toy),
             ("LOCAL_KVM_RED_DECLARED_TOY_SERVICE_WITNESS_FAILED", lambda proof: not proof.peer_denied and proof.toy_http),
             ("LOCAL_KVM_RED_ALTERNATE_PORT_WITNESS_FAILED", lambda proof: proof.alternate_denied),
             ("LOCAL_KVM_RED_ICMP_WITNESS_FAILED", lambda proof: proof.icmp_denied),
@@ -966,7 +967,7 @@ class LocalKvmRunnerProvider:
             try:
                 raw = (record.root / "serial.log").read_text(encoding="ascii", errors="ignore")[-8192:]
                 netprobe_stages = {
-                    "SANDBOXER_NETPROBE_STAGE=start", "SANDBOXER_NETPROBE_STAGE=peer",
+                    "SANDBOXER_NETPROBE_STAGE=start", "SANDBOXER_NETPROBE_STAGE=local_toy", "SANDBOXER_NETPROBE_STAGE=peer",
                     "SANDBOXER_NETPROBE_STAGE=alternate", "SANDBOXER_NETPROBE_STAGE=icmp",
                     "SANDBOXER_NETPROBE_STAGE=egress", "SANDBOXER_NETPROBE_STAGE=orchestrator",
                     "SANDBOXER_NETPROBE_STAGE=emit",

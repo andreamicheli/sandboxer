@@ -221,8 +221,8 @@ date() { printf '%s\\n' 1720000000; }
         started = time.monotonic()
         assert process.poll() is None, process.stderr.read()
         os.write(master, b"NETPROBE aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blue\n")
-        response = _read_protocol_line(master, timeout_seconds=8)
-        assert time.monotonic() - started < 8
+        response = _read_protocol_line(master, timeout_seconds=11)
+        assert time.monotonic() - started < 11
         proof = parse_network_proof(response, "a" * 64, "blue")
         assert proof.peer_denied and proof.alternate_denied and proof.icmp_denied
         # The shell fixture supplies no default route and forces every TCP
@@ -235,6 +235,7 @@ date() { printf '%s\\n' 1720000000; }
             "SANDBOXER_ROUTE_ORIGIN_ABSENT",
             "SANDBOXER_DHCP_CLIENT_0",
             "SANDBOXER_NETPROBE_STAGE=start",
+            "SANDBOXER_NETPROBE_STAGE=local_toy",
             "SANDBOXER_NETPROBE_STAGE=peer",
             "SANDBOXER_NETPROBE_STAGE=alternate",
             "SANDBOXER_NETPROBE_STAGE=icmp",
@@ -245,7 +246,7 @@ date() { printf '%s\\n' 1720000000; }
 
         os.write(master, b"PROBE aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")
         ready = _read_protocol_line(master, timeout_seconds=1, minimum_lines=2)
-        assert time.monotonic() - started < 9
+        assert time.monotonic() - started < 12
         assert parse_control(ready, "a" * 64, require_probe=True).uid == 1001
     finally:
         process.terminate()

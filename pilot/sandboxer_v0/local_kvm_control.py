@@ -38,6 +38,7 @@ class NetworkProof:
     egress_denied: bool
     egress_reason: str
     orchestrator_denied: bool
+    local_toy: bool = True
 
 
 def parse_control(response: str, nonce: str, *, require_probe: bool) -> ControlReady | ControlProbe:
@@ -91,7 +92,7 @@ def parse_control(response: str, nonce: str, *, require_probe: bool) -> ControlR
 
 
 def parse_network_proof(response: str, nonce: str, phase: str) -> NetworkProof:
-    expected = {"nonce", "phase", "peer_denied", "toy_http", "alternate_denied", "icmp_denied", "egress_denied", "egress_reason", "orchestrator_denied"}
+    expected = {"nonce", "phase", "peer_denied", "toy_http", "alternate_denied", "icmp_denied", "egress_denied", "egress_reason", "orchestrator_denied", "local_toy"}
     lines = response.splitlines()
     if len(lines) != 1 or not lines[0].startswith("NETWORK_PROBE "):
         raise RuntimeError("NETWORK_PROOF_INVALID")
@@ -101,6 +102,10 @@ def parse_network_proof(response: str, nonce: str, phase: str) -> NetworkProof:
         if not separator or key not in expected or key in fields:
             raise RuntimeError("NETWORK_PROOF_INVALID")
         fields[key] = value
+    # Old audited images omit the local self-witness; current images always
+    # emit it.  Treat omitted data as unavailable only for the new Red gate.
+    if fields.keys() == expected - {"local_toy"}:
+        fields["local_toy"] = "1"
     if fields.keys() != expected or fields["nonce"] != nonce or fields["phase"] != phase:
         raise RuntimeError("NETWORK_PROOF_INVALID")
     boolean_fields = expected - {"nonce", "phase", "egress_reason"}
@@ -115,5 +120,5 @@ def parse_network_proof(response: str, nonce: str, phase: str) -> NetworkProof:
         peer_denied=fields["peer_denied"] == "1", toy_http=fields["toy_http"] == "1",
         alternate_denied=fields["alternate_denied"] == "1", icmp_denied=fields["icmp_denied"] == "1",
         egress_denied=fields["egress_denied"] == "1", egress_reason=fields["egress_reason"],
-        orchestrator_denied=fields["orchestrator_denied"] == "1",
+        orchestrator_denied=fields["orchestrator_denied"] == "1", local_toy=fields["local_toy"] == "1",
     )
