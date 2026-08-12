@@ -703,7 +703,10 @@ class LocalKvmRunnerProvider:
             self._run(("ip", "netns", "exec", blue_namespace, "ip", "tuntap", "add", "dev", tap, "mode", "tap", "user", str(self.config.qemu_uid)), "TAP_CREATE_FAILED")
             self._run(("ip", "-n", blue_namespace, "link", "set", tap, "up"), "TAP_ENABLE_FAILED")
             pid = self._host.start(
-                self._qemu_command(blue_namespace, tap, workspace, seed, control_socket, root / "serial.log"),
+                self._qemu_command(
+                    blue_namespace, tap, workspace, seed, control_socket, root / "serial.log",
+                    self._runner_mac(match_id, name),
+                ),
                 stderr_path=root / "qemu.stderr",
             )
             process_identity = self._host.process_identity(pid)
@@ -787,7 +790,8 @@ class LocalKvmRunnerProvider:
             raise RuntimeError(f"QEMU_SOCKET_WITNESS_{witness.stage.name}{suffix}")
 
     def _qemu_command(
-        self, namespace: str, tap: str, workspace: Path, seed: Path, control_socket: Path, serial_log: Path
+        self, namespace: str, tap: str, workspace: Path, seed: Path, control_socket: Path, serial_log: Path,
+        mac_address: str,
     ) -> tuple[str, ...]:
         return (
             "ip", "netns", "exec", namespace,
@@ -799,10 +803,15 @@ class LocalKvmRunnerProvider:
             "-drive", f"file={self.config.base_image},if=virtio,format=qcow2,readonly=on,cache=none",
             "-drive", f"file={workspace},if=virtio,format=qcow2,cache=none,discard=unmap",
             "-drive", f"file={seed},media=cdrom,readonly=on", "-nic", "none",
-            "-netdev", f"tap,id=arena0,ifname={tap},script=no,downscript=no", "-device", "virtio-net-pci,netdev=arena0",
+            "-netdev", f"tap,id=arena0,ifname={tap},script=no,downscript=no", "-device", f"virtio-net-pci,netdev=arena0,mac={mac_address}",
             "-device", "virtio-serial-pci", "-chardev", f"socket,id=control,path={control_socket},server=on,wait=off",
             "-device", "virtserialport,chardev=control,name=org.sandboxer.control",
         )
+
+    @staticmethod
+    def _runner_mac(match_id: str, name: str) -> str:
+        digest = hashlib.sha256(f"{match_id}:{name}:mac".encode("ascii")).digest()[:5]
+        return "02:" + ":".join(f"{octet:02x}" for octet in digest)
 
     def _apply_network_phase(self, phase: Phase, records: list[_RunnerRecord]) -> None:
         if phase is Phase.BLUE:

@@ -251,6 +251,10 @@ def test_local_kvm_rehearsal_uses_distinct_overlays_control_and_a_disposable_net
     assert len({command[2] for command in blue_route_witnesses}) == 2
     qemu_commands = [command for command in host.commands if "qemu-system-x86_64" in command]
     assert len(qemu_commands) == 2
+    network_devices = [next(item for item in command if item.startswith("virtio-net-pci,")) for command in qemu_commands]
+    macs = [device.rsplit("mac=", 1)[1] for device in network_devices]
+    assert len(set(macs)) == 2
+    assert all(mac.startswith("02:") and len(mac.split(":")) == 6 for mac in macs)
     assert all("setpriv" in command and any("sandboxer-runner" in item for item in command) for command in qemu_commands)
     assert all("-runas" not in command for command in qemu_commands)
     assert all("-daemonize" not in command and "-pidfile" not in command for command in qemu_commands)
