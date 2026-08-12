@@ -139,7 +139,7 @@ class RecordingKvmHost:
         runner_number = len(self.control_requests)
         boot_id = "11111111-1111-1111-1111-111111111111" if runner_number == 1 else "22222222-2222-2222-2222-222222222222"
         nonce = payload.split()[1]
-        return f"READY nonce={nonce} uid=1001 boot_id={boot_id} no_credentials=1 private_mounts=1 route_after_setup=absent route_at_control=absent\nPROBE_OK nonce={nonce} uid=1001 clock_epoch=1720000000\n"
+        return f"READY nonce={nonce} uid=1001 boot_id={boot_id} no_credentials=1 private_mounts=1 route_after_setup=absent route_at_control=absent toy_bootstrap=ready\nPROBE_OK nonce={nonce} uid=1001 clock_epoch=1720000000\n"
 
     def process_alive(self, pid: int) -> bool:
         return pid in self.alive
@@ -868,7 +868,8 @@ def test_local_kvm_unknown_route_marker_is_diagnostic_when_active_proofs_pass(tm
     (record.root / "serial.log").write_text("SANDBOXER_ROUTE_MARKER_UNAVAILABLE\nsecret\n", encoding="ascii")
     probe = ControlProbe(
         "n", 1001, "11111111-1111-1111-1111-111111111111", True, True, "absent", "unknown",
-        route_origin="unknown", dhcp_client="unknown", clock_epoch=1,
+            route_origin="unknown", dhcp_client="unknown", clock_epoch=1,
+            toy_bootstrap="ready",
     )
     monkeypatch.setattr(provider, "_control_probe", lambda _record: probe)
     checks = provider.probe(runners)

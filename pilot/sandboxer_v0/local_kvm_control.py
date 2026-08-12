@@ -20,6 +20,7 @@ class ControlReady:
     route_at_control: str
     route_origin: str = "unknown"
     dhcp_client: str = "unknown"
+    toy_bootstrap: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,7 @@ class NetworkProof:
 
 def parse_control(response: str, nonce: str, *, require_probe: bool) -> ControlReady | ControlProbe:
     fields: dict[str, str] = {}
-    known = {"nonce", "uid", "boot_id", "no_credentials", "private_mounts", "route_after_setup", "route_at_control", "route_origin", "dhcp_client", "clock_epoch"}
+    known = {"nonce", "uid", "boot_id", "no_credentials", "private_mounts", "route_after_setup", "route_at_control", "route_origin", "dhcp_client", "toy_bootstrap", "clock_epoch"}
     saw_ready = False
     saw_probe = False
     for line in response.splitlines():
@@ -73,16 +74,19 @@ def parse_control(response: str, nonce: str, *, require_probe: bool) -> ControlR
         raise RuntimeError("CONTROL_PROBE_INVALID")
     route_origin = fields.get("route_origin", "unknown")
     dhcp_client = fields.get("dhcp_client", "unknown")
+    toy_bootstrap = fields.get("toy_bootstrap", "unknown")
     if route_origin not in {"absent", "dhcp", "ra", "static", "other", "unknown"} or dhcp_client not in {"0", "1", "unknown"}:
         raise RuntimeError("CONTROL_PROBE_INVALID")
     if fields["route_at_control"] == "absent" and route_origin not in {"absent", "unknown"}:
+        raise RuntimeError("CONTROL_PROBE_INVALID")
+    if toy_bootstrap not in {"ready", "root_missing", "launch_failed", "listener_missing", "unknown"}:
         raise RuntimeError("CONTROL_PROBE_INVALID")
     try:
         ready = ControlReady(
             nonce=fields["nonce"], uid=int(fields["uid"]), boot_id=fields["boot_id"],
             no_credentials=fields["no_credentials"] == "1", private_mounts=fields["private_mounts"] == "1",
             route_after_setup=fields["route_after_setup"], route_at_control=fields["route_at_control"],
-            route_origin=route_origin, dhcp_client=dhcp_client,
+            route_origin=route_origin, dhcp_client=dhcp_client, toy_bootstrap=toy_bootstrap,
         )
         if require_probe:
             return ControlProbe(**ready.__dict__, clock_epoch=int(fields["clock_epoch"]))

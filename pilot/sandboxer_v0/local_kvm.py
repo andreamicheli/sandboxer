@@ -527,6 +527,11 @@ class LocalKvmRunnerProvider:
             record.handle.runner_id: (response.route_after_setup, response.route_at_control, response.route_origin)
             for record, response in zip(records, responses)
         })
+        toy_states = {item.toy_bootstrap for item in responses}
+        if toy_states != {"ready"}:
+            self._capture_serial_stages(records)
+            state = next(iter(toy_states)) if len(toy_states) == 1 else "unknown"
+            raise PreflightWitnessFailed(f"LOCAL_KVM_TOY_BOOTSTRAP_{state.upper()}")
         try:
             network = self._measure_network(records, Phase.BLUE)
         except PreflightWitnessFailed:
