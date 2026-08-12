@@ -414,7 +414,7 @@ def test_local_kvm_waits_for_guest_control_reopen_after_red_ack(tmp_path: Path, 
     )
 
     assert report.terminal_code == "RUNNERS_DESTROYED"
-    assert waits == [0.25]
+    assert waits == [0.25] * 4
 
 
 def test_local_kvm_does_not_mislabel_a_failed_blue_peer_witness_as_orchestrator_reachability(tmp_path: Path) -> None:

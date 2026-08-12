@@ -845,7 +845,7 @@ class LocalKvmRunnerProvider:
                 raise PreflightWitnessFailed("LOCAL_KVM_BLUE_HOST_ROUTE_WITNESS_UNAVAILABLE") from error
             if any(item.stdout.strip() for item in routes):
                 return NetworkObservation(frozenset(), True, True, True)
-            proofs = [self._network_proof(record, phase) for record in records]
+            proofs = self._network_proofs(records, phase)
             self._require_blue_network_proofs(proofs)
             return NetworkObservation(
                 frozenset({f"{records[0].handle.name}:private-a", f"{records[1].handle.name}:private-b"}),
@@ -874,7 +874,7 @@ class LocalKvmRunnerProvider:
         rule_set_ok = all(rule in nft.stdout for rule in expected_rules)
         if not rule_set_ok:
             raise PreflightWitnessFailed("LOCAL_KVM_RED_HOST_NFT_POLICY_WITNESS_FAILED")
-        proofs = [self._network_proof(record, phase) for record in records]
+        proofs = self._network_proofs(records, phase)
         self._require_red_network_proofs(proofs)
         # Share the canonical names with the backend policy rather than
         # independently reconstructing endpoint identifiers here.
@@ -960,6 +960,14 @@ class LocalKvmRunnerProvider:
             return parse_network_proof(response, record.nonce, phase.value)
         except Exception as error:
             raise PreflightWitnessFailed(f"LOCAL_KVM_{phase.value.upper()}_GUEST_NETPROBE_INVALID_RESPONSE") from error
+
+    def _network_proofs(self, records: list[_RunnerRecord], phase: Phase) -> list[NetworkProof]:
+        proofs: list[NetworkProof] = []
+        for index, record in enumerate(records):
+            if index:
+                time.sleep(0.25)
+            proofs.append(self._network_proof(record, phase))
+        return proofs
 
     def _prepare_red_network(self, records: list[_RunnerRecord]) -> None:
         for record in records:
