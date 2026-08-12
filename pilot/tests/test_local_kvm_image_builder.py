@@ -24,6 +24,7 @@ def test_image_sanitizer_reports_only_the_failing_stage(monkeypatch, tmp_path: P
     image = tmp_path / "candidate.qcow2"
     image.touch()
     monkeypatch.setattr(build_local_kvm_base, "free_nbd_device", lambda: Path("/dev/nbd0"))
+    monkeypatch.setattr(build_local_kvm_base, "wait_for_nbd_ready", lambda _device: None)
     monkeypatch.setattr(build_local_kvm_base.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "", ""))
 
     for command, expected in (("qemu-nbd", "ATTACH"), ("mount", "MOUNT"), ("sync", "REMOVE")):
@@ -46,6 +47,7 @@ def test_image_sanitizer_labels_a_residual_target_as_verify_failure(monkeypatch,
     image.touch()
     original_exists = Path.exists
     monkeypatch.setattr(build_local_kvm_base, "free_nbd_device", lambda: Path("/dev/nbd0"))
+    monkeypatch.setattr(build_local_kvm_base, "wait_for_nbd_ready", lambda _device: None)
     monkeypatch.setattr(build_local_kvm_base, "run", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(build_local_kvm_base.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "", ""))
     monkeypatch.setattr(Path, "exists", lambda path: str(path).endswith("/var/lib/cloud") or original_exists(path))

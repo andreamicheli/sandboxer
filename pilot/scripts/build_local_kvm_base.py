@@ -146,6 +146,20 @@ def free_nbd_device() -> Path:
     raise RuntimeError("BUILDER_NBD_DEVICE_UNAVAILABLE")
 
 
+def wait_for_nbd_ready(device: Path, *, timeout_seconds: float = 5) -> None:
+    """qemu-nbd returns before the kernel has necessarily published capacity."""
+    deadline = time.monotonic() + timeout_seconds
+    size = Path("/sys/class/block") / device.name / "size"
+    while time.monotonic() < deadline:
+        try:
+            if int(size.read_text(encoding="ascii").strip()) > 0:
+                return
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.05)
+    raise RuntimeError("BUILDER_NBD_READY_TIMEOUT")
+
+
 def sanitize_promoted_image(image: Path) -> None:
     """Remove build-time cloud state before an image can be promoted.
 
@@ -163,6 +177,7 @@ def sanitize_promoted_image(image: Path) -> None:
         try:
             run(("qemu-nbd", f"--connect={device}", os.fspath(image)))
             attached = True
+            wait_for_nbd_ready(device)
             stage = "MOUNT"
             run(("mount", "-o", "rw,nosuid,nodev,noexec", os.fspath(device), os.fspath(mountpoint)))
             mounted = True
