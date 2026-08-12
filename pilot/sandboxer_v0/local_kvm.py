@@ -899,7 +899,7 @@ class LocalKvmRunnerProvider:
             self._require_red_network_proofs(proofs)
         except PreflightWitnessFailed as error:
             if error.reason_code == "LOCAL_KVM_RED_DECLARED_TOY_TCP_WITNESS_FAILED":
-                raise PreflightWitnessFailed(self._red_tcp_failure(namespace)) from error
+                raise PreflightWitnessFailed(self._red_tcp_failure(namespace, proofs)) from error
             raise
         # Share the canonical names with the backend policy rather than
         # independently reconstructing endpoint identifiers here.
@@ -945,7 +945,10 @@ class LocalKvmRunnerProvider:
             if not all(passed(proof) for proof in proofs):
                 raise PreflightWitnessFailed(reason_code)
 
-    def _red_tcp_failure(self, namespace: str) -> str:
+    def _red_tcp_failure(self, namespace: str, proofs: list[NetworkProof]) -> str:
+        for direction, proof in zip(("LEFT", "RIGHT"), proofs):
+            if not proof.peer_tcp and proof.peer_neighbor != "reachable":
+                return f"LOCAL_KVM_RED_NEIGHBOR_{direction}_{proof.peer_neighbor.upper()}_WITNESS_FAILED"
         try:
             result = self._run(
                 ("ip", "netns", "exec", namespace, "nft", "list", "counters", "table", "bridge", "sandboxer"),

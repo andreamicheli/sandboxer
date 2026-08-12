@@ -28,6 +28,17 @@ declared_tcp_connect() {
     tcp_connect "$1" "$2" || tcp_connect "$1" "$2"
 }
 
+peer_neighbor_state() {
+    state="$(/bin/busybox timeout -s KILL 1 /sbin/ip neigh show to "$SANDBOXER_PEER_IP" dev eth0 2>/dev/null || true)"
+    case "$state" in
+        *FAILED*) printf failed ;;
+        *INCOMPLETE*) printf incomplete ;;
+        *REACHABLE*|*STALE*|*DELAY*|*PROBE*|*PERMANENT*) printf reachable ;;
+        '') printf none ;;
+        *) printf unknown ;;
+    esac
+}
+
 icmp_probe() {
     /bin/busybox timeout -s KILL 2 ping -c 1 -W 1 "$1" >/dev/null 2>&1
 }
@@ -61,6 +72,7 @@ network_proof() {
     fi
     alternate_denied=0
     network_stage alternate
+    peer_neighbor="$(peer_neighbor_state)"
     tcp_connect "$SANDBOXER_PEER_IP" 8081 || alternate_denied=1
     icmp_denied=0
     network_stage icmp
@@ -77,8 +89,8 @@ network_proof() {
     network_stage orchestrator
     tcp_connect 10.77.0.1 1 || orchestrator_denied=1
     network_stage emit
-    printf 'NETWORK_PROBE nonce=%s phase=%s peer_denied=%s peer_tcp=%s toy_http=%s alternate_denied=%s icmp_denied=%s egress_denied=%s egress_reason=%s orchestrator_denied=%s local_toy=%s\n' \
-        "$SANDBOXER_NONCE" "$phase" "$peer_denied" "$peer_tcp" "$toy_http" "$alternate_denied" "$icmp_denied" "$egress_denied" "$egress_reason" "$orchestrator_denied" "$local_toy"
+    printf 'NETWORK_PROBE nonce=%s phase=%s peer_denied=%s peer_tcp=%s peer_neighbor=%s toy_http=%s alternate_denied=%s icmp_denied=%s egress_denied=%s egress_reason=%s orchestrator_denied=%s local_toy=%s\n' \
+        "$SANDBOXER_NONCE" "$phase" "$peer_denied" "$peer_tcp" "$peer_neighbor" "$toy_http" "$alternate_denied" "$icmp_denied" "$egress_denied" "$egress_reason" "$orchestrator_denied" "$local_toy"
     network_stage emitted
 }
 

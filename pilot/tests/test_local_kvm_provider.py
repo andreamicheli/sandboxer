@@ -448,7 +448,7 @@ def test_local_kvm_categorizes_red_tcp_failure_from_host_policy_counters(
         if payload.startswith("NETPROBE ") and payload.rstrip().endswith(" red"):
             _, nonce, phase = payload.split()
             return (
-                f"NETWORK_PROBE nonce={nonce} phase={phase} peer_denied=0 peer_tcp=0 toy_http=0 "
+                f"NETWORK_PROBE nonce={nonce} phase={phase} peer_denied=0 peer_tcp=0 peer_neighbor=reachable toy_http=0 "
                 "alternate_denied=1 icmp_denied=1 egress_denied=1 egress_reason=blocked "
                 "orchestrator_denied=1 local_toy=1\n"
             )
