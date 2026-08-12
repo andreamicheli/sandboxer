@@ -173,7 +173,7 @@ def test_cancellation_and_crash_recovery_quarantine_tracked_runner_set(tmp_path)
     assert snapshot.series_state == "QUARANTINED"
     assert snapshot.reason_code == "CRASH_RECOVERY_QUARANTINE"
     assert snapshot.tracked_runners == ("recovery-001:runner-set",)
-    assert persisted["runners"]["recovery-001:runner-set"]["state"] == "QUARANTINED"
+    assert persisted["runners"]["recovery-001:runner-set"]["state"] == "CLEANUP_UNRESOLVED"
 
     cancelled = SeriesOperations(tmp_path / "cancel.json")
     queued = cancelled.submit(_spec("cancel-001"), mode=OperationMode.BATCH_LAB)
@@ -340,6 +340,33 @@ def test_ttl_cleanup_without_acknowledgement_stays_explicitly_unresolved_and_ret
     assert state["runners"]["unresolved-001:runner-set"]["state"] == "CLEANUP_UNRESOLVED"
     SeriesOperations(path, executor=IgnoringCleanup()).reconcile(now=2)
     assert calls == ["unresolved-001", "unresolved-001"]
+
+
+@pytest.mark.parametrize("path", ["operator", "recovery"])
+def test_operator_cancel_and_crash_recovery_use_acknowledged_runner_cleanup(tmp_path, path) -> None:
+    calls = []
+    class Cleanup:
+        def __call__(self, _spec):
+            raise KeyboardInterrupt()
+        def cancel(self, series_id):
+            calls.append(series_id)
+            return {f"{series_id}:runner-set": "destroyed"}
+    state_path = tmp_path / f"{path}.json"
+    operations = SeriesOperations(state_path, executor=Cleanup())
+    submitted = operations.submit(_spec(f"{path}-001"), mode=OperationMode.BATCH_LAB)
+    with pytest.raises(KeyboardInterrupt):
+        operations.advance(now=0)
+    if path == "operator":
+        final = operations.cancel(f"{path}-001", expected_revision=operations.snapshot(f"{path}-001").series_revision)
+        assert final.series_state == "CANCELLED"
+    else:
+        final, = operations.recover()
+        assert final.series_state == "QUARANTINED"
+    state = json.loads(state_path.read_text())
+    assert calls == [f"{path}-001"]
+    runner = state["runners"][f"{path}-001:runner-set"]
+    assert runner["state"] == "DESTROYED"
+    assert runner["evidence"] == "EXECUTOR_CLEANUP_ACKNOWLEDGED"
 
 
 @pytest.mark.parametrize("cost", [-1, math.inf, math.nan])

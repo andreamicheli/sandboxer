@@ -375,9 +375,9 @@ class SeriesOperations:
             self._require_revision(series, expected_revision)
             was_running = series["state"] == "RUNNING"
             snapshot = self._cancel(series_id, expected_revision)
-        if was_running and hasattr(self._executor, "cancel"):
-            # Side effects occur only after successful durable CAS cancellation.
-            self._executor.cancel(series_id)
+        if was_running:
+            self._apply_cleanup(series_id, "OPERATOR_CANCELLED")
+            return self.snapshot(series_id)
         return snapshot
 
     def _cancel(self, series_id: str, expected_revision: int) -> OperationSnapshot:
@@ -385,17 +385,22 @@ class SeriesOperations:
         self._require_revision(series, expected_revision)
         if series["state"] in _TERMINAL:
             raise InvalidTransition("SERIES_ALREADY_TERMINAL")
+        was_running = series["state"] == "RUNNING"
         self._update(series, state="CANCELLED", reason_code="OPERATOR_CANCELLED", next_attempt_at=None)
         self._update(self._state["publication"][series_id], state="CANCELLED")
         self._set_matches(series_id, "CANCELLED", only_declared=True)
-        self._quarantine_runners(series_id, "OPERATOR_CANCELLED")
+        if not was_running:
+            self._quarantine_runners(series_id, "OPERATOR_CANCELLED")
         self._write()
         return self._snapshot(series_id)
 
     def recover(self) -> tuple[OperationSnapshot, ...]:
         """Quarantine every durable in-flight attempt after a process restart."""
         with self._lock():
-            return self._recover()
+            in_flight = tuple(series_id for series_id, series in self._state["series"].items() if series["state"] == "RUNNING")
+        for series_id in in_flight:
+            self._apply_cleanup(series_id, "CRASH_RECOVERY_QUARANTINE")
+        return tuple(self.snapshot(series_id) for series_id in in_flight)
 
     def _recover(self) -> tuple[OperationSnapshot, ...]:
         recovered: list[OperationSnapshot] = []
@@ -410,7 +415,7 @@ class SeriesOperations:
         with self._lock():
             expired = tuple((runner["series_id"], runner["ttl_seconds"]) for runner in self._state["runners"].values() if runner["state"] in {"RUNNING", "CLEANUP_UNRESOLVED"} and now >= runner["expires_at"])
         for series_id, _ttl in expired:
-            self._apply_cleanup(series_id)
+            self._apply_cleanup(series_id, "RUNNER_TTL_EXPIRED")
         with self._lock():
             reconciled = self._reconcile(now)
             if reconciled:
@@ -426,7 +431,7 @@ class SeriesOperations:
                 reconciled.append(self._snapshot(series_id))
         return tuple(reconciled)
 
-    def _apply_cleanup(self, series_id: str) -> None:
+    def _apply_cleanup(self, series_id: str, reason_code: str) -> None:
         """Bounded best-effort cleanup; only acknowledged evidence changes Runner state."""
         with self._lock():
             controls = OperationControls(**self._series(series_id)["controls"])
@@ -443,17 +448,18 @@ class SeriesOperations:
         worker.join(controls.cleanup_timeout_seconds)
         with self._lock():
             for runner_id, runner in self._state["runners"].items():
-                if runner["series_id"] != series_id or runner["state"] not in {"RUNNING", "CLEANUP_UNRESOLVED"}:
+                if runner["series_id"] != series_id or runner["state"] in {"DESTROYED", "QUARANTINED"}:
                     continue
                 state = outcome.get(runner_id) if outcome else None
                 if state == "destroyed":
                     runner.update(state="DESTROYED", evidence="EXECUTOR_CLEANUP_ACKNOWLEDGED", reason_code=None)
                 elif state == "quarantined":
-                    runner.update(state="QUARANTINED", evidence="EXECUTOR_CLEANUP_ACKNOWLEDGED", reason_code="RUNNER_TTL_EXPIRED")
+                    runner.update(state="QUARANTINED", evidence="EXECUTOR_CLEANUP_ACKNOWLEDGED", reason_code=reason_code)
                 else:
-                    runner.update(state="CLEANUP_UNRESOLVED", evidence="EXECUTOR_CLEANUP_TIMEOUT" if worker.is_alive() else "EXECUTOR_CLEANUP_UNACKNOWLEDGED", reason_code="RUNNER_TTL_EXPIRED")
-            if self._series(series_id)["state"] == "RUNNING":
-                self._quarantine(series_id, "RUNNER_TTL_EXPIRED", write=False)
+                    runner.update(state="CLEANUP_UNRESOLVED", evidence="EXECUTOR_CLEANUP_TIMEOUT" if worker.is_alive() else "EXECUTOR_CLEANUP_UNACKNOWLEDGED", reason_code=reason_code)
+            series = self._series(series_id)
+            if series["state"] == "RUNNING":
+                self._quarantine(series_id, reason_code, write=False)
             self._write()
 
     def retry_as_new_series(self, series_id: str, *, new_series_id: str) -> OperationSnapshot:
