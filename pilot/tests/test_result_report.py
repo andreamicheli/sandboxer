@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from io import BytesIO
 
 import pytest
@@ -103,6 +104,33 @@ def test_report_model_is_deeply_immutable_and_json_is_its_semantic_projection() 
     with pytest.raises(AttributeError):
         report.model["technical_chapters"].append("forged")
     assert json.loads(report.json) == report.model.to_dict()
+    document = report.model["document"]
+    assert document["type"] == "document"
+    assert {"heading", "paragraph", "table", "list", "link", "incident", "claim"} <= {block["type"] for block in document["children"]}
+    assert all(claim["id"] in {block.get("id") for block in document["children"]} for claim in report.model["claims"])
+
+
+def test_report_rejects_a_fully_rehashed_public_winner_forgery_that_keeps_raw_seals() -> None:
+    bundle = json.loads(json.dumps(execute_series(_spec()).evidence_bundle))
+    events = bundle["public"]["normalized_telemetry"]
+    previous = "0" * 64
+    for event in events:
+        if event["event_type"] in {"MATCH_FINISHED", "SERIES_COMPLETED"}:
+            event["winner"] = "borealis"
+        event["previous_event_hash"] = previous
+        event.pop("event_hash")
+        event["event_hash"] = sha256(json.dumps(event, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        previous = event["event_hash"]
+    bundle["public"]["score_proof"] = [
+        {**item, "winner": "borealis"} for item in bundle["public"]["score_proof"]
+    ]
+    bundle["checksums"]["public"] = sha256(json.dumps(bundle["public"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    unsigned = {key: bundle[key] for key in ("version", "url", "previous_version_url", "previous_bundle_hash", "provenance", "checksums")}
+    bundle["bundle_hash"] = sha256(json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    bundle["signature"] = sha256(json.dumps({"bundle_hash": bundle["bundle_hash"], "verdict_signature": bundle["public"]["auditor_verdict"]["signature"]}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+    with pytest.raises(ResultReportError, match="VALID_FROZEN_EVIDENCE_REQUIRED"):
+        build_result_report(bundle)
 
 
 def test_corrected_evidence_keeps_prior_report_addressable_in_a_visible_chain() -> None:

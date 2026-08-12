@@ -57,6 +57,11 @@ def verify_evidence_bundle(bundle: Any | Mapping[str, Any]) -> dict[str, Any]:
     sealed = tuple(restricted.get("sealed_event_hashes", ()))
     if len(sealed) != len(telemetry) or any(not isinstance(item, str) or len(item) != 64 for item in sealed):
         raise EvidenceFreezeError("EVIDENCE_TELEMETRY_PROOF_INVALID")
+    if tuple(event.get("sealed_raw_event_hash") for event in telemetry) != sealed:
+        raise EvidenceFreezeError("EVIDENCE_PUBLIC_RAW_BINDING_INVALID")
+    bindings = tuple(restricted.get("public_event_bindings", ()))
+    if bindings != tuple(_public_binding(event) for event in telemetry):
+        raise EvidenceFreezeError("EVIDENCE_PUBLIC_RAW_BINDING_INVALID")
     # The raw telemetry is deliberately not available to public report code;
     # its authoritative checksum is sealed alongside the raw event hashes.
     if checksums.get("telemetry") != restricted.get("telemetry_checksum"):
@@ -83,7 +88,7 @@ _SENSITIVE_KEY = re.compile(r"(?:flag|secret|credential|password|token|api[_-]?k
 _CREDENTIAL_VALUE = re.compile(r"(?:flag\s*\{|(?:sk|pk|ghp|xox[baprs])-[A-Za-z0-9_-]{8,}|Bearer\s+[A-Za-z0-9._-]{8,})", re.I)
 
 
-def _public(event: dict[str, Any]) -> dict[str, Any]:
+def _public(event: dict[str, Any], *, bind_raw: bool = False) -> dict[str, Any]:
     """Irreversible public redaction: sensitive values become one-way proofs."""
     result: dict[str, Any] = {}
     for key, value in event.items():
@@ -97,6 +102,10 @@ def _public(event: dict[str, Any]) -> dict[str, Any]:
             result[key] = tuple(_public(item) if isinstance(item, dict) else item for item in value)
         else:
             result[key] = value
+    # Bound before redaction, so a public normalized event can be authenticated
+    # against exactly one restricted raw-event digest without exposing content.
+    if bind_raw:
+        result["sealed_raw_event_hash"] = event["event_hash"]
     return result
 
 
@@ -111,6 +120,11 @@ def _rehash_public(events: Sequence[dict[str, Any]]) -> tuple[dict[str, Any], ..
         normalized.append(event)
         previous = event["event_hash"]
     return tuple(normalized)
+
+
+def _public_binding(event: Mapping[str, Any]) -> str:
+    projection = {key: value for key, value in event.items() if key not in {"event_hash", "previous_event_hash"}}
+    return _digest({"sealed_raw_event_hash": event["sealed_raw_event_hash"], "public_projection": projection})
 
 
 def _verify_chain(events: Sequence[dict[str, Any]]) -> None:
@@ -171,11 +185,12 @@ def freeze_evidence_bundle(
         raise EvidenceFreezeError("AUDITOR_VERDICT_UNSIGNED")
     if version < 1 or (previous is None) != (version == 1):
         raise EvidenceFreezeError("EVIDENCE_VERSION_PROVENANCE_INVALID")
-    public_events = _rehash_public(tuple(_public(dict(event)) for event in telemetry))
+    public_events = _rehash_public(tuple(_public(dict(event), bind_raw=True) for event in telemetry))
     telemetry_checksum = _digest(tuple(telemetry))
     restricted = {
         "schema_version": "sandboxer.restricted-evidence.v1",
         "sealed_event_hashes": tuple(event["event_hash"] for event in telemetry),
+        "public_event_bindings": tuple(_public_binding(event) for event in public_events),
         "telemetry_checksum": telemetry_checksum,
         "seed_reveal_proof": _digest({"seed": spec.seed, "series": spec.series_id}),
         "health_score": {

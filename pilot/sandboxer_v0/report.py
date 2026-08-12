@@ -161,6 +161,32 @@ def _report_url(evidence_url: str) -> str:
     return f"sandboxer://reports/{match.group(1)}/v{match.group(2)}"
 
 
+def _semantic_document(model: Mapping[str, Any]) -> dict[str, Any]:
+    """Canonical typed document tree consumed by every public renderer."""
+    blocks: list[dict[str, Any]] = [
+        {"type": "heading", "level": 1, "text": model["title"]},
+        {"type": "paragraph", "text": model["scope"]["repeated_scope_language"]},
+        {"type": "heading", "level": 2, "text": "Outcome"},
+        {"type": "paragraph", "text": f"Winner: {model['outcome']['winner']}"},
+        {"type": "link", "label": "Frozen public evidence", "url": model["source_evidence"]["url"]},
+    ]
+    for claim in model["claims"]:
+        blocks.append({"type": "claim", "id": claim["id"], "claim_type": claim["type"], "text": claim["text"], "evidence": claim["evidence"], "metadata": {key: claim[key] for key in ("confidence", "scope", "sample_size", "material_alternatives") if key in claim}})
+    for chapter in model["technical_chapters"]:
+        blocks.extend([
+            {"type": "heading", "level": 2, "text": chapter["heading"]},
+            {"type": "table", "caption": "Authoritative Match timeline", "headers": ["Time", "Event", "Phase", "Evidence ID"], "rows": [[event["wall_time_utc"], event["event_type"], event["phase"], event["event_id"]] for event in chapter["timeline"]]},
+            {"type": "list", "items": [f"Score proof: {json.dumps(chapter['score_proof'], sort_keys=True)}", f"Evidence status: {json.dumps(chapter['evidence_status'], sort_keys=True)}"]},
+        ])
+    blocks.extend([
+        {"type": "incident", "items": model["incident_appendix"]},
+        {"type": "heading", "level": 2, "text": "Corrections and provenance"},
+        {"type": "paragraph", "text": model["corrections"]["visible_notice"]},
+        {"type": "link", "label": "Canonical report", "url": model["corrections"]["current_report_url"]},
+    ])
+    return {"type": "document", "language": "en", "children": blocks}
+
+
 def build_result_report(evidence_bundle: object, *, correction_index: Mapping[str, Mapping[str, Any]] | None = None) -> "ResultReport":
     """Generate a canonical English report and all synchronized renderings."""
     bundle = _frozen_valid(evidence_bundle)
@@ -336,6 +362,7 @@ def build_result_report(evidence_bundle: object, *, correction_index: Mapping[st
         "claims": claims,
         "accessibility": {"language": "en", "landmarks": ["header", "main", "footer"], "claim_citations": "visible", "table_headers": "scoped", "print_layout": "A4-friendly"},
     }
+    model["document"] = _semantic_document(model)
     immutable_model = ReportModel.from_projection(model)
     json_text = json.dumps(immutable_model.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     html = render_report_html(immutable_model)
@@ -383,7 +410,22 @@ body{{font-family:system-ui,sans-serif;line-height:1.5;max-width:72rem;margin:au
 
 def render_report_pdf(model: Mapping[str, Any]) -> bytes:
     """Produce a deterministic, print-ready PDF directly from the same model."""
-    lines = [model["title"], model["scope"]["label"], f"Winner: {model['outcome']['winner']}", f"Decisive rule: {model['outcome']['decisive_rule']}"]
+    lines = []
+    for block in model["document"]["children"]:
+        if block["type"] in {"heading", "paragraph"}:
+            lines.append(block["text"])
+        elif block["type"] == "link":
+            lines.append(f"{block['label']}: {block['url']}")
+        elif block["type"] == "claim":
+            lines.append(f"{block['id']} [{block['claim_type']}]: {block['text']}")
+        elif block["type"] == "table":
+            lines.append(block["caption"])
+            lines.extend(" | ".join(row) for row in block["rows"])
+        elif block["type"] == "list":
+            lines.extend(block["items"])
+        elif block["type"] == "incident":
+            lines.append(f"Incidents: {json.dumps(_thaw(block['items']), sort_keys=True)}")
+    lines.append(f"Decisive rule: {model['outcome']['decisive_rule']}")
     lines.append("Competitor manifests:")
     lines.extend(f"{competitor['public_name']}: {competitor['model_id']}" for competitor in model["competitor_manifests"])
     lines.append(f"Protocol: {json.dumps(_thaw(model['protocol']), sort_keys=True)}")
