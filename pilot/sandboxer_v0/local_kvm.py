@@ -558,6 +558,7 @@ class LocalKvmRunnerProvider:
             return self._measure_network(records, phase)
         except PreflightWitnessFailed:
             if phase is Phase.RED:
+                self._capture_serial_stages(records)
                 raise
             return NetworkObservation(frozenset(), True, True, True)
         except Exception as error:

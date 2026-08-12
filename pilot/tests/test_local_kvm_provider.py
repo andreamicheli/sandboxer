@@ -718,6 +718,25 @@ def test_local_kvm_network_observation_fails_closed_when_host_measurement_is_inc
         provider.destroy(runner)
 
 
+def test_local_kvm_red_typed_witness_persists_only_current_allowlisted_serial_stages(tmp_path: Path, monkeypatch) -> None:
+    provider, _host = configured_provider(tmp_path)
+    runners = provider.provision("kvm-red-serial-evidence", ("atlas", "borealis"))
+    record = provider._records[runners[0].runner_id]
+    (record.root / "serial.log").write_text(
+        "SANDBOXER_TOY_LISTENER_MISSING\nOPENAI_API_KEY=no\nSANDBOXER_NETPROBE_STAGE=attacker\n",
+        encoding="ascii",
+    )
+    monkeypatch.setattr(
+        provider, "_measure_network",
+        lambda _records, _phase: (_ for _ in ()).throw(PreflightWitnessFailed("LOCAL_KVM_RED_LOCAL_TOY_SERVICE_WITNESS_FAILED")),
+    )
+    with pytest.raises(PreflightWitnessFailed, match="LOCAL_KVM_RED_LOCAL_TOY_SERVICE_WITNESS_FAILED"):
+        provider.network_observation(Phase.RED, runners)
+    artifact = tmp_path / "evidence" / f"{hashlib.sha256(runners[0].runner_id.encode()).hexdigest()[:16]}.serial-stages"
+    assert artifact.read_text(encoding="ascii") == "SANDBOXER_TOY_LISTENER_MISSING\n"
+    assert artifact.stat().st_mode & 0o777 == 0o600
+
+
 def test_destroying_one_runner_never_removes_its_opponents_live_artifacts(tmp_path: Path) -> None:
     provider, host = configured_provider(tmp_path)
     runners = provider.provision("kvm-rehearsal-004", ("atlas", "borealis"))
