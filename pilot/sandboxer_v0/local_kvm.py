@@ -568,6 +568,14 @@ class LocalKvmRunnerProvider:
             return NetworkObservation(frozenset(), True, True, True)
         except Exception as error:
             # An unavailable witness is unsafe by definition; never infer safety.
+            if phase is Phase.RED:
+                self._capture_serial_stages(records)
+                reason = (
+                    "LOCAL_KVM_RED_NETWORK_POLICY_APPLY_FAILED"
+                    if str(error) == "NETWORK_POLICY_APPLY_FAILED"
+                    else "LOCAL_KVM_RED_NETWORK_TRANSITION_UNAVAILABLE"
+                )
+                raise PreflightWitnessFailed(reason) from error
             return NetworkObservation(frozenset(), True, True, True)
 
     def destroy(self, runner: RunnerHandle) -> TeardownEvidence:

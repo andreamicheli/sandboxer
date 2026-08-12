@@ -737,6 +737,21 @@ def test_local_kvm_red_typed_witness_persists_only_current_allowlisted_serial_st
     assert artifact.stat().st_mode & 0o777 == 0o600
 
 
+def test_local_kvm_red_transition_failure_is_not_collapsed_to_missing_edge(tmp_path: Path, monkeypatch) -> None:
+    provider, _host = configured_provider(tmp_path)
+    runners = provider.provision("kvm-red-transition-failure", ("atlas", "borealis"))
+    monkeypatch.setattr(
+        provider,
+        "_apply_network_phase",
+        lambda _phase, _records: (_ for _ in ()).throw(RuntimeError("NETWORK_POLICY_APPLY_FAILED")),
+    )
+
+    with pytest.raises(PreflightWitnessFailed, match="LOCAL_KVM_RED_NETWORK_POLICY_APPLY_FAILED"):
+        provider.network_observation(Phase.RED, runners)
+
+    assert all(provider.destroy(runner).state is TeardownState.DESTROYED for runner in runners)
+
+
 def test_destroying_one_runner_never_removes_its_opponents_live_artifacts(tmp_path: Path) -> None:
     provider, host = configured_provider(tmp_path)
     runners = provider.provision("kvm-rehearsal-004", ("atlas", "borealis"))
