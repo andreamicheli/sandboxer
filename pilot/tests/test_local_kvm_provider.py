@@ -404,6 +404,19 @@ def test_local_kvm_fails_closed_when_red_neighbor_reset_is_not_acknowledged(tmp_
     assert all(item.state is TeardownState.DESTROYED for item in error.value.teardown_evidence)
 
 
+def test_local_kvm_waits_for_guest_control_reopen_after_red_ack(tmp_path: Path, monkeypatch) -> None:
+    provider, _host = configured_provider(tmp_path)
+    waits: list[float] = []
+    monkeypatch.setattr("sandboxer_v0.local_kvm.time.sleep", waits.append)
+
+    report = ProductionRunnerBackend(provider).rehearse(
+        match_id="kvm-red-control-barrier", runner_names=("atlas", "borealis")
+    )
+
+    assert report.terminal_code == "RUNNERS_DESTROYED"
+    assert waits == [0.25]
+
+
 def test_local_kvm_does_not_mislabel_a_failed_blue_peer_witness_as_orchestrator_reachability(tmp_path: Path) -> None:
     provider, host = configured_provider(tmp_path)
     original_exchange = host.control_exchange

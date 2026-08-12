@@ -973,6 +973,10 @@ class LocalKvmRunnerProvider:
                 raise PreflightWitnessFailed("LOCAL_KVM_RED_NEIGHBOR_RESET_UNAVAILABLE") from error
             if response != f"PHASE_RED_OK nonce={record.nonce}\n":
                 raise PreflightWitnessFailed("LOCAL_KVM_RED_NEIGHBOR_RESET_FAILED")
+        # QEMU's host chardev remains open while the guest closes and reopens
+        # its virtio port between requests.  Do not send NETPROBE into that
+        # bounded hand-off window after the final phase acknowledgement.
+        time.sleep(0.25)
 
     def _parse_control(self, response: str, nonce: str, *, require_probe: bool) -> ControlReady | ControlProbe:
         if len(response.encode("ascii", errors="ignore")) > _MAX_CONTROL_RESPONSE:
