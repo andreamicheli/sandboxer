@@ -107,6 +107,7 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert "SANDBOXER_STAGE_CONTROL" in bootstrap
     assert "/usr/local/libexec/sandboxer-setup" in bootstrap
     assert "--chdir /workspace/notes --chuid competitor --exec /usr/sbin/httpd" in bootstrap
+    assert "sandboxer_toy_http_ready 127.0.0.1" in bootstrap
     assert "/usr/local/libexec/sandboxer-control" in bootstrap
     assert "SANDBOXER_TOY_READY" in bootstrap
     assert "SANDBOXER_TOY_ROOT_FAILED" in bootstrap

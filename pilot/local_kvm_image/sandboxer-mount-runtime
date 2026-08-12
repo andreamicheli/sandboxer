@@ -50,7 +50,10 @@ if ! test -s /run/sandboxer-toy.pid || ! kill -0 "$(cat /run/sandboxer-toy.pid)"
 else
     if ! sandboxer_load_metadata; then
         toy_outcome exec_failed
-    elif sandboxer_toy_http_ready "$SANDBOXER_IP"; then
+    # Bootstrap health proves the local HTTP process through loopback. Arena
+    # reachability on the declared address is independently measured by the
+    # Blue/Red NETPROBE witnesses and must not be conflated with process health.
+    elif sandboxer_toy_http_ready 127.0.0.1; then
         toy_outcome ready
     else
         toy_pid="$(cat /run/sandboxer-toy.pid)"
