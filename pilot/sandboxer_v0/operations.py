@@ -10,8 +10,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 import json
+import os
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Any, Iterator, Protocol
+import fcntl
+from contextlib import contextmanager
 
 from .series import (
     ControlledClock,
@@ -59,6 +62,8 @@ class ProviderAvailability(Protocol):
 
 class SeriesExecutor(Protocol):
     def __call__(self, spec: SeriesSpec) -> ReleaseBundle: ...
+
+    def cancel(self, series_id: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -109,6 +114,9 @@ class OperationSnapshot:
     tracked_runners: tuple[str, ...]
     matches: tuple[dict[str, object], ...]
     match_policy: dict[str, int | float]
+    artifact_reference: str | None = None
+    evidence_version: int | None = None
+    spend: dict[str, int | float] | None = None
 
 
 class _AlwaysAvailable:
@@ -139,12 +147,28 @@ class SeriesOperations:
         self._path = path
         self._availability = availability or _AlwaysAvailable()
         self._executor = executor
-        if path.exists():
-            self._state = json.loads(path.read_text(encoding="utf-8"))
+        self._state: dict[str, Any] = {}
+        self._reload()
+
+    @contextmanager
+    def _lock(self) -> Iterator[None]:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self._path.with_suffix(self._path.suffix + ".lock")
+        with lock_path.open("a+") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            self._reload()
+            try:
+                yield
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    def _reload(self) -> None:
+        if self._path.exists():
+            self._state = json.loads(self._path.read_text(encoding="utf-8"))
             if self._state.get("schema") != "sandboxer.operations.v1":
                 raise ValueError("unsupported operations state schema")
         else:
-            self._state = {"schema": "sandboxer.operations.v1", "queue": [], "series": {}, "matches": {}, "publication": {}, "runners": {}}
+            self._state = {"schema": "sandboxer.operations.v1", "queue": [], "series": {}, "matches": {}, "publication": {}, "runners": {}, "artifacts": {}}
 
     def submit(
         self,
@@ -153,6 +177,10 @@ class SeriesOperations:
         mode: OperationMode,
         controls: OperationControls = OperationControls(),
     ) -> OperationSnapshot:
+        with self._lock():
+            return self._submit(spec, mode=mode, controls=controls)
+
+    def _submit(self, spec: SeriesSpec, *, mode: OperationMode, controls: OperationControls) -> OperationSnapshot:
         if spec.series_id in self._state["series"]:
             raise InvalidTransition("SERIES_ID_ALREADY_EXISTS")
         series_state = "AWAITING_SPEND_APPROVAL" if mode is OperationMode.SUPERVISED else "QUEUED"
@@ -180,9 +208,13 @@ class SeriesOperations:
             self._state["matches"][match_id] = {"revision": 1, "series_id": spec.series_id, "state": "DECLARED", "reason_code": None}
         self._state["queue"].append(spec.series_id)
         self._write()
-        return self.snapshot(spec.series_id)
+        return self._snapshot(spec.series_id)
 
     def snapshot(self, series_id: str) -> OperationSnapshot:
+        with self._lock():
+            return self._snapshot(series_id)
+
+    def _snapshot(self, series_id: str) -> OperationSnapshot:
         series = self._series(series_id)
         publication = self._state["publication"][series_id]
         spec = _decode_spec(series["spec"])
@@ -212,18 +244,29 @@ class SeriesOperations:
                 "turn_budget": spec.match_policy.turn_budget,
                 "tool_budget": spec.match_policy.tool_budget,
             },
+            artifact_reference=self._state.get("artifacts", {}).get(series_id, {}).get("reference"),
+            evidence_version=self._state.get("artifacts", {}).get(series_id, {}).get("evidence_version"),
+            spend={"wait": series["wait_cost_spent"], "execution": series["execution_cost_spent"]},
         )
 
     def approve_spend(self, series_id: str, *, expected_revision: int) -> OperationSnapshot:
+        with self._lock():
+            return self._approve_spend(series_id, expected_revision)
+
+    def _approve_spend(self, series_id: str, expected_revision: int) -> OperationSnapshot:
         series = self._series(series_id)
         self._require_revision(series, expected_revision)
         if series["mode"] != OperationMode.SUPERVISED.value or series["state"] != "AWAITING_SPEND_APPROVAL":
             raise InvalidTransition("SPEND_APPROVAL_NOT_PENDING")
         self._update(series, state="QUEUED")
         self._write()
-        return self.snapshot(series_id)
+        return self._snapshot(series_id)
 
     def approve_publication(self, series_id: str, *, expected_revision: int) -> OperationSnapshot:
+        with self._lock():
+            return self._approve_publication(series_id, expected_revision)
+
+    def _approve_publication(self, series_id: str, expected_revision: int) -> OperationSnapshot:
         series = self._series(series_id)
         publication = self._state["publication"][series_id]
         self._require_revision(publication, expected_revision)
@@ -233,10 +276,18 @@ class SeriesOperations:
             raise InvalidTransition("PUBLICATION_APPROVAL_NOT_PENDING")
         self._update(publication, state="PUBLISHED", pointer=f"sandboxer://publication/{series_id}")
         self._write()
-        return self.snapshot(series_id)
+        return self._snapshot(series_id)
 
     def advance(self, *, now: int | float) -> tuple[OperationSnapshot, ...]:
         """Advance exactly the first runnable queue item, preserving serial order."""
+        with self._lock():
+            prepared = self._advance_prepare(now)
+        if isinstance(prepared, tuple) and prepared and prepared[0] == "__EXECUTE__":
+            _, series_id, spec, revision = prepared
+            return self._execute_after_prepare(series_id, spec, revision)
+        return prepared
+
+    def _advance_prepare(self, now: int | float) -> tuple[OperationSnapshot, ...]:
         series_id = self._next_series(now)
         if series_id is None:
             return ()
@@ -248,7 +299,7 @@ class SeriesOperations:
             self._write()
         if now > series["submitted_at"] + controls.wait_deadline_seconds:
             self._block(series_id, "WAIT_DEADLINE_EXCEEDED")
-            return (self.snapshot(series_id),)
+            return (self._snapshot(series_id),)
         observation = self._availability.observe(spec)
         if observation.condition in _RECOVERABLE:
             if series["wait_cost_spent"] + observation.wait_cost > controls.wait_cost_ceiling:
@@ -264,26 +315,42 @@ class SeriesOperations:
                     reason_code=observation.condition.value,
                 )
                 self._write()
-            return (self.snapshot(series_id),)
+            return (self._snapshot(series_id),)
         if observation.condition is not CapacityCondition.AVAILABLE:
             self._block(series_id, observation.condition.value)
-            return (self.snapshot(series_id),)
+            return (self._snapshot(series_id),)
         if series["execution_cost_spent"] + observation.execution_cost > controls.execution_cost_ceiling:
             self._block(series_id, "EXECUTION_COST_CEILING_EXCEEDED")
-            return (self.snapshot(series_id),)
+            return (self._snapshot(series_id),)
 
         self._mark_running(series_id, observation.execution_cost, now)
-        # A process interruption intentionally leaves this durable RUNNING state.
-        # ``recover`` turns it into a quarantined, tracked terminal state.
+        execution_revision = self._series(series_id)["revision"]
+        # The sentinel makes execution occur only after the lock is released.
+        return ("__EXECUTE__", series_id, spec, execution_revision)
+
+    def _execute_after_prepare(self, series_id: str, spec: SeriesSpec, execution_revision: int) -> tuple[OperationSnapshot, ...]:
         try:
             bundle = self._executor(spec)
         except Exception:
-            self._quarantine(series_id, "EXECUTION_FAILED")
-            return (self.snapshot(series_id),)
-        self._record_bundle(series_id, bundle)
-        return (self.snapshot(series_id),)
+            with self._lock():
+                if self._series(series_id)["state"] == "RUNNING":
+                    self._quarantine(series_id, "EXECUTION_FAILED")
+                return (self._snapshot(series_id),)
+        with self._lock():
+            series = self._series(series_id)
+            if series["state"] != "RUNNING" or series["revision"] != execution_revision:
+                return (self._snapshot(series_id),)
+            self._record_bundle(series_id, bundle)
+            return (self._snapshot(series_id),)
 
     def cancel(self, series_id: str, *, expected_revision: int) -> OperationSnapshot:
+        with self._lock():
+            series = self._series(series_id)
+            if series["state"] == "RUNNING" and hasattr(self._executor, "cancel"):
+                self._executor.cancel(series_id)
+            return self._cancel(series_id, expected_revision)
+
+    def _cancel(self, series_id: str, expected_revision: int) -> OperationSnapshot:
         series = self._series(series_id)
         self._require_revision(series, expected_revision)
         if series["state"] in _TERMINAL:
@@ -293,28 +360,40 @@ class SeriesOperations:
         self._set_matches(series_id, "CANCELLED", only_declared=True)
         self._quarantine_runners(series_id, "OPERATOR_CANCELLED")
         self._write()
-        return self.snapshot(series_id)
+        return self._snapshot(series_id)
 
     def recover(self) -> tuple[OperationSnapshot, ...]:
         """Quarantine every durable in-flight attempt after a process restart."""
+        with self._lock():
+            return self._recover()
+
+    def _recover(self) -> tuple[OperationSnapshot, ...]:
         recovered: list[OperationSnapshot] = []
         for series_id, series in self._state["series"].items():
             if series["state"] == "RUNNING":
                 self._quarantine(series_id, "CRASH_RECOVERY_QUARANTINE")
-                recovered.append(self.snapshot(series_id))
+                recovered.append(self._snapshot(series_id))
         return tuple(recovered)
 
     def reconcile(self, *, now: int | float) -> tuple[OperationSnapshot, ...]:
         """Quarantine expired Runner sets and reconcile their owning Series."""
+        with self._lock():
+            return self._reconcile(now)
+
+    def _reconcile(self, now: int | float) -> tuple[OperationSnapshot, ...]:
         reconciled: list[OperationSnapshot] = []
         for resource_id, runner in tuple(self._state["runners"].items()):
             if runner["state"] == "RUNNING" and now >= runner["expires_at"]:
                 series_id = runner["series_id"]
                 self._quarantine(series_id, "RUNNER_TTL_EXPIRED")
-                reconciled.append(self.snapshot(series_id))
+                reconciled.append(self._snapshot(series_id))
         return tuple(reconciled)
 
     def retry_as_new_series(self, series_id: str, *, new_series_id: str) -> OperationSnapshot:
+        with self._lock():
+            return self._retry_as_new_series(series_id, new_series_id)
+
+    def _retry_as_new_series(self, series_id: str, new_series_id: str) -> OperationSnapshot:
         source = self._series(series_id)
         if source["state"] not in {"BLOCKED", "QUARANTINED", "CANCELLED"}:
             raise InvalidTransition("RETRY_REQUIRES_TERMINAL_NONSELECTIVE_SERIES")
@@ -322,7 +401,7 @@ class SeriesOperations:
             raise InvalidTransition("NEW_SERIES_ID_REQUIRED")
         spec_data = dict(source["spec"])
         spec_data["series_id"] = new_series_id
-        return self.submit(
+        return self._submit(
             _decode_spec(spec_data),
             mode=OperationMode(source["mode"]),
             controls=OperationControls(**source["controls"]),
@@ -331,6 +410,8 @@ class SeriesOperations:
     def _next_series(self, now: int | float) -> str | None:
         for series_id in self._state["queue"]:
             series = self._series(series_id)
+            if series["state"] not in _TERMINAL and series["state"] != "QUEUED" and series["state"] != "WAITING_FOR_CAPACITY":
+                return None
             if series["state"] == "QUEUED":
                 return series_id
             if series["state"] == "WAITING_FOR_CAPACITY":
@@ -341,7 +422,7 @@ class SeriesOperations:
         series = self._series(series_id)
         self._update(series, state="RUNNING", reason_code=None, next_attempt_at=None, execution_cost_spent=series["execution_cost_spent"] + execution_cost)
         self._set_matches(series_id, "RUNNING", only_declared=True)
-        resource_id = f"{series_id}:runner-set"
+        resource_id = f"{series_id}:runner-set" # provisional until authoritative telemetry arrives
         ttl = series["controls"]["runner_ttl_seconds"]
         self._state["runners"][resource_id] = {
             "series_id": series_id,
@@ -355,6 +436,23 @@ class SeriesOperations:
     def _record_bundle(self, series_id: str, bundle: ReleaseBundle) -> None:
         series = self._series(series_id)
         publication = self._state["publication"][series_id]
+        # Persist the frozen bundle/evidence atomically with its publication stage.
+        evidence = bundle.evidence_bundle
+        self._state["artifacts"][series_id] = {
+            "reference": evidence.get("url", f"sandboxer://artifacts/{series_id}/{bundle.bundle_hash}"),
+            "bundle_hash": bundle.bundle_hash,
+            "evidence_bundle": evidence,
+            "evidence_version": evidence.get("version"),
+            "label": "TEST / NOT FOR PUBLICATION" if series["mode"] == OperationMode.BATCH_LAB.value else "DRAFT / NOT PUBLISHED",
+        }
+        authoritative = tuple(
+            runner for event in bundle.telemetry if event.get("event_type") == "RUNNERS_PROVISIONED"
+            for runner in event.get("runners", ())
+        )
+        provisional = f"{series_id}:runner-set"
+        self._state["runners"].pop(provisional, None)
+        for runner in authoritative:
+            self._state["runners"][runner] = {"series_id": series_id, "state": "DESTROYED", "evidence": "RUNNERS_PROVISIONED/RUNNER_TEARDOWN"}
         if bundle.terminal_code == "SERIES_COMPLETED":
             self._update(series, state="COMPLETED", reason_code=None)
             self._set_matches(series_id, "NOT_REQUIRED")

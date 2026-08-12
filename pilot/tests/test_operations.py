@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
@@ -205,3 +206,32 @@ def test_compare_and_set_rejects_stale_approval_and_ttl_reconciliation_is_durabl
     assert state["series"]["ttl-001"]["state"] == "QUARANTINED"
     assert state["matches"]["ttl-001:match-1"]["state"] == "QUARANTINED"
     assert state["publication"]["ttl-001"]["state"] == "QUARANTINED"
+
+
+def test_in_flight_cancellation_prevents_late_executor_completion_from_overwriting_terminal_state(tmp_path) -> None:
+    started, release = threading.Event(), threading.Event()
+
+    class BlockingExecutor:
+        def __call__(self, spec):
+            started.set()
+            release.wait(timeout=2)
+            from sandboxer_v0 import execute_series
+            return execute_series(spec)
+
+        def cancel(self, _series_id):
+            release.set()
+
+    path = tmp_path / "operations.json"
+    operations = SeriesOperations(path, executor=BlockingExecutor())
+    queued = operations.submit(_spec("inflight-001"), mode=OperationMode.BATCH_LAB)
+    worker = threading.Thread(target=lambda: operations.advance(now=0))
+    worker.start()
+    assert started.wait(timeout=1)
+    concurrent_operator = SeriesOperations(path, executor=BlockingExecutor())
+    cancelled = concurrent_operator.cancel(
+        "inflight-001", expected_revision=concurrent_operator.snapshot("inflight-001").series_revision
+    )
+    worker.join(timeout=2)
+
+    assert cancelled.series_state == "CANCELLED"
+    assert SeriesOperations(path).snapshot("inflight-001").series_state == "CANCELLED"
