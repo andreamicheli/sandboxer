@@ -578,7 +578,7 @@ class LocalKvmRunnerProvider:
                     else "LOCAL_KVM_RED_NETWORK_TRANSITION_UNAVAILABLE"
                 )
                 raise PreflightWitnessFailed(reason) from error
-            return NetworkObservation(frozenset(), True, True, True)
+            raise PreflightWitnessFailed("LOCAL_KVM_BLUE_NETWORK_TRANSITION_UNAVAILABLE") from error
 
     def destroy(self, runner: RunnerHandle) -> TeardownEvidence:
         existing = self._terminal.get(runner.runner_id)

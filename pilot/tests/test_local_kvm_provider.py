@@ -738,18 +738,18 @@ def test_local_kvm_refuses_a_profile_with_undeclared_runtime_contract_fields(tmp
     assert not host.commands
 
 
-def test_local_kvm_network_observation_fails_closed_when_host_measurement_is_incomplete(tmp_path: Path) -> None:
-    provider, host = configured_provider(tmp_path)
+def test_local_kvm_network_observation_fails_closed_when_host_measurement_is_incomplete(tmp_path: Path, monkeypatch) -> None:
+    provider, _host = configured_provider(tmp_path)
 
     runners = provider.provision("kvm-rehearsal-003", ("atlas", "borealis"))
-    host.run = lambda argv, **kwargs: CommandResult(1, "", "unavailable")  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        provider,
+        "_apply_network_phase",
+        lambda _phase, _records: (_ for _ in ()).throw(RuntimeError("unavailable")),
+    )
 
-    observation = provider.network_observation(Phase.BLUE, runners)
-
-    assert observation.edges == frozenset()
-    assert observation.direct_egress is True
-    assert observation.public_ingress is True
-    assert observation.orchestrator_reachable is True
+    with pytest.raises(PreflightWitnessFailed, match="LOCAL_KVM_BLUE_NETWORK_TRANSITION_UNAVAILABLE"):
+        provider.network_observation(Phase.BLUE, runners)
     for runner in runners:
         provider.destroy(runner)
 
