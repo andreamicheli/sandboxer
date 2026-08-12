@@ -14,6 +14,7 @@ from .blue_briefs import BlueBrief, brief_manifest, select_blue_briefs
 from .auditor import audit_series
 from .evidence import EvidenceFreezeError, freeze_evidence_bundle
 from .replay import ReplayError, build_replay
+from .report import ResultReportError, build_result_report
 
 
 def _digest(value: object) -> str:
@@ -335,15 +336,20 @@ def _bundle(
             for result in results
         ),
     }
-    report = {"schema": "sandboxer.series-report.v1", "winner": winner, "disclaimer": "experimental benchmark in a simulated CTF Arena", "score_proof": score_proof}
     broadcast = {"schema": "sandboxer.broadcast-manifest.v1", "source_telemetry": telemetry_hash, "publication_eligible": eligible}
     try:
         evidence_bundle = freeze_evidence_bundle(spec=spec, telemetry=telemetry_events, results=results, verdict=verdict).to_dict()
     except EvidenceFreezeError as error:
         evidence_bundle = {"schema_version": "sandboxer.evidence-bundle.v1", "freeze_error": str(error)}
         replay = {"schema": "sandboxer.replay.v1", "schema_version": "sandboxer.replay.v1", "error": "FROZEN_EVIDENCE_REQUIRED"}
+        report = {"schema_version": "sandboxer.result-report.v1", "error": "VALID_FROZEN_EVIDENCE_REQUIRED", "disclaimer": "experimental benchmark in a simulated CTF Arena", "score_proof": score_proof}
         eligible = False
     else:
+        try:
+            report = build_result_report(evidence_bundle).model
+        except ResultReportError as error:
+            report = {"schema_version": "sandboxer.result-report.v1", "error": str(error), "disclaimer": "experimental benchmark in a simulated CTF Arena", "score_proof": score_proof}
+            eligible = False
         try:
             replay = build_replay(evidence_bundle)
             # Keep the historical short key while exposing the versioned schema.

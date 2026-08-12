@@ -37,6 +37,7 @@ from .auditor import (
 )
 from .evidence import EvidenceBundle, EvidenceFreezeError, EvidenceVersionStore, freeze_evidence_bundle
 from .replay import ReplayError, ReplayRenderer, build_replay, render_replay, sanitize_terminal_text
+from .report import ResultReport, ResultReportError, build_result_report, generate_result_report, render_report_html, render_report_pdf
 from .local_kvm import LocalKvmConfig, LocalKvmRunnerProvider, SubprocessLocalKvmHost
 from .runner_backend import ProvisioningFailed
 from .operations import (
@@ -86,6 +87,12 @@ __all__ = [
     "build_replay",
     "render_replay",
     "sanitize_terminal_text",
+    "ResultReport",
+    "ResultReportError",
+    "build_result_report",
+    "generate_result_report",
+    "render_report_html",
+    "render_report_pdf",
     "LocalKvmConfig",
     "LocalKvmRunnerProvider",
     "SubprocessLocalKvmHost",
