@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from sandboxer_v0.arena_safety import Phase, TeardownState
+from sandboxer_v0.arena_safety import ArenaNetworkPolicy, Phase, TeardownState
 from sandboxer_v0.local_kvm import (
     CommandResult,
     LocalKvmConfig,
@@ -886,6 +886,7 @@ def test_blue_uses_two_separate_runner_namespaces_and_red_installs_deny_first_po
     red = provider.network_observation(Phase.RED, runners)
 
     assert red.direct_egress is False
+    assert red.edges == ArenaNetworkPolicy("kvm-rehearsal-008", "atlas", "borealis").expected(Phase.RED).edges
     assert any("policy drop" in rules and "tcp dport 8080" in rules for rules in host.inputs)
     assert sum("netns" in command and any(item.startswith("tap-") for item in command) for command in host.commands) >= 2
     assert all(provider.destroy(runner).state is TeardownState.DESTROYED for runner in runners)

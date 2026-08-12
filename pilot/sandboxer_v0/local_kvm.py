@@ -27,7 +27,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
-from .arena_safety import NetworkObservation, Phase, TeardownEvidence, TeardownState
+from .arena_safety import ArenaNetworkPolicy, NetworkObservation, Phase, TeardownEvidence, TeardownState
 from .local_kvm_control import ControlProbe, ControlReady, NetworkProof, parse_control, parse_network_proof
 from .runner_backend import PreflightCheck, PreflightWitnessFailed, ProvisioningFailed, RunnerHandle
 
@@ -846,8 +846,13 @@ class LocalKvmRunnerProvider:
         proofs = [self._network_proof(record, phase) for record in records]
         if not all(not proof.peer_denied and proof.toy_http and proof.alternate_denied and proof.icmp_denied and proof.egress_denied and proof.orchestrator_denied for proof in proofs):
             return NetworkObservation(frozenset(), True, True, True)
-        private = frozenset({f"{records[0].handle.name}:private-a", f"{records[1].handle.name}:private-b"})
-        edges = private | frozenset({f"{records[0].handle.name}->toy-service", f"{records[1].handle.name}->toy-service"})
+        # Share the canonical names with the backend policy rather than
+        # independently reconstructing endpoint identifiers here.
+        edges = ArenaNetworkPolicy(
+            records[0].handle.runner_id.rsplit(":", 1)[0],
+            records[0].handle.name,
+            records[1].handle.name,
+        ).expected(Phase.RED).edges
         # The namespace has only a bridge and unnumbered taps.  The Unix control
         # socket is not an IP path and cannot be reached by either guest.
         return NetworkObservation(edges, direct_egress, public_ingress, False)
