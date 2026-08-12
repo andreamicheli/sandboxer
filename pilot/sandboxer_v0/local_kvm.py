@@ -583,10 +583,8 @@ class LocalKvmRunnerProvider:
                 self._prepare_red_network(records)
             return self._measure_network(records, phase)
         except PreflightWitnessFailed:
-            if phase is Phase.RED:
-                self._capture_serial_stages(records)
-                raise
-            return NetworkObservation(frozenset(), True, True, True)
+            self._capture_serial_stages(records)
+            raise
         except Exception as error:
             # An unavailable witness is unsafe by definition; never infer safety.
             if phase is Phase.RED:
@@ -972,6 +970,9 @@ class LocalKvmRunnerProvider:
                 timeout_seconds=_NETWORK_PROBE_TIMEOUT_SECONDS,
             )
         except (TimeoutError, socket.timeout) as error:
+            serial_proof = self._serial_network_proof(record, phase)
+            if serial_proof is not None:
+                return serial_proof
             raise PreflightWitnessFailed(f"LOCAL_KVM_{phase.value.upper()}_GUEST_NETPROBE_TIMEOUT") from error
         except (FileNotFoundError, ConnectionRefusedError, OSError) as error:
             raise PreflightWitnessFailed(f"LOCAL_KVM_{phase.value.upper()}_GUEST_NETPROBE_REQUEST_UNAVAILABLE") from error
@@ -979,6 +980,35 @@ class LocalKvmRunnerProvider:
             return parse_network_proof(response, record.nonce, phase.value)
         except Exception as error:
             raise PreflightWitnessFailed(f"LOCAL_KVM_{phase.value.upper()}_GUEST_NETPROBE_INVALID_RESPONSE") from error
+
+    def _serial_network_proof(self, record: _RunnerRecord, phase: Phase) -> NetworkProof | None:
+        prefix = "SANDBOXER_NETPROBE_RESULT "
+        try:
+            lines = (record.root / "serial.log").read_text(encoding="ascii", errors="ignore")[-8192:].splitlines()
+            result = next((line.removeprefix(prefix) for line in reversed(lines) if line.startswith(prefix)), None)
+            if result is None:
+                return None
+            fields = dict(token.split("=", 1) for token in result.split())
+            expected = {"phase", "peer_denied", "peer_tcp", "toy_http", "alternate_denied", "icmp_denied", "egress_denied", "egress_reason", "orchestrator_denied", "local_toy"}
+            if fields.keys() != expected or fields["phase"] != phase.value:
+                return None
+            boolean_names = expected - {"phase", "egress_reason"}
+            if any(fields[name] not in {"0", "1"} for name in boolean_names):
+                return None
+            if fields["egress_reason"] not in {"blocked", "default_route", "tcp_reachable"}:
+                return None
+            if (fields["egress_denied"] == "1") != (fields["egress_reason"] == "blocked"):
+                return None
+            return NetworkProof(
+                record.nonce, phase.value,
+                fields["peer_denied"] == "1", fields["toy_http"] == "1",
+                fields["alternate_denied"] == "1", fields["icmp_denied"] == "1",
+                fields["egress_denied"] == "1", fields["egress_reason"],
+                fields["orchestrator_denied"] == "1", fields["local_toy"] == "1",
+                fields["peer_tcp"] == "1",
+            )
+        except (OSError, ValueError):
+            return None
 
     def _network_proofs(self, records: list[_RunnerRecord], phase: Phase) -> list[NetworkProof]:
         proofs: list[NetworkProof] = []

@@ -375,6 +375,43 @@ def test_local_kvm_labels_a_blue_guest_netprobe_timeout(tmp_path: Path) -> None:
     assert error.value.reason_code == "LOCAL_KVM_BLUE_GUEST_NETPROBE_TIMEOUT"
 
 
+def test_local_kvm_uses_complete_allowlisted_serial_proof_when_virtio_times_out(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    runners = provider.provision("kvm-serial-network-proof", ("atlas", "borealis"))
+    for runner in runners:
+        record = provider._records[runner.runner_id]
+        (record.root / "serial.log").write_text(
+            "SANDBOXER_NETPROBE_RESULT phase=blue peer_denied=1 peer_tcp=0 toy_http=0 "
+            "alternate_denied=1 icmp_denied=1 egress_denied=1 egress_reason=blocked "
+            "orchestrator_denied=1 local_toy=1\n",
+            encoding="ascii",
+        )
+    host.network_probe_failure = TimeoutError("virtio delivery unavailable")
+
+    observation = provider.network_observation(Phase.BLUE, runners)
+
+    assert observation.direct_egress is False
+    assert observation.public_ingress is False
+    assert all(provider.destroy(runner).state is TeardownState.DESTROYED for runner in runners)
+
+
+def test_local_kvm_rejects_incomplete_serial_proof_after_virtio_timeout(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    runners = provider.provision("kvm-incomplete-serial-proof", ("atlas", "borealis"))
+    for runner in runners:
+        record = provider._records[runner.runner_id]
+        (record.root / "serial.log").write_text(
+            "SANDBOXER_NETPROBE_RESULT phase=blue peer_denied=1\n",
+            encoding="ascii",
+        )
+    host.network_probe_failure = TimeoutError("virtio delivery unavailable")
+
+    with pytest.raises(PreflightWitnessFailed, match="LOCAL_KVM_BLUE_GUEST_NETPROBE_TIMEOUT"):
+        provider.network_observation(Phase.BLUE, runners)
+
+    assert all(provider.destroy(runner).state is TeardownState.DESTROYED for runner in runners)
+
+
 def test_local_kvm_labels_a_blue_guest_netprobe_invalid_response(tmp_path: Path) -> None:
     provider, host = configured_provider(tmp_path)
     host.network_probe_response = "not a network proof\n"
