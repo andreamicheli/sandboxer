@@ -21,6 +21,11 @@ class ReplayError(ValueError):
 _ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|[@-Z\\-_])")
 _URL = re.compile(r"(?:https?|ftp)://[^\s<>'\"]+", re.IGNORECASE)
 _UNSAFE_URI = re.compile(r"(?:javascript|data|file|ssh)://?[^\s<>'\"]+", re.IGNORECASE)
+_PRIVATE_DOMAIN = re.compile(
+    r"(?<![A-Za-z0-9.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"(?:internal|local)(?![A-Za-z0-9.-])|(?<![A-Za-z0-9.-])localhost(?![A-Za-z0-9.-])",
+    re.IGNORECASE,
+)
 _PRIVATE_REASONING = re.compile(
     r"(?is)(?:private\s+reasoning|chain[- ]of[- ]thought|internal\s+reasoning|thought\s+process)\s*[:=].*"
 )
@@ -57,7 +62,7 @@ def sanitize_terminal_text(value: object) -> str:
     text = _FLAG.sub("[synthetic flag removed]", text)
     text = _PATH.sub("[internal path removed]", text)
     text = _PRIVATE_IP.sub("[private network removed]", text)
-    text = re.sub(r"(?i)\b(?:localhost|.*?\.internal|.*?\.local)\b", "[private network removed]", text)
+    text = _PRIVATE_DOMAIN.sub("[private network removed]", text)
     text = _CONTROL.sub("", text)
     return text
 
@@ -130,10 +135,14 @@ def _contrast(foreground: str, background: str) -> float:
         number = int(value, 16) / 255
         return number / 12.92 if number <= 0.04045 else ((number + 0.055) / 1.055) ** 2.4
 
-    rgb = [channel(background[index : index + 2]) for index in (1, 3, 5)]
-    luminance = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
-    # Terminal text is intentionally near-white and backgrounds are bounded dark.
-    return (1.0 + 0.05) / (luminance + 0.05)
+    def luminance(color: str) -> float:
+        rgb = [channel(color[index : index + 2]) for index in (1, 3, 5)]
+        return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+
+    foreground_luminance = luminance(foreground)
+    background_luminance = luminance(background)
+    lighter, darker = max(foreground_luminance, background_luminance), min(foreground_luminance, background_luminance)
+    return (lighter + 0.05) / (darker + 0.05)
 
 
 def _gradient(identity: str) -> dict[str, Any]:

@@ -12,7 +12,7 @@ from sandboxer_v0 import (
     SeriesSpec,
     execute_series,
 )
-from sandboxer_v0.replay import ReplayError, _digest, build_replay
+from sandboxer_v0.replay import ReplayError, _digest, build_replay, sanitize_terminal_text
 
 
 def _spec() -> SeriesSpec:
@@ -58,7 +58,7 @@ def test_replay_sanitizes_ansi_links_credentials_flags_paths_and_private_reasoni
             "competitor": "atlas",
             "wall_time_utc": "2026-01-01T00:00:00+00:00",
             "orchestrator_monotonic_ns": 99999999999,
-            "response": "\x1b]8;;https://evil.example\x07Bearer sk-live-123456789 secret flag{never-publish} /home/private/.env private reasoning: do not show 10.0.0.4",
+            "terminal_text": "SAFE-BEGIN \x1b]8;;https://evil.example\x07Bearer sk-live-123456789 secret flag{never-publish} /home/private/.env SAFE-END private reasoning: do not show 10.0.0.4",
         }
     )
     tampered: dict[str, Any] = dict(bundle)
@@ -74,6 +74,20 @@ def test_replay_sanitizes_ansi_links_credentials_flags_paths_and_private_reasoni
     assert "10.0.0.4" not in rendered
     assert "private reasoning" not in rendered.lower()
     assert "\x1b" not in rendered
+    assert "SAFE-BEGIN" in rendered
+    assert "SAFE-END" in rendered
+
+
+def test_private_domain_redaction_preserves_surrounding_text_and_all_domains() -> None:
+    text = "before service.internal and api.local after; keep internalized.locality and .local suffix"
+
+    sanitized = sanitize_terminal_text(text)
+
+    assert "before" in sanitized and "after" in sanitized
+    assert "service.internal" not in sanitized
+    assert "api.local" not in sanitized
+    assert "internalized.locality" in sanitized
+    assert ".local suffix" in sanitized
 
 
 def test_replay_rejects_unfrozen_or_internal_alias_input() -> None:
