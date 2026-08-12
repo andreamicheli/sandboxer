@@ -50,8 +50,10 @@ network_proof() {
     if test "$phase" = blue; then
         tcp_connect "$SANDBOXER_PEER_IP" 8080 || peer_denied=1
     else
-        tcp_connect "$SANDBOXER_PEER_IP" 8080 && peer_tcp=1
-        tcp_http "$SANDBOXER_PEER_IP" 8080 && toy_http=1
+        if tcp_connect "$SANDBOXER_PEER_IP" 8080; then
+            peer_tcp=1
+            tcp_http "$SANDBOXER_PEER_IP" 8080 && toy_http=1
+        fi
     fi
     alternate_denied=0
     network_stage alternate
