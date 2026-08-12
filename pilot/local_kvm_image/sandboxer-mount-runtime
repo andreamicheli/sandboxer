@@ -35,7 +35,12 @@ if ! test -r /workspace/notes/index.html; then
     toy_outcome root_failed
     exit 1
 fi
-start-stop-daemon --start --background --make-pidfile --pidfile /run/sandboxer-toy.pid --exec /usr/local/libexec/sandboxer-toy >/dev/null 2>&1 || {
+if ! sandboxer_load_metadata || ! sandboxer_local_address_ready "$SANDBOXER_IP"; then
+    toy_outcome address_unavailable
+    exit 1
+fi
+start-stop-daemon --start --background --make-pidfile --pidfile /run/sandboxer-toy.pid \
+    --chuid competitor --exec /usr/sbin/httpd -- -f -p 8080 -h /workspace/notes >/dev/null 2>&1 || {
     toy_outcome exec_failed
     exit 1
 }

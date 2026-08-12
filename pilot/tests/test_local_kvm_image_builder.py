@@ -106,7 +106,7 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert "SANDBOXER_STAGE_TOY" in bootstrap
     assert "SANDBOXER_STAGE_CONTROL" in bootstrap
     assert "/usr/local/libexec/sandboxer-setup" in bootstrap
-    assert "/usr/local/libexec/sandboxer-toy" in bootstrap
+    assert "--chuid competitor --exec /usr/sbin/httpd -- -f -p 8080" in bootstrap
     assert "/usr/local/libexec/sandboxer-control" in bootstrap
     assert "SANDBOXER_TOY_READY" in bootstrap
     assert "SANDBOXER_TOY_ROOT_FAILED" in bootstrap
@@ -220,6 +220,7 @@ def test_rendered_toy_reports_address_bind_and_process_outcomes_without_raw_outp
     assert "-u competitor" in toy
     assert "-p 8080" in toy
     assert '"$SANDBOXER_IP:8080"' not in toy
+    assert "--chuid competitor --exec /usr/sbin/httpd -- -f -p 8080" in bootstrap
     assert "exec su " not in toy
     assert "toy_process_outcome exited_other" in toy
     assert "2>" not in toy and "stderr" not in toy
