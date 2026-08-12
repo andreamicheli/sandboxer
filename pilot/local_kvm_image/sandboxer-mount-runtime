@@ -40,7 +40,8 @@ if ! sandboxer_load_metadata || ! sandboxer_local_address_ready "$SANDBOXER_IP";
     exit 1
 fi
 start-stop-daemon --start --background --make-pidfile --pidfile /run/sandboxer-toy.pid \
-    --chuid competitor --exec /usr/sbin/httpd -- -f -p 8080 -h /workspace/notes >/dev/null 2>&1 || {
+    --chdir /workspace/notes --chuid competitor --exec /usr/sbin/httpd -- \
+    -f -p 8080 -h /workspace/notes >/dev/null 2>&1 || {
     toy_outcome exec_failed
     exit 1
 }
