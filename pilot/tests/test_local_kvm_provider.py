@@ -233,7 +233,7 @@ def test_local_kvm_rehearsal_uses_distinct_overlays_control_and_a_disposable_net
     assert {timeout for request, timeout in host.control_timeouts if request.startswith("NETPROBE ")} == {12}
     blue_route_witnesses = [
         command for command in host.commands
-        if len(command) == 6 and command[:2] == ("ip", "-n") and command[3:] == ("route", "show", "default")
+        if len(command) == 6 and command[:2] == ("ip", "-n") and command[2].startswith("sbb-") and command[3:] == ("route", "show", "default")
     ]
     assert len({command[2] for command in blue_route_witnesses}) == 2
     qemu_commands = [command for command in host.commands if "qemu-system-x86_64" in command]
@@ -887,6 +887,8 @@ def test_blue_uses_two_separate_runner_namespaces_and_red_installs_deny_first_po
 
     assert red.direct_egress is False
     assert red.edges == ArenaNetworkPolicy("kvm-rehearsal-008", "atlas", "borealis").expected(Phase.RED).edges
+    red_namespace = provider._records[runners[0].runner_id].red_namespace
+    assert ("ip", "-n", red_namespace, "route", "show", "default") in host.commands
     assert any("policy drop" in rules and "tcp dport 8080" in rules for rules in host.inputs)
     assert sum("netns" in command and any(item.startswith("tap-") for item in command) for command in host.commands) >= 2
     assert all(provider.destroy(runner).state is TeardownState.DESTROYED for runner in runners)

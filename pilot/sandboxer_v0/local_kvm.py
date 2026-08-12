@@ -843,7 +843,7 @@ class LocalKvmRunnerProvider:
         except Exception as error:
             raise PreflightWitnessFailed("LOCAL_KVM_RED_HOST_BRIDGE_ADDRESS_WITNESS_UNAVAILABLE") from error
         try:
-            routes = self._run(("ip", "-n", namespace, "ip", "route", "show", "default"), "NETWORK_WITNESS_UNAVAILABLE")
+            routes = self._run(("ip", "-n", namespace, "route", "show", "default"), "NETWORK_WITNESS_UNAVAILABLE")
         except Exception as error:
             raise PreflightWitnessFailed("LOCAL_KVM_RED_HOST_ROUTE_WITNESS_UNAVAILABLE") from error
         try:
