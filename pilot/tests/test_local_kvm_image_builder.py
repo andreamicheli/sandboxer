@@ -87,7 +87,9 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert "test ! -e /etc/runlevels/default/cloud-init-hotplugd" in provision
     assert "iface eth0 inet dhcp" not in provision
     assert "sandboxer-mount-runtime" in provision
-    assert "busybox httpd" in (rendered / "sandboxer-toy").read_text()
+    toy = (rendered / "sandboxer-toy").read_text()
+    assert "exec /usr/sbin/httpd" in toy
+    assert "/bin/busybox httpd" not in toy
     assert "PROBE_OK" in control and "NETWORK_PROBE" in control
     assert "sandboxer_no_credentials" in control and "sandboxer_private_mounts" in control
     setup = (rendered / "sandboxer-setup").read_text()
