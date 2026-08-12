@@ -7,11 +7,11 @@ otherwise reach a Runner implementation directly.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 import json
 from pathlib import Path
-from typing import Any, Iterator, Protocol
+from typing import Any, Callable, Iterator, Protocol
 import fcntl
 from contextlib import contextmanager
 
@@ -64,6 +64,14 @@ class SeriesExecutor(Protocol):
 
     # Optional: a production Adapter must implement bounded cancellation and
     # return teardown observations.  The controlled default has no live work.
+
+
+@dataclass(frozen=True)
+class ExecutionResult:
+    """Executor completion with measured spend, not an admission estimate."""
+
+    bundle: ReleaseBundle
+    actual_cost: int | float = 0
 
 
 @dataclass(frozen=True)
@@ -143,10 +151,12 @@ class SeriesOperations:
         *,
         availability: ProviderAvailability | None = None,
         executor: SeriesExecutor = execute_series,
+        clock: Callable[[], int | float] | None = None,
     ) -> None:
         self._path = path
         self._availability = availability or _AlwaysAvailable()
         self._executor = executor
+        self._clock = clock or (lambda: 0)
         self._state: dict[str, Any] = {}
         self._reload()
 
@@ -176,11 +186,12 @@ class SeriesOperations:
         *,
         mode: OperationMode,
         controls: OperationControls = OperationControls(),
+        submitted_at: int | float | None = None,
     ) -> OperationSnapshot:
         with self._lock():
-            return self._submit(spec, mode=mode, controls=controls)
+            return self._submit(spec, mode=mode, controls=controls, submitted_at=self._clock() if submitted_at is None else submitted_at)
 
-    def _submit(self, spec: SeriesSpec, *, mode: OperationMode, controls: OperationControls) -> OperationSnapshot:
+    def _submit(self, spec: SeriesSpec, *, mode: OperationMode, controls: OperationControls, submitted_at: int | float) -> OperationSnapshot:
         if spec.series_id in self._state["series"]:
             raise InvalidTransition("SERIES_ID_ALREADY_EXISTS")
         series_state = "AWAITING_SPEND_APPROVAL" if mode is OperationMode.SUPERVISED else "QUEUED"
@@ -193,7 +204,7 @@ class SeriesOperations:
             "reason_code": None,
             "wait_attempts": 0,
             "next_attempt_at": None,
-            "submitted_at": 0,
+            "submitted_at": submitted_at,
             "wait_cost_spent": 0,
             "execution_cost_spent": 0,
         }
@@ -331,7 +342,7 @@ class SeriesOperations:
 
     def _execute_after_prepare(self, series_id: str, spec: SeriesSpec, execution_revision: int) -> tuple[OperationSnapshot, ...]:
         try:
-            bundle = self._executor(spec)
+            completed = self._executor(spec)
         except Exception:
             with self._lock():
                 if self._series(series_id)["state"] == "RUNNING":
@@ -341,7 +352,13 @@ class SeriesOperations:
             series = self._series(series_id)
             if series["state"] != "RUNNING" or series["revision"] != execution_revision:
                 return (self._snapshot(series_id),)
-            self._record_bundle(series_id, bundle)
+            result = completed if isinstance(completed, ExecutionResult) else ExecutionResult(completed)
+            controls = OperationControls(**series["controls"])
+            if series["execution_cost_spent"] - series.get("reserved_execution_cost", 0) + result.actual_cost > controls.execution_cost_ceiling:
+                self._quarantine(series_id, "EXECUTION_COST_CEILING_EXCEEDED")
+                return (self._snapshot(series_id),)
+            self._update(series, execution_cost_spent=series["execution_cost_spent"] - series.get("reserved_execution_cost", 0) + result.actual_cost, reserved_execution_cost=0)
+            self._record_bundle(series_id, result.bundle)
             return (self._snapshot(series_id),)
 
     def cancel(self, series_id: str, *, expected_revision: int) -> OperationSnapshot:
@@ -383,6 +400,11 @@ class SeriesOperations:
     def reconcile(self, *, now: int | float) -> tuple[OperationSnapshot, ...]:
         """Quarantine expired Runner sets and reconcile their owning Series."""
         with self._lock():
+            expired = tuple(runner["series_id"] for runner in self._state["runners"].values() if runner["state"] == "RUNNING" and now >= runner["expires_at"])
+        for series_id in expired:
+            if hasattr(self._executor, "cancel"):
+                self._executor.cancel(series_id)
+        with self._lock():
             return self._reconcile(now)
 
     def _reconcile(self, now: int | float) -> tuple[OperationSnapshot, ...]:
@@ -410,6 +432,7 @@ class SeriesOperations:
             _decode_spec(spec_data),
             mode=OperationMode(source["mode"]),
             controls=OperationControls(**source["controls"]),
+            submitted_at=self._clock(),
         )
 
     def _next_series(self, now: int | float) -> str | None:
@@ -425,7 +448,7 @@ class SeriesOperations:
 
     def _mark_running(self, series_id: str, execution_cost: int | float, now: int | float) -> None:
         series = self._series(series_id)
-        self._update(series, state="RUNNING", reason_code=None, next_attempt_at=None, execution_cost_spent=series["execution_cost_spent"] + execution_cost)
+        self._update(series, state="RUNNING", reason_code=None, next_attempt_at=None, execution_cost_spent=series["execution_cost_spent"] + execution_cost, reserved_execution_cost=execution_cost)
         self._set_matches(series_id, "RUNNING", only_declared=True)
         resource_id = f"{series_id}:runner-set" # provisional until authoritative telemetry arrives
         ttl = series["controls"]["runner_ttl_seconds"]
@@ -442,6 +465,11 @@ class SeriesOperations:
         series = self._series(series_id)
         publication = self._state["publication"][series_id]
         # Persist the frozen bundle/evidence atomically with its publication stage.
+        if series["mode"] == OperationMode.BATCH_LAB.value:
+            report = {**bundle.report, "publication_status": "TEST / NOT FOR PUBLICATION"}
+            broadcast = {**bundle.broadcast_manifest, "publication_eligible": False, "publication_status": "TEST / NOT FOR PUBLICATION"}
+            manifest = {**bundle.artifact_manifest, "publication_status": "TEST / NOT FOR PUBLICATION"}
+            bundle = replace(bundle, publication_eligible=False, report=report, broadcast_manifest=broadcast, artifact_manifest=manifest)
         evidence = bundle.evidence_bundle
         self._state["artifacts"][series_id] = {
             "reference": evidence.get("url", f"sandboxer://artifacts/{series_id}/{bundle.bundle_hash}"),

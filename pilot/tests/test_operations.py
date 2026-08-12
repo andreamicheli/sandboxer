@@ -8,6 +8,7 @@ import pytest
 from sandboxer_v0 import (
     CapacityCondition,
     CapacityObservation,
+    ExecutionResult,
     ControlledCompetitor,
     FakeModelAdapter,
     FakeRunnerBackend,
@@ -273,3 +274,58 @@ def test_stale_cancel_does_not_call_executor_cancel(tmp_path) -> None:
     with pytest.raises(Exception, match="COMPARE_AND_SET_CONFLICT"):
         operations.cancel("stale-cancel-001", expected_revision=submitted.series_revision + 1)
     assert calls == []
+
+
+def test_submission_clock_includes_queue_wait_in_total_deadline(tmp_path) -> None:
+    operations = SeriesOperations(tmp_path / "operations.json", clock=lambda: 100)
+    operations.submit(_spec("queue-deadline-001"), mode=OperationMode.BATCH_LAB, controls=OperationControls(wait_deadline_seconds=5))
+    blocked, = operations.advance(now=106)
+    assert blocked.reason_code == "WAIT_DEADLINE_EXCEEDED"
+
+
+def test_actual_executor_cost_over_ceiling_quarantines_without_artifact(tmp_path) -> None:
+    class Overspend:
+        def __call__(self, spec):
+            from sandboxer_v0 import execute_series
+            return ExecutionResult(execute_series(spec), actual_cost=11)
+
+        def cancel(self, _series_id):
+            pass
+
+    operations = SeriesOperations(tmp_path / "operations.json", executor=Overspend())
+    operations.submit(_spec("overspend-001"), mode=OperationMode.BATCH_LAB, controls=OperationControls(execution_cost_ceiling=10))
+    result, = operations.advance(now=0)
+    assert result.series_state == "QUARANTINED"
+    assert result.reason_code == "EXECUTION_COST_CEILING_EXCEEDED"
+    assert result.artifact_reference is None
+
+
+def test_ttl_reconciliation_cancels_inflight_executor_before_quarantine(tmp_path) -> None:
+    cancelled = []
+
+    class Probe:
+        def __call__(self, _spec):
+            raise KeyboardInterrupt()
+
+        def cancel(self, series_id):
+            cancelled.append(series_id)
+
+    path = tmp_path / "operations.json"
+    operations = SeriesOperations(path, executor=Probe())
+    operations.submit(_spec("ttl-cancel-001"), mode=OperationMode.BATCH_LAB, controls=OperationControls(runner_ttl_seconds=5))
+    with pytest.raises(KeyboardInterrupt):
+        operations.advance(now=0)
+    result, = SeriesOperations(path, executor=Probe()).reconcile(now=5)
+    assert cancelled == ["ttl-cancel-001"]
+    assert result.reason_code == "RUNNER_TTL_EXPIRED"
+
+
+def test_batch_persists_intrinsically_non_public_release_bundle(tmp_path) -> None:
+    path = tmp_path / "operations.json"
+    operations = SeriesOperations(path)
+    operations.submit(_spec("test-bundle-001"), mode=OperationMode.BATCH_LAB)
+    operations.advance(now=0)
+    bundle = json.loads(path.read_text())["artifacts"]["test-bundle-001"]["release_bundle"]
+    assert bundle["publication_eligible"] is False
+    assert bundle["report"]["publication_status"] == "TEST / NOT FOR PUBLICATION"
+    assert bundle["broadcast_manifest"]["publication_eligible"] is False

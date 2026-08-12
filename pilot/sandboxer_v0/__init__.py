@@ -42,6 +42,7 @@ from .runner_backend import ProvisioningFailed
 from .operations import (
     CapacityCondition,
     CapacityObservation,
+    ExecutionResult,
     InvalidTransition,
     OperationControls,
     OperationMode,
@@ -91,6 +92,7 @@ __all__ = [
     "ProvisioningFailed",
     "CapacityCondition",
     "CapacityObservation",
+    "ExecutionResult",
     "InvalidTransition",
     "OperationControls",
     "OperationMode",
