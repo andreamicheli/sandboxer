@@ -24,6 +24,10 @@ tcp_connect() {
     /bin/busybox timeout -s KILL 1 /bin/busybox nc -w 1 "$1" "$2" </dev/null >/dev/null 2>&1
 }
 
+declared_tcp_connect() {
+    tcp_connect "$1" "$2" || tcp_connect "$1" "$2"
+}
+
 icmp_probe() {
     /bin/busybox timeout -s KILL 2 ping -c 1 -W 1 "$1" >/dev/null 2>&1
 }
@@ -50,7 +54,7 @@ network_proof() {
     if test "$phase" = blue; then
         tcp_connect "$SANDBOXER_PEER_IP" 8080 || peer_denied=1
     else
-        if tcp_connect "$SANDBOXER_PEER_IP" 8080; then
+        if declared_tcp_connect "$SANDBOXER_PEER_IP" 8080; then
             peer_tcp=1
             tcp_http "$SANDBOXER_PEER_IP" 8080 && toy_http=1
         fi

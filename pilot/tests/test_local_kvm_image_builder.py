@@ -95,6 +95,7 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert "/bin/busybox httpd" not in toy
     assert "PROBE_OK" in control and "NETWORK_PROBE" in control
     assert "network_stage emitted" in control
+    assert 'declared_tcp_connect "$SANDBOXER_PEER_IP" 8080' in control
     assert "sandboxer_no_credentials" in control and "sandboxer_private_mounts" in control
     setup = (rendered / "sandboxer-setup").read_text()
     bootstrap = (rendered / "sandboxer-mount-runtime").read_text()
