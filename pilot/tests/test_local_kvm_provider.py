@@ -58,6 +58,7 @@ class RecordingKvmHost:
         self.route_witness_failure = False
         self.network_probe_failure: BaseException | None = None
         self.network_probe_response: str | None = None
+        self.red_counter_packets = {name: 1 for name in ("arp_left", "arp_right", "tcp_left", "tcp_right", "response_left", "response_right")}
 
     def run(self, argv: tuple[str, ...], *, input_text: str | None = None, timeout_seconds: float = 10) -> CommandResult:
         del timeout_seconds
@@ -101,6 +102,12 @@ class RecordingKvmHost:
                 return CommandResult(1, "", "host route witness unavailable")
             return CommandResult(0, "", "")
         if "nft" in argv and "list" in argv:
+            if "counters" in argv:
+                rendered = "\n".join(
+                    f"counter {name} {{ packets {packets} bytes 0 }}"
+                    for name, packets in self.red_counter_packets.items()
+                )
+                return CommandResult(0, rendered, "")
             return CommandResult(0, self.inputs[-1] if self.inputs else "", "")
         return CommandResult(0, "", "")
 
@@ -418,6 +425,43 @@ def test_local_kvm_waits_for_guest_control_reopen_after_red_ack(tmp_path: Path, 
 
     assert report.terminal_code == "RUNNERS_DESTROYED"
     assert waits == [0.25] * 4
+
+
+@pytest.mark.parametrize(
+    ("zero_counters", "reason_code"),
+    [
+        (("arp_left",), "LOCAL_KVM_RED_ARP_FORWARDING_WITNESS_FAILED"),
+        (("tcp_left",), "LOCAL_KVM_RED_TCP_REQUEST_FORWARDING_WITNESS_FAILED"),
+        (("response_left",), "LOCAL_KVM_RED_TCP_RESPONSE_FORWARDING_WITNESS_FAILED"),
+        ((), "LOCAL_KVM_RED_TCP_HANDSHAKE_WITNESS_FAILED"),
+    ],
+)
+def test_local_kvm_categorizes_red_tcp_failure_from_host_policy_counters(
+    tmp_path: Path, zero_counters: tuple[str, ...], reason_code: str
+) -> None:
+    provider, host = configured_provider(tmp_path)
+    original_exchange = host.control_exchange
+    for name in zero_counters:
+        host.red_counter_packets[name] = 0
+
+    def failed_red_tcp(socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
+        if payload.startswith("NETPROBE ") and payload.rstrip().endswith(" red"):
+            _, nonce, phase = payload.split()
+            return (
+                f"NETWORK_PROBE nonce={nonce} phase={phase} peer_denied=0 peer_tcp=0 toy_http=0 "
+                "alternate_denied=1 icmp_denied=1 egress_denied=1 egress_reason=blocked "
+                "orchestrator_denied=1 local_toy=1\n"
+            )
+        return original_exchange(socket_path, payload, timeout_seconds=timeout_seconds)
+
+    host.control_exchange = failed_red_tcp  # type: ignore[method-assign]
+
+    with pytest.raises(RunnerPreflightFailed) as error:
+        ProductionRunnerBackend(provider).rehearse(
+            match_id="kvm-red-counter", runner_names=("atlas", "borealis")
+        )
+
+    assert error.value.reason_code == reason_code
 
 
 def test_local_kvm_does_not_mislabel_a_failed_blue_peer_witness_as_orchestrator_reachability(tmp_path: Path) -> None:

@@ -817,12 +817,15 @@ class LocalKvmRunnerProvider:
             left, right = records
             port = self.config.toy_service_port
             rules = (
-                f'add rule bridge sandboxer forward iifname "{left.tap}" oifname "{right.tap}" ether type arp accept\n'
-                f'add rule bridge sandboxer forward iifname "{right.tap}" oifname "{left.tap}" ether type arp accept\n'
-                f'add rule bridge sandboxer forward iifname "{left.tap}" oifname "{right.tap}" ether type ip ip protocol tcp tcp dport {port} accept\n'
-                f'add rule bridge sandboxer forward iifname "{right.tap}" oifname "{left.tap}" ether type ip ip protocol tcp tcp dport {port} accept\n'
-                f'add rule bridge sandboxer forward iifname "{left.tap}" oifname "{right.tap}" ether type ip ip protocol tcp tcp sport {port} tcp flags & (ack|rst) != 0 accept\n'
-                f'add rule bridge sandboxer forward iifname "{right.tap}" oifname "{left.tap}" ether type ip ip protocol tcp tcp sport {port} tcp flags & (ack|rst) != 0 accept\n'
+                "add counter bridge sandboxer arp_left\nadd counter bridge sandboxer arp_right\n"
+                "add counter bridge sandboxer tcp_left\nadd counter bridge sandboxer tcp_right\n"
+                "add counter bridge sandboxer response_left\nadd counter bridge sandboxer response_right\n"
+                f'add rule bridge sandboxer forward iifname "{left.tap}" oifname "{right.tap}" ether type arp counter name arp_left accept\n'
+                f'add rule bridge sandboxer forward iifname "{right.tap}" oifname "{left.tap}" ether type arp counter name arp_right accept\n'
+                f'add rule bridge sandboxer forward iifname "{left.tap}" oifname "{right.tap}" ether type ip ip protocol tcp tcp dport {port} counter name tcp_left accept\n'
+                f'add rule bridge sandboxer forward iifname "{right.tap}" oifname "{left.tap}" ether type ip ip protocol tcp tcp dport {port} counter name tcp_right accept\n'
+                f'add rule bridge sandboxer forward iifname "{left.tap}" oifname "{right.tap}" ether type ip ip protocol tcp tcp sport {port} tcp flags & (ack|rst) != 0 counter name response_left accept\n'
+                f'add rule bridge sandboxer forward iifname "{right.tap}" oifname "{left.tap}" ether type ip ip protocol tcp tcp sport {port} tcp flags & (ack|rst) != 0 counter name response_right accept\n'
                 "add rule bridge sandboxer forward ct state established,related accept\n"
             )
             # Install a complete deny-by-default Red ruleset before the first
@@ -892,7 +895,12 @@ class LocalKvmRunnerProvider:
         if not rule_set_ok:
             raise PreflightWitnessFailed("LOCAL_KVM_RED_HOST_NFT_POLICY_WITNESS_FAILED")
         proofs = self._network_proofs(records, phase)
-        self._require_red_network_proofs(proofs)
+        try:
+            self._require_red_network_proofs(proofs)
+        except PreflightWitnessFailed as error:
+            if error.reason_code == "LOCAL_KVM_RED_DECLARED_TOY_TCP_WITNESS_FAILED":
+                raise PreflightWitnessFailed(self._red_tcp_failure(namespace)) from error
+            raise
         # Share the canonical names with the backend policy rather than
         # independently reconstructing endpoint identifiers here.
         edges = ArenaNetworkPolicy(
@@ -936,6 +944,28 @@ class LocalKvmRunnerProvider:
         for reason_code, passed in checks:
             if not all(passed(proof) for proof in proofs):
                 raise PreflightWitnessFailed(reason_code)
+
+    def _red_tcp_failure(self, namespace: str) -> str:
+        try:
+            result = self._run(
+                ("ip", "netns", "exec", namespace, "nft", "list", "counters", "table", "bridge", "sandboxer"),
+                "NETWORK_WITNESS_UNAVAILABLE",
+            )
+            counters = {
+                name: int(packets)
+                for name, packets in re.findall(r"counter (arp_left|arp_right|tcp_left|tcp_right|response_left|response_right) \{\s*packets ([0-9]+)", result.stdout)
+            }
+        except Exception as error:
+            raise PreflightWitnessFailed("LOCAL_KVM_RED_COUNTER_WITNESS_UNAVAILABLE") from error
+        if set(counters) != {"arp_left", "arp_right", "tcp_left", "tcp_right", "response_left", "response_right"}:
+            return "LOCAL_KVM_RED_COUNTER_WITNESS_INVALID"
+        if not counters["arp_left"] or not counters["arp_right"]:
+            return "LOCAL_KVM_RED_ARP_FORWARDING_WITNESS_FAILED"
+        if not counters["tcp_left"] or not counters["tcp_right"]:
+            return "LOCAL_KVM_RED_TCP_REQUEST_FORWARDING_WITNESS_FAILED"
+        if not counters["response_left"] or not counters["response_right"]:
+            return "LOCAL_KVM_RED_TCP_RESPONSE_FORWARDING_WITNESS_FAILED"
+        return "LOCAL_KVM_RED_TCP_HANDSHAKE_WITNESS_FAILED"
 
     def _control_probe(self, record: _RunnerRecord) -> ControlProbe:
         try:
