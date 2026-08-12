@@ -13,6 +13,7 @@ from html import escape
 import json
 import re
 import textwrap
+import unicodedata
 from types import MappingProxyType
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
@@ -441,41 +442,43 @@ body{{font-family:system-ui,sans-serif;line-height:1.5;max-width:72rem;margin:au
 
 def render_report_pdf(model: Mapping[str, Any]) -> bytes:
     """Produce a deterministic, print-ready PDF directly from the same model."""
-    lines = []
+    semantic_lines: list[tuple[str, str]] = []
     for block in model["document"]["children"]:
-        if block["type"] in {"heading", "paragraph"}:
-            lines.append(block["text"])
+        if block["type"] == "heading":
+            semantic_lines.append((f"H{block['level']}", block["text"]))
+        elif block["type"] == "paragraph":
+            semantic_lines.append(("P", block["text"]))
         elif block["type"] == "link":
-            lines.append(f"{block['label']}: {block['url']}")
+            semantic_lines.append(("Link", f"{block['label']}: {block['url']}"))
         elif block["type"] == "claim":
-            lines.append(f"{block['id']} [{block['claim_type']}]: {block['text']}")
+            semantic_lines.append(("P", f"{block['id']} [{block['claim_type']}]: {block['text']}"))
         elif block["type"] == "table":
-            lines.append(block["caption"])
-            lines.extend(" | ".join(row) for row in block["rows"])
+            semantic_lines.append(("Table", block["caption"]))
+            semantic_lines.append(("TR", " | ".join(block["headers"])))
+            semantic_lines.extend(("TR", " | ".join(row)) for row in block["rows"])
         elif block["type"] == "list":
-            lines.extend(block["items"])
+            semantic_lines.extend(("L", item) for item in block["items"])
         elif block["type"] == "incident":
-            lines.append(f"Incidents: {json.dumps(_thaw(block['items']), sort_keys=True)}")
-    lines.append(f"Decisive rule: {model['outcome']['decisive_rule']}")
-    lines.append("Competitor manifests:")
-    lines.extend(f"{competitor['public_name']}: {competitor['model_id']}" for competitor in model["competitor_manifests"])
-    lines.append(f"Protocol: {json.dumps(_thaw(model['protocol']), sort_keys=True)}")
-    lines.append(f"Score proof: {json.dumps(_thaw(model['score_proof']), sort_keys=True)}")
-    for claim in model["claims"]:
-        lines.append(f"{claim['id']} [{claim['type']}]: {claim['text']}")
-    for chapter in model["technical_chapters"]:
-        lines.append(chapter["heading"])
-        lines.append(f"Evidence: {chapter['outcome']['evidence_event_id']}")
-        lines.append(f"Blue Brief: {chapter['blue_brief']['family']}")
-        lines.append(f"Budgets: {json.dumps(_thaw(chapter['budgets']), sort_keys=True)}")
-        lines.append(f"Match score proof: {json.dumps(_thaw(chapter['score_proof']), sort_keys=True)}")
-        lines.extend(f"Timeline: {event['event_id']} {event['event_type']}" for event in chapter["timeline"])
-    lines.append(f"Validity: {model['validity']['status']}")
-    lines.append(f"Evidence checksum: {model['hashes']['checksums']['public']}")
-    lines.append(model["corrections"]["visible_notice"])
-    wrapped = [part for line in lines for part in (textwrap.wrap(str(line), width=82, replace_whitespace=False, drop_whitespace=False) or [""])]
-    escaped = [line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)").encode("ascii", "replace").decode("ascii") for line in wrapped]
-    page_lines = [escaped[index : index + 52] for index in range(0, len(escaped), 52)]
+            semantic_lines.append(("Sect", f"Incidents: {json.dumps(_thaw(block['items']), ensure_ascii=False, sort_keys=True)}"))
+    wrapped = [
+        (role, part)
+        for role, line in semantic_lines
+        for part in (textwrap.wrap(str(line), width=82, replace_whitespace=False, drop_whitespace=False) or [""])
+    ]
+    def visible_ascii(value: str) -> str:
+        normalized = unicodedata.normalize("NFKD", value)
+        rendered = "".join(
+            character if ord(character) < 128 else f"[U+{ord(character):04X}]"
+            for character in normalized
+            if not unicodedata.combining(character)
+        )
+        return rendered.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+    def utf16_hex(value: str) -> str:
+        return (b"\xfe\xff" + value.encode("utf-16-be")).hex().upper()
+
+    rendered = [(role, visible_ascii(line), line) for role, line in wrapped]
+    page_lines = [rendered[index : index + 52] for index in range(0, len(rendered), 52)]
     font_object = 3 + (2 * len(page_lines))
     info_object = font_object + 1
     structure_object = info_object + 1
@@ -490,22 +493,27 @@ def render_report_pdf(model: Mapping[str, Any]) -> bytes:
         page_object = 3 + (2 * index)
         stream_object = page_object + 1
         page_object_ids.append(page_object)
-        stream = "BT /F1 10 Tf 54 790 Td " + " ".join(f"({line}) Tj 0 -13 Td" for line in page) + " ET"
+        marked_stream = " ".join(
+            f"/{role} <</MCID {mcid} /ActualText <{utf16_hex(original)}>>> BDC "
+            f"BT /F1 10 Tf 54 {790 - (13 * mcid)} Td ({visible}) Tj ET EMC"
+            for mcid, (role, visible, original) in enumerate(page)
+        )
         objects.extend([
             f"<< /Type /Page /Parent 2 0 R /StructParents {index} /MediaBox [0 0 595 842] /Resources << /Font << /F1 {font_object} 0 R >> >> /Contents {stream_object} 0 R >>",
-            f"<< /Length {len((' /P <</MCID 0>> BDC ' + stream + ' EMC').encode('ascii'))} >>\nstream\n/P <</MCID 0>> BDC {stream} EMC\nendstream",
+            f"<< /Length {len(marked_stream.encode('ascii'))} >>\nstream\n{marked_stream}\nendstream",
         ])
     objects[1] = f"<< /Type /Pages /Kids [{' '.join(f'{item} 0 R' for item in page_object_ids)}] /Count {len(page_object_ids)} >>"
     objects.extend([
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-        f"<< /Title ({escaped[0]}) /Subject ({escaped[1]}) /Lang (en-US) >>",
-        f"<< /Type /StructTreeRoot /K [{' '.join(f'{first_structure_element + index} 0 R' for index in range(len(page_lines)))}] /ParentTree {parent_tree_object} 0 R >>",
-        f"<< /Nums [{' '.join(f'{index} [{first_structure_element + index} 0 R]' for index in range(len(page_lines)))}] >>",
+        f"<< /Title <{utf16_hex(str(model['title']))}> /Subject <{utf16_hex(str(model['scope']['repeated_scope_language']))}> >>",
+        f"<< /Type /StructTreeRoot /K [{' '.join(f'{first_structure_element + index} 0 R' for index in range(len(rendered)))}] /ParentTree {parent_tree_object} 0 R >>",
+        f"<< /Nums [{' '.join(f'{page_index} [{" ".join(f"{first_structure_element + sum(len(prior) for prior in page_lines[:page_index]) + line_index} 0 R" for line_index in range(len(page)))}]' for page_index, page in enumerate(page_lines))}] >>",
     ])
-    objects.extend(
-        f"<< /Type /StructElem /S /Document /P {structure_object} 0 R /Pg {page_object_ids[index]} 0 R /K 0 >>"
-        for index in range(len(page_lines))
-    )
+    for page_index, page in enumerate(page_lines):
+        objects.extend(
+            f"<< /Type /StructElem /S /{role} /P {structure_object} 0 R /Pg {page_object_ids[page_index]} 0 R /K {mcid} >>"
+            for mcid, (role, _visible, _original) in enumerate(page)
+        )
     document = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
     offsets = [0]
     for number, obj in enumerate(objects, start=1):

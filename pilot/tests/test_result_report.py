@@ -16,7 +16,7 @@ from sandboxer_v0 import (
     EvidenceVersionStore,
     execute_series,
 )
-from sandboxer_v0.report import ResultReportError, build_result_report
+from sandboxer_v0.report import ResultReportError, build_result_report, render_report_pdf
 
 
 def _spec() -> SeriesSpec:
@@ -72,6 +72,7 @@ def test_result_report_projects_one_valid_frozen_bundle_into_synchronized_public
     parsed_pdf = PdfReader(BytesIO(report.pdf))
     assert len(parsed_pdf.pages) >= 1
     assert "/StructTreeRoot" in parsed_pdf.trailer["/Root"]
+    assert all(tag in report.pdf for tag in (b"/S /H1", b"/S /H2", b"/S /P", b"/S /Table", b"/S /L", b"/S /Link"))
     assert "Winner: atlas" in "".join(page.extract_text() for page in parsed_pdf.pages)
 
 
@@ -108,6 +109,20 @@ def test_report_model_is_deeply_immutable_and_json_is_its_semantic_projection() 
     assert document["type"] == "document"
     assert {"heading", "paragraph", "table", "list", "link", "incident", "claim"} <= {block["type"] for block in document["children"]}
     assert all(claim["id"] in {block.get("id") for block in document["children"]} for claim in report.model["claims"])
+
+
+def test_pdf_preserves_unicode_identity_as_accessible_actual_text_without_question_mark_replacement() -> None:
+    report = build_result_report(execute_series(_spec()).evidence_bundle)
+    model = report.model.to_dict()
+    model["title"] = "Atlás – 模型 Result Report"
+    model["document"]["children"][0]["text"] = model["title"]
+
+    pdf = render_report_pdf(model)
+
+    encoded_title = (b"\xfe\xff" + model["title"].encode("utf-16-be")).hex().upper().encode()
+    assert encoded_title in pdf
+    assert b"Atlas [U+2013] [U+6A21][U+578B] Result Report" in pdf
+    assert b"Atlas ? ?? Result Report" not in pdf
 
 
 def test_report_rejects_a_fully_rehashed_public_winner_forgery_that_keeps_raw_seals() -> None:
