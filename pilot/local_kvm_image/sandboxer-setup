@@ -4,6 +4,7 @@ set -eu
 . /usr/local/libexec/sandboxer-common
 sandboxer_load_metadata
 
+ip link set lo up
 ip link set eth0 up
 ip addr flush dev eth0
 ip addr add "$SANDBOXER_IP/24" dev eth0

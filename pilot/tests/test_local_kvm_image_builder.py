@@ -99,6 +99,7 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     bootstrap = (rendered / "sandboxer-mount-runtime").read_text()
     assert "/workspace" in setup
     assert "ip addr add \"$SANDBOXER_IP/24\" dev eth0" in setup
+    assert setup.index("ip link set lo up") < setup.index("ip link set eth0 up")
     assert "ip route del default" in setup
     assert "sandboxer-route-after-setup" in setup
     assert setup.index("mount -o rw,nosuid,nodev,noexec /dev/vdb /workspace") < setup.index("mkdir -p /workspace/notes")
