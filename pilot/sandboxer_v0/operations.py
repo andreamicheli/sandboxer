@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 import json
-import os
 from pathlib import Path
 from typing import Any, Iterator, Protocol
 import fcntl
@@ -63,7 +62,8 @@ class ProviderAvailability(Protocol):
 class SeriesExecutor(Protocol):
     def __call__(self, spec: SeriesSpec) -> ReleaseBundle: ...
 
-    def cancel(self, series_id: str) -> None: ...
+    # Optional: a production Adapter must implement bounded cancellation and
+    # return teardown observations.  The controlled default has no live work.
 
 
 @dataclass(frozen=True)
@@ -193,7 +193,7 @@ class SeriesOperations:
             "reason_code": None,
             "wait_attempts": 0,
             "next_attempt_at": None,
-            "submitted_at": None,
+            "submitted_at": 0,
             "wait_cost_spent": 0,
             "execution_cost_spent": 0,
         }
@@ -274,7 +274,10 @@ class SeriesOperations:
             raise PublicationBlocked("BATCH_LAB_PUBLICATION_FORBIDDEN")
         if publication["state"] != "AWAITING_PUBLICATION_APPROVAL":
             raise InvalidTransition("PUBLICATION_APPROVAL_NOT_PENDING")
-        self._update(publication, state="PUBLISHED", pointer=f"sandboxer://publication/{series_id}")
+        artifact = self._state["artifacts"].get(series_id)
+        if not artifact or not artifact.get("reference"):
+            raise InvalidTransition("FROZEN_EVIDENCE_REQUIRED")
+        self._update(publication, state="PUBLISHED", pointer=artifact["reference"])
         self._write()
         return self._snapshot(series_id)
 
@@ -294,9 +297,7 @@ class SeriesOperations:
         series = self._series(series_id)
         spec = _decode_spec(series["spec"])
         controls = OperationControls(**series["controls"])
-        if series["submitted_at"] is None:
-            self._update(series, submitted_at=now)
-            self._write()
+        # Submission time is persisted at enqueue; queue wait consumes deadline.
         if now > series["submitted_at"] + controls.wait_deadline_seconds:
             self._block(series_id, "WAIT_DEADLINE_EXCEEDED")
             return (self._snapshot(series_id),)
@@ -346,9 +347,13 @@ class SeriesOperations:
     def cancel(self, series_id: str, *, expected_revision: int) -> OperationSnapshot:
         with self._lock():
             series = self._series(series_id)
-            if series["state"] == "RUNNING" and hasattr(self._executor, "cancel"):
-                self._executor.cancel(series_id)
-            return self._cancel(series_id, expected_revision)
+            self._require_revision(series, expected_revision)
+            was_running = series["state"] == "RUNNING"
+            snapshot = self._cancel(series_id, expected_revision)
+        if was_running and hasattr(self._executor, "cancel"):
+            # Side effects occur only after successful durable CAS cancellation.
+            self._executor.cancel(series_id)
+        return snapshot
 
     def _cancel(self, series_id: str, expected_revision: int) -> OperationSnapshot:
         series = self._series(series_id)
@@ -444,22 +449,35 @@ class SeriesOperations:
             "evidence_bundle": evidence,
             "evidence_version": evidence.get("version"),
             "label": "TEST / NOT FOR PUBLICATION" if series["mode"] == OperationMode.BATCH_LAB.value else "DRAFT / NOT PUBLISHED",
+            "publication_eligible": False if series["mode"] == OperationMode.BATCH_LAB.value else bundle.publication_eligible,
+            "release_bundle": asdict(bundle),
+            "replay": bundle.replay,
+            "report": bundle.report,
+            "broadcast_manifest": bundle.broadcast_manifest,
+            "artifact_manifest": bundle.artifact_manifest,
         }
-        authoritative = tuple(
-            runner for event in bundle.telemetry if event.get("event_type") == "RUNNERS_PROVISIONED"
+        provisioned = {runner for event in bundle.telemetry if event.get("event_type") == "RUNNERS_PROVISIONED" for runner in event.get("runners", ())}
+        teardown = {
+            runner: event.get("status") for event in bundle.telemetry if event.get("event_type") == "RUNNER_TEARDOWN"
             for runner in event.get("runners", ())
-        )
+        }
         provisional = f"{series_id}:runner-set"
         self._state["runners"].pop(provisional, None)
-        for runner in authoritative:
-            self._state["runners"][runner] = {"series_id": series_id, "state": "DESTROYED", "evidence": "RUNNERS_PROVISIONED/RUNNER_TEARDOWN"}
+        for runner in provisioned:
+            status = teardown.get(runner)
+            state = "DESTROYED" if status == "destroyed" else "QUARANTINED"
+            self._state["runners"][runner] = {
+                "series_id": series_id, "state": state,
+                "evidence": "RUNNER_TEARDOWN" if status else "RUNNER_TEARDOWN_MISSING",
+                "reason_code": None if status == "destroyed" else "TEARDOWN_UNCERTAIN",
+            }
         if bundle.terminal_code == "SERIES_COMPLETED":
             self._update(series, state="COMPLETED", reason_code=None)
             self._set_matches(series_id, "NOT_REQUIRED")
             for result in bundle.match_results:
                 record = self._state["matches"][f"{series_id}:match-{result['match_number']}"]
                 self._update(record, state="COMPLETED", reason_code=result["reason_code"])
-            self._set_runner_state(series_id, "DESTROYED")
+            # Completion is never allowed to manufacture destroy evidence.
             if series["mode"] == OperationMode.BATCH_LAB.value:
                 self._update(publication, state="TEST_DRAFT_READY", artifact_label="TEST / NOT FOR PUBLICATION")
             elif bundle.publication_eligible:

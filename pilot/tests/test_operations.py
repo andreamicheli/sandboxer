@@ -64,7 +64,7 @@ def test_supervised_series_requires_separate_spend_and_publication_approvals(tmp
     )
 
     assert published.publication_state == "PUBLISHED"
-    assert published.publication_pointer == "sandboxer://publication/supervised-001"
+    assert published.publication_pointer == "sandboxer://evidence/supervised-001/v1"
 
 
 def test_batch_lab_serially_waits_then_generates_only_test_drafts(tmp_path) -> None:
@@ -235,3 +235,41 @@ def test_in_flight_cancellation_prevents_late_executor_completion_from_overwriti
 
     assert cancelled.series_state == "CANCELLED"
     assert SeriesOperations(path).snapshot("inflight-001").series_state == "CANCELLED"
+
+
+def test_runner_inventory_uses_authoritative_teardown_and_persists_complete_test_artifacts(tmp_path) -> None:
+    path = tmp_path / "operations.json"
+    operations = SeriesOperations(path)
+    operations.submit(
+        SeriesSpec(**{**_spec("uncertain-001").__dict__, "runner_backend": FakeRunnerBackend(teardown="uncertain")}),
+        mode=OperationMode.BATCH_LAB,
+    )
+    outcome, = operations.advance(now=0)
+    state = json.loads(path.read_text())
+
+    assert outcome.series_state == "QUARANTINED"
+    runners = {key: value for key, value in state["runners"].items() if value["series_id"] == "uncertain-001"}
+    assert runners and all(record["state"] == "QUARANTINED" for record in runners.values())
+    assert all(record["evidence"] == "RUNNER_TEARDOWN" for record in runners.values())
+    artifact = state["artifacts"]["uncertain-001"]
+    assert {"release_bundle", "replay", "report", "broadcast_manifest", "artifact_manifest", "evidence_bundle"} <= artifact.keys()
+    assert artifact["label"] == "TEST / NOT FOR PUBLICATION"
+    assert artifact["publication_eligible"] is False
+
+
+def test_stale_cancel_does_not_call_executor_cancel(tmp_path) -> None:
+    calls = []
+
+    class CancelProbe:
+        def __call__(self, spec):
+            from sandboxer_v0 import execute_series
+            return execute_series(spec)
+
+        def cancel(self, series_id):
+            calls.append(series_id)
+
+    operations = SeriesOperations(tmp_path / "operations.json", executor=CancelProbe())
+    submitted = operations.submit(_spec("stale-cancel-001"), mode=OperationMode.BATCH_LAB)
+    with pytest.raises(Exception, match="COMPARE_AND_SET_CONFLICT"):
+        operations.cancel("stale-cancel-001", expected_revision=submitted.series_revision + 1)
+    assert calls == []
