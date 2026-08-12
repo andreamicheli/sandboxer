@@ -39,6 +39,17 @@ from .evidence import EvidenceBundle, EvidenceFreezeError, EvidenceVersionStore,
 from .replay import ReplayError, ReplayRenderer, build_replay, render_replay, sanitize_terminal_text
 from .local_kvm import LocalKvmConfig, LocalKvmRunnerProvider, SubprocessLocalKvmHost
 from .runner_backend import ProvisioningFailed
+from .operations import (
+    CapacityCondition,
+    CapacityObservation,
+    InvalidTransition,
+    OperationControls,
+    OperationMode,
+    OperationSnapshot,
+    PublicationBlocked,
+    SeriesOperations,
+    StaleRevision,
+)
 
 __all__ = [
     "ControlledCompetitor",
@@ -78,4 +89,13 @@ __all__ = [
     "LocalKvmRunnerProvider",
     "SubprocessLocalKvmHost",
     "ProvisioningFailed",
+    "CapacityCondition",
+    "CapacityObservation",
+    "InvalidTransition",
+    "OperationControls",
+    "OperationMode",
+    "OperationSnapshot",
+    "PublicationBlocked",
+    "SeriesOperations",
+    "StaleRevision",
 ]
