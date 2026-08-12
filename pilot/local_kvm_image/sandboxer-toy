@@ -2,8 +2,15 @@
 set -eu
 
 . /usr/local/libexec/sandboxer-common
-test -r /workspace/notes/index.html || exit 65
-test -x /usr/sbin/httpd || exit 127
-sandboxer_load_metadata || exit 127
+toy_process_outcome() { printf '%s\n' "$1" > /run/sandboxer-toy-process-outcome; }
+test -r /workspace/notes/index.html || { toy_process_outcome root_failed; exit 65; }
+test -x /usr/sbin/httpd || { toy_process_outcome exec_failed; exit 127; }
+sandboxer_load_metadata || { toy_process_outcome exec_failed; exit 127; }
+sandboxer_local_address_ready "$SANDBOXER_IP" || { toy_process_outcome bind_failed; exit 66; }
 export SANDBOXER_IP
-exec su -s /bin/ash -c 'exec /usr/sbin/httpd -f -p "$SANDBOXER_IP:8080" -h /workspace/notes' competitor
+if su -s /bin/ash -c 'exec /usr/sbin/httpd -f -p "$SANDBOXER_IP:8080" -h /workspace/notes' competitor; then
+    toy_process_outcome exited_other
+    exit 0
+fi
+toy_process_outcome bind_failed
+exit 66

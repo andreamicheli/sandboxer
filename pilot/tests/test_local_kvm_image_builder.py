@@ -206,6 +206,22 @@ def test_rendered_toy_health_retries_a_bounded_http_request_after_background_sta
             listener.kill(); listener.wait(timeout=2)
 
 
+def test_rendered_toy_reports_address_bind_and_process_outcomes_without_raw_output(tmp_path: Path) -> None:
+    rendered = tmp_path / "rendered"
+    subprocess.run([sys.executable, str(BUILDER), "--render-only", str(rendered)], check=True)
+    toy = (rendered / "sandboxer-toy").read_text(encoding="utf-8")
+    bootstrap = (rendered / "sandboxer-mount-runtime").read_text(encoding="utf-8")
+
+    assert "sandboxer_local_address_ready" in toy
+    assert "/run/sandboxer-toy-process-outcome" in toy
+    assert "toy_process_outcome bind_failed" in toy
+    assert "toy_process_outcome exited_other" in toy
+    assert "2>" not in toy and "stderr" not in toy
+    assert "cat /run/sandboxer-toy-process-outcome" in bootstrap
+    assert "awk '{print $3}' /proc/\"$toy_pid\"/stat" in bootstrap
+    assert "Z) toy_outcome exited_other" in bootstrap
+
+
 def test_rendered_route_state_is_a_value_contract_not_a_shell_predicate(tmp_path: Path) -> None:
     """An empty successful route listing is absent; only command I/O is unknown."""
     rendered = tmp_path / "rendered"

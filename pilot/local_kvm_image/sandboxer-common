@@ -95,6 +95,15 @@ sandboxer_toy_http_ready() {
     return 1
 }
 
+sandboxer_local_address_ready() {
+    sandboxer_expected_ip="$1"
+    sandboxer_addresses="$(/bin/busybox timeout -s KILL 1 /sbin/ip -o -4 addr show dev eth0)" || return 1
+    case " $sandboxer_addresses " in
+        *" $sandboxer_expected_ip/24 "*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 sandboxer_private_mounts() {
     ! awk '$3 ~ /^(9p|virtiofs|nfs|nfs4|cifs|smbfs|fuse\\.sshfs)$/ { found = 1 } END { exit found ? 0 : 1 }' /proc/mounts
 }

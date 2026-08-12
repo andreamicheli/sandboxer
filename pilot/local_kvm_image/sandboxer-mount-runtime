@@ -45,12 +45,20 @@ else
         toy_outcome exec_failed
     elif sandboxer_toy_http_ready "$SANDBOXER_IP"; then
         toy_outcome ready
-    elif kill -0 "$(cat /run/sandboxer-toy.pid)" 2>/dev/null; then
-        # The process survived the full bounded HTTP witness but no listener
-        # answered. In this fixed launch contract that is the bind outcome.
-        toy_outcome bind_failed
     else
-        toy_outcome exited_other
+        toy_pid="$(cat /run/sandboxer-toy.pid)"
+        process_outcome="$(cat /run/sandboxer-toy-process-outcome 2>/dev/null || printf unknown)"
+        case "$process_outcome" in
+            root_failed|exec_failed|bind_failed|exited_other) toy_outcome "$process_outcome" ;;
+            *)
+                toy_process_state="$(awk '{print $3}' /proc/"$toy_pid"/stat 2>/dev/null || printf unknown)"
+                case "$toy_process_state" in
+                    Z) toy_outcome exited_other ;;
+                    unknown) toy_outcome exited_other ;;
+                    *) toy_outcome bind_failed ;;
+                esac
+                ;;
+        esac
     fi
 fi
 route_marker AFTER_TOY
