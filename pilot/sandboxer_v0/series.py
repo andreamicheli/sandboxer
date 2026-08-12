@@ -13,6 +13,7 @@ from .calibration import diagnose_dry_run
 from .blue_briefs import BlueBrief, brief_manifest, select_blue_briefs
 from .auditor import audit_series
 from .evidence import EvidenceFreezeError, freeze_evidence_bundle
+from .replay import ReplayError, build_replay
 
 
 def _digest(value: object) -> str:
@@ -319,7 +320,6 @@ def _bundle(
         minimum_simulated_duration_seconds=spec.minimum_simulated_duration_seconds,
     )
     eligible = terminal_code == "SERIES_COMPLETED" and verdict.get("valid", False)
-    replay = {"schema": "sandboxer.replay.v1", "source_telemetry": telemetry_hash, "matches": len(results)}
     score_wins = {competitor.public_name: sum(result["winner"] == competitor.public_name for result in results) for competitor in spec.competitors}
     score_proof = {
         "schema": "sandboxer.score-proof.v1",
@@ -337,6 +337,20 @@ def _bundle(
     }
     report = {"schema": "sandboxer.series-report.v1", "winner": winner, "disclaimer": "experimental benchmark in a simulated CTF Arena", "score_proof": score_proof}
     broadcast = {"schema": "sandboxer.broadcast-manifest.v1", "source_telemetry": telemetry_hash, "publication_eligible": eligible}
+    try:
+        evidence_bundle = freeze_evidence_bundle(spec=spec, telemetry=telemetry_events, results=results, verdict=verdict).to_dict()
+    except EvidenceFreezeError as error:
+        evidence_bundle = {"schema_version": "sandboxer.evidence-bundle.v1", "freeze_error": str(error)}
+        replay = {"schema": "sandboxer.replay.v1", "schema_version": "sandboxer.replay.v1", "error": "FROZEN_EVIDENCE_REQUIRED"}
+        eligible = False
+    else:
+        try:
+            replay = build_replay(evidence_bundle)
+            # Keep the historical short key while exposing the versioned schema.
+            replay["schema"] = "sandboxer.replay.v1"
+        except ReplayError as error:
+            replay = {"schema": "sandboxer.replay.v1", "schema_version": "sandboxer.replay.v1", "error": str(error)}
+            eligible = False
     artifact_manifest = {
         "telemetry": telemetry_hash,
         "replay": _digest(replay),
@@ -346,11 +360,6 @@ def _bundle(
     }
     bundle_hash = _digest({"spec": asdict(spec), "terminal_code": terminal_code, "winner": winner, "manifest": artifact_manifest, "calibration": calibration})
     artifact_manifest["release_bundle"] = bundle_hash
-    try:
-        evidence_bundle = freeze_evidence_bundle(spec=spec, telemetry=telemetry_events, results=results, verdict=verdict).to_dict()
-    except EvidenceFreezeError as error:
-        evidence_bundle = {"schema_version": "sandboxer.evidence-bundle.v1", "freeze_error": str(error)}
-        eligible = False
     return ReleaseBundle(eligible, terminal_code, winner, len(results), tuple(results), telemetry_events, telemetry_hash, artifact_manifest, bundle_hash, replay, report, broadcast, quarantined, calibration, verdict, evidence_bundle)
 
 
