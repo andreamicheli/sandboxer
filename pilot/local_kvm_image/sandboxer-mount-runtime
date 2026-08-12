@@ -39,10 +39,21 @@ if ! sandboxer_load_metadata || ! sandboxer_local_address_ready "$SANDBOXER_IP";
     toy_outcome address_unavailable
     exit 1
 fi
-if ! /usr/sbin/httpd -p 8080 -u competitor -h /workspace/notes >/dev/null 2>&1; then
+if ! /usr/sbin/httpd -p 8080 -u competitor -h /workspace/notes >/dev/null 2>/run/sandboxer-httpd-error; then
+    if grep -Eqi 'bind|address.*use|port' /run/sandboxer-httpd-error; then
+        printf 'SANDBOXER_HTTPD_ERROR_BIND\n' > /dev/ttyS0
+    elif grep -Eqi 'user|uid|gid|privilege|permission' /run/sandboxer-httpd-error; then
+        printf 'SANDBOXER_HTTPD_ERROR_PRIVILEGE\n' > /dev/ttyS0
+    elif grep -Eqi 'home|chdir|directory|document|open' /run/sandboxer-httpd-error; then
+        printf 'SANDBOXER_HTTPD_ERROR_DOCUMENT_ROOT\n' > /dev/ttyS0
+    else
+        printf 'SANDBOXER_HTTPD_ERROR_OTHER\n' > /dev/ttyS0
+    fi
+    rm -f /run/sandboxer-httpd-error
     toy_outcome httpd_bind_exit
     exit 1
 fi
+rm -f /run/sandboxer-httpd-error
 toy_pid="$(pidof httpd 2>/dev/null | awk '{print $1}')"
 if test -z "$toy_pid" || ! kill -0 "$toy_pid" 2>/dev/null; then
     toy_outcome exec_failed
