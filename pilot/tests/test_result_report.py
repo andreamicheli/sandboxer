@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 
 import pytest
+from pypdf import PdfReader
 
 from sandboxer_v0 import (
     ControlledCompetitor,
@@ -46,7 +48,7 @@ def test_result_report_projects_one_valid_frozen_bundle_into_synchronized_public
     assert model["outcome"]["winner"] == "atlas"
     assert model["scope"]["label"] == "experimental benchmark in a simulated CTF Arena"
     assert len(model["technical_chapters"]) == 2
-    assert model["incident_appendix"] == []
+    assert model["incident_appendix"] == ()
     assert all(claim["type"] in {"Observed", "Derived", "Interpreted", "Hypothesis"} for claim in model["claims"])
     assert all(claim["evidence"]["event_ids"] for claim in model["claims"])
     assert all(
@@ -56,7 +58,7 @@ def test_result_report_projects_one_valid_frozen_bundle_into_synchronized_public
     )
     assert all(comparison["does_not_establish"] == "intent" for chapter in model["technical_chapters"] for comparison in chapter["interview_red_comparisons"])
 
-    assert json.loads(report.json) == model
+    assert json.loads(report.json) == model.to_dict()
     assert '<html lang="en">' in report.html
     assert '<main id="result-report">' in report.html
     assert "@media print" in report.html
@@ -66,6 +68,10 @@ def test_result_report_projects_one_valid_frozen_bundle_into_synchronized_public
     assert b"/Lang (en-US)" in report.pdf
     assert b"experimental benchmark in a simulated CTF Arena" in report.pdf
     assert all(claim["id"].encode() in report.html.encode() and claim["id"].encode() in report.pdf for claim in model["claims"])
+    parsed_pdf = PdfReader(BytesIO(report.pdf))
+    assert len(parsed_pdf.pages) >= 1
+    assert "/StructTreeRoot" in parsed_pdf.trailer["/Root"]
+    assert "Winner: atlas" in "".join(page.extract_text() for page in parsed_pdf.pages)
 
 
 def test_result_report_requires_a_valid_signed_frozen_evidence_bundle() -> None:
@@ -76,6 +82,29 @@ def test_result_report_requires_a_valid_signed_frozen_evidence_bundle() -> None:
         build_result_report(invalid)
 
 
+@pytest.mark.parametrize("path", [("public", "score_proof"), ("restricted", "telemetry_checksum"), ("checksums", "public"), ("signature",)])
+def test_result_report_rejects_each_forged_frozen_bundle_component(path: tuple[str, ...]) -> None:
+    bundle = execute_series(_spec()).evidence_bundle
+    forged = json.loads(json.dumps(bundle))
+    target = forged
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = "0" * 64 if isinstance(target[path[-1]], str) else []
+
+    with pytest.raises(ResultReportError, match="VALID_FROZEN_EVIDENCE_REQUIRED"):
+        build_result_report(forged)
+
+
+def test_report_model_is_deeply_immutable_and_json_is_its_semantic_projection() -> None:
+    report = build_result_report(execute_series(_spec()).evidence_bundle)
+
+    with pytest.raises(TypeError):
+        report.model["outcome"]["winner"] = "forged"
+    with pytest.raises(AttributeError):
+        report.model["technical_chapters"].append("forged")
+    assert json.loads(report.json) == report.model.to_dict()
+
+
 def test_corrected_evidence_keeps_prior_report_addressable_in_a_visible_chain() -> None:
     spec = _spec()
     outcome = execute_series(spec)
@@ -83,9 +112,13 @@ def test_corrected_evidence_keeps_prior_report_addressable_in_a_visible_chain() 
     first = store.freeze(spec=spec, telemetry=outcome.telemetry, results=outcome.match_results, verdict=outcome.verdict)
     corrected = store.freeze(spec=spec, telemetry=outcome.telemetry, results=outcome.match_results, verdict=outcome.verdict)
 
-    report = build_result_report(corrected)
+    report = build_result_report(corrected, correction_index=store.correction_index())
+    superseded = build_result_report(first, correction_index=store.correction_index())
 
     assert report.model["corrections"]["current_report_url"] == "sandboxer://reports/result-report-fixture/v2"
     assert report.model["corrections"]["supersedes_report_url"] == "sandboxer://reports/result-report-fixture/v1"
     assert first.bundle_hash == report.model["corrections"]["previous_evidence_hash"]
+    assert report.model["corrections"]["status"] == "current"
+    assert superseded.model["corrections"]["status"] == "superseded"
+    assert superseded.model["corrections"]["superseded_by_report_url"] == "sandboxer://reports/result-report-fixture/v2"
     assert "Earlier versions remain addressable" in report.html

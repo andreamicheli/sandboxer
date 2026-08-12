@@ -12,7 +12,10 @@ from hashlib import sha256
 from html import escape
 import json
 import re
-from typing import Any, Callable, Mapping, Sequence
+from types import MappingProxyType
+from typing import Any, Callable, Iterator, Mapping, Sequence
+
+from .evidence import EvidenceFreezeError, verify_evidence_bundle
 
 
 class ResultReportError(ValueError):
@@ -33,39 +36,63 @@ def _json_value(value: object) -> Any:
     return json.loads(json.dumps(value, sort_keys=True, default=str))
 
 
+def _freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze(item) for item in value)
+    return value
+
+
+def _thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
+    if isinstance(value, frozenset):
+        return sorted(_thaw(item) for item in value)
+    return value
+
+
+@dataclass(frozen=True)
+class ReportModel(Mapping[str, Any]):
+    """Deeply immutable typed root for every public report representation."""
+
+    projection: Mapping[str, Any]
+
+    @classmethod
+    def from_projection(cls, projection: Mapping[str, Any]) -> "ReportModel":
+        return cls(_freeze(projection))
+
+    def __getitem__(self, key: str) -> Any:
+        return self.projection[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.projection)
+
+    def __len__(self) -> int:
+        return len(self.projection)
+
+    def to_dict(self) -> dict[str, Any]:
+        return _thaw(self.projection)
+
+
 def _label(value: object, fallback: str = "unspecified") -> str:
     text = _SAFE_LABEL.sub("?", str(value or "")).strip()
     return text[:180] if text else fallback
 
 
 def _frozen_valid(bundle: object) -> dict[str, Any]:
-    if hasattr(bundle, "to_dict"):
-        bundle = bundle.to_dict()
-    if not isinstance(bundle, Mapping) or bundle.get("schema_version") != "sandboxer.evidence-bundle.v1":
+    try:
+        verified = verify_evidence_bundle(bundle)
+    except EvidenceFreezeError as error:
+        raise ResultReportError("VALID_FROZEN_EVIDENCE_REQUIRED") from error
+    verdict = verified["public"].get("auditor_verdict")
+    if not isinstance(verdict, Mapping) or not verdict.get("valid") or not verdict.get("signed"):
         raise ResultReportError("VALID_FROZEN_EVIDENCE_REQUIRED")
-    required = {"version", "url", "bundle_hash", "public", "restricted", "checksums", "signature"}
-    if not required <= bundle.keys() or not isinstance(bundle["version"], int) or bundle["version"] < 1:
-        raise ResultReportError("VALID_FROZEN_EVIDENCE_REQUIRED")
-    public, restricted, checksums = bundle["public"], bundle["restricted"], bundle["checksums"]
-    if not isinstance(public, Mapping) or not isinstance(restricted, Mapping) or not isinstance(checksums, Mapping):
-        raise ResultReportError("VALID_FROZEN_EVIDENCE_REQUIRED")
-    if public.get("schema_version") != "sandboxer.evidence-bundle.v1" or restricted.get("redaction_irreversible") is not True:
-        raise ResultReportError("VALID_FROZEN_EVIDENCE_REQUIRED")
-    if checksums.get("public") != _digest(public) or not isinstance(bundle.get("signature"), str) or not bundle["signature"]:
-        raise ResultReportError("VALID_FROZEN_EVIDENCE_REQUIRED")
-    verdict = public.get("auditor_verdict")
-    telemetry = public.get("normalized_telemetry")
-    specification = public.get("specification")
-    if (
-        not isinstance(verdict, Mapping)
-        or verdict.get("valid") is not True
-        or verdict.get("signed") is not True
-        or not verdict.get("signature")
-        or not isinstance(telemetry, (list, tuple))
-        or not isinstance(specification, Mapping)
-    ):
-        raise ResultReportError("VALID_FROZEN_EVIDENCE_REQUIRED")
-    return _json_value(bundle)
+    return _json_value(verified)
 
 
 def _event_ids(events: Sequence[Mapping[str, Any]], predicate: Callable[[Mapping[str, Any]], bool], fallback: str) -> list[str]:
@@ -134,7 +161,7 @@ def _report_url(evidence_url: str) -> str:
     return f"sandboxer://reports/{match.group(1)}/v{match.group(2)}"
 
 
-def build_result_report(evidence_bundle: object) -> "ResultReport":
+def build_result_report(evidence_bundle: object, *, correction_index: Mapping[str, Mapping[str, Any]] | None = None) -> "ResultReport":
     """Generate a canonical English report and all synchronized renderings."""
     bundle = _frozen_valid(evidence_bundle)
     public = bundle["public"]
@@ -211,13 +238,18 @@ def build_result_report(evidence_bundle: object) -> "ResultReport":
             claim_id, "Observed", f"Match {number} finished with {_label(match.get('winner'), 'no winner')} under {_label(match.get('reason_code'))}.",
             [match_id], granularity=f"Match {number}", sample_size=1,
         ))
-        interview_ids = _event_ids(match_events, lambda event: event.get("event_type") == "INTERVIEW_RECORDED", match_id)
-        red_ids = _event_ids(match_events, lambda event: event.get("event_type") == "MODEL_RESPONSE" and event.get("phase") == "red", match_id)
-        interview_claim_id = f"claim-match-{number}-interview-red"
-        claims.append(_claim(
-            interview_claim_id, "Observed", f"Match {number} has recorded tool-free Interview evidence and later Red Phase evidence; their presence is not evidence of intent.",
-            [*interview_ids, *red_ids], granularity=f"Match {number} interview and Red Phase", sample_size=1,
-        ))
+        interview_ids = [str(event["event_id"]) for event in match_events if event.get("event_type") == "INTERVIEW_RECORDED" and event.get("event_id")]
+        red_ids = [str(event["event_id"]) for event in match_events if event.get("event_type") == "MODEL_RESPONSE" and event.get("phase") == "red" and event.get("event_id")]
+        comparisons: list[dict[str, Any]] = []
+        chapter_claim_ids = [claim_id]
+        if interview_ids and red_ids:
+            interview_claim_id = f"claim-match-{number}-interview-red"
+            claims.append(_claim(
+                interview_claim_id, "Observed", f"Match {number} has matched tool-free Interview evidence and later Red Phase evidence; this comparison does not establish intent.",
+                [*interview_ids, *red_ids], granularity=f"Match {number} interview and later Red Phase", sample_size=1,
+            ))
+            comparisons.append({"claim_id": interview_claim_id, "interview_event_ids": interview_ids, "red_event_ids": red_ids, "does_not_establish": "intent", "claim_type": "Observed"})
+            chapter_claim_ids.append(interview_claim_id)
         timeline = [
             {
                 "event_id": _label(event.get("event_id"), match_id), "wall_time_utc": _label(event.get("wall_time_utc")),
@@ -226,6 +258,9 @@ def build_result_report(evidence_bundle: object) -> "ResultReport":
             }
             for event in match_events
         ]
+        def evidence_status(event_types: set[str]) -> dict[str, Any]:
+            identifiers = [str(event["event_id"]) for event in match_events if event.get("event_type") in event_types and event.get("event_id")]
+            return {"event_ids": identifiers, "status": "observed" if identifiers else "not recorded"}
         chapters.append({
             "match_number": number,
             "heading": f"Match {number}: technical chapter",
@@ -236,8 +271,15 @@ def build_result_report(evidence_bundle: object) -> "ResultReport":
             "timeline": timeline,
             "score_proof": _json_value(score_item),
             "faults": {"events": [event["event_id"] for event in match_events if "FAULT" in str(event.get("event_type")) or "ERROR" in str(event.get("event_type"))], "separated_from_competitor_behavior": True},
-            "interview_red_comparisons": [{"claim_id": interview_claim_id, "interview_event_ids": interview_ids, "red_event_ids": red_ids, "does_not_establish": "intent", "claim_type": "Observed"}],
-            "claim_ids": [claim_id, interview_claim_id],
+            "evidence_status": {
+                "phase_accounting": evidence_status({"PHASE_GATE_OPENED", "PHASE_ROUND_OPENED", "PHASE_ROUND_CLOSED"}),
+                "health": evidence_status({"RUNNER_HEALTH"}),
+                "network": evidence_status({"RUNNER_PROBE_RESULT", "PHASE_GATE_OPENED"}),
+                "latency_retry_refusal_rate_limit": evidence_status({"PROVIDER_RETRY", "PROVIDER_RATE_LIMIT", "MODEL_REFUSAL", "LATENCY_OBSERVED"}),
+                "artifact_references": {"event_ids": [match_id], "status": "observed"},
+            },
+            "interview_red_comparisons": comparisons,
+            "claim_ids": chapter_claim_ids,
         })
 
     if not chapters:
@@ -259,10 +301,15 @@ def build_result_report(evidence_bundle: object) -> "ResultReport":
     }
     report_url = _report_url(str(bundle["url"]))
     previous = bundle.get("previous_version_url")
+    graph_entry = correction_index.get(bundle["url"], {}) if correction_index is not None else {}
+    if correction_index is not None and graph_entry.get("bundle_hash") not in {None, bundle["bundle_hash"]}:
+        raise ResultReportError("CORRECTION_GRAPH_INVALID")
     corrections = {
         "current_report_url": report_url,
         "source_evidence_url": bundle["url"],
         "supersedes_report_url": _report_url(str(previous)) if previous else None,
+        "superseded_by_report_url": _report_url(str(graph_entry["superseded_by"])) if graph_entry.get("superseded_by") else None,
+        "status": graph_entry.get("status", "current"),
         "previous_evidence_hash": bundle.get("previous_bundle_hash"),
         "visible_notice": "This report is current for its frozen evidence version. Earlier versions remain addressable through the correction chain.",
     }
@@ -289,10 +336,11 @@ def build_result_report(evidence_bundle: object) -> "ResultReport":
         "claims": claims,
         "accessibility": {"language": "en", "landmarks": ["header", "main", "footer"], "claim_citations": "visible", "table_headers": "scoped", "print_layout": "A4-friendly"},
     }
-    json_text = json.dumps(model, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    html = render_report_html(model)
-    pdf = render_report_pdf(model)
-    return ResultReport(model=model, json=json_text, html=html, pdf=pdf)
+    immutable_model = ReportModel.from_projection(model)
+    json_text = json.dumps(immutable_model.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    html = render_report_html(immutable_model)
+    pdf = render_report_pdf(immutable_model)
+    return ResultReport(model=immutable_model, json=json_text, html=html, pdf=pdf)
 
 
 def _claim_by_id(model: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -316,9 +364,9 @@ def render_report_html(model: Mapping[str, Any]) -> str:
         rows = "".join(f"<tr><td>{escape(str(event['wall_time_utc']))}</td><td>{escape(str(event['event_type']))}</td><td>{escape(str(event['phase']))}</td><td>{escape(str(event['event_id']))}</td></tr>" for event in chapter["timeline"])
         chapter_claims = "".join(rendered_claim(identifier) for identifier in chapter["claim_ids"])
         visible_claim_ids.update(chapter["claim_ids"])
-        declared = escape(json.dumps(chapter["budgets"]["declared"], sort_keys=True))
-        observed = escape(json.dumps(chapter["budgets"]["observed_measurements"], sort_keys=True))
-        score = escape(json.dumps(chapter["score_proof"], sort_keys=True))
+        declared = escape(json.dumps(_thaw(chapter["budgets"]["declared"]), sort_keys=True))
+        observed = escape(json.dumps(_thaw(chapter["budgets"]["observed_measurements"]), sort_keys=True))
+        score = escape(json.dumps(_thaw(chapter["score_proof"]), sort_keys=True))
         roles = escape(", ".join(chapter["public_roles"]["identities"]))
         faults = escape(", ".join(chapter["faults"]["events"]) or "none recorded")
         chapters.append(f'<section aria-labelledby="match-{chapter["match_number"]}"><h2 id="match-{chapter["match_number"]}">{escape(chapter["heading"])}</h2><p>Winner: {escape(chapter["outcome"]["winner"])}</p><p>Decisive rule: {escape(chapter["outcome"]["decisive_rule"])}</p><p>Blue Brief: {escape(chapter["blue_brief"]["family"])}</p><p>Public Competitor identities: {roles}.</p><p>Declared budgets: <code>{declared}</code></p><p>Observed measurements: <code>{observed}</code></p><p>Score proof: <code>{score}</code></p><p>Fault evidence: {faults}; operational faults are separated from Competitor behavior.</p>{chapter_claims}<table><caption>Authoritative Match timeline</caption><thead><tr><th scope="col">Time</th><th scope="col">Event</th><th scope="col">Phase</th><th scope="col">Evidence ID</th></tr></thead><tbody>{rows}</tbody></table><p>Interview-to-Red comparison is observational only and does not establish intent.</p></section>')
@@ -326,10 +374,11 @@ def render_report_html(model: Mapping[str, Any]) -> str:
     remaining_claims = "".join(rendered_claim(identifier) for identifier in claims if identifier not in visible_claim_ids)
     correction = model["corrections"]
     previous = f'<p>Supersedes: {escape(str(correction["supersedes_report_url"]))}</p>' if correction["supersedes_report_url"] else ""
+    successor = f'<p>Superseded by: {escape(str(correction["superseded_by_report_url"]))}</p>' if correction["superseded_by_report_url"] else ""
     return f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{escape(model["title"])}</title><style>
 body{{font-family:system-ui,sans-serif;line-height:1.5;max-width:72rem;margin:auto;padding:1rem;color:#111;background:#fff}} .citation{{font-family:ui-monospace,monospace}} .claim{{border-left:.3rem solid #345;padding-left:1rem;margin:1rem 0}} table{{border-collapse:collapse;width:100%}} th,td{{border:1px solid #555;padding:.35rem;text-align:left;vertical-align:top}} @media print{{body{{max-width:none;font-size:10pt}}section{{break-inside:avoid}}a{{color:#000;text-decoration:none}}}}
-</style></head><body><header><p>{escape(model["scope"]["label"])}</p><h1>{escape(model["title"])}</h1><p id="scope-note">{escape(model["scope"]["repeated_scope_language"])}</p></header><main id="result-report"><section aria-labelledby="outcome" aria-describedby="scope-note"><h2 id="outcome">Outcome</h2><p>Winner: {escape(model["outcome"]["winner"])}</p><p>Decisive rule: {escape(model["outcome"]["decisive_rule"])}</p>{outcome_claims}</section><section aria-labelledby="competitors"><h2 id="competitors">Competitor manifests</h2><ul>{manifests}</ul></section><section aria-labelledby="analysis"><h2 id="analysis">Methodology and interpretation</h2>{remaining_claims}</section>{''.join(chapters)}<section aria-labelledby="validity"><h2 id="validity">Validity and reproducibility</h2><p>Validity status: {escape(model["validity"]["status"])}</p><p>Evidence checksum: {escape(model["hashes"]["checksums"]["public"])}</p></section><section aria-labelledby="corrections"><h2 id="corrections">Corrections and provenance</h2><p>{escape(correction["visible_notice"])}</p>{previous}<p>Evidence: {escape(model["source_evidence"]["url"])}</p></section></main><footer><p>Claims are typed and cited to frozen evidence at the stated granularity.</p></footer></body></html>'''
+</style></head><body><header><p>{escape(model["scope"]["label"])}</p><h1>{escape(model["title"])}</h1><p id="scope-note">{escape(model["scope"]["repeated_scope_language"])}</p></header><main id="result-report"><section aria-labelledby="outcome" aria-describedby="scope-note"><h2 id="outcome">Outcome</h2><p>Winner: {escape(model["outcome"]["winner"])}</p><p>Decisive rule: {escape(model["outcome"]["decisive_rule"])}</p>{outcome_claims}</section><section aria-labelledby="competitors"><h2 id="competitors">Competitor manifests</h2><ul>{manifests}</ul></section><section aria-labelledby="analysis"><h2 id="analysis">Methodology and interpretation</h2>{remaining_claims}</section>{''.join(chapters)}<section aria-labelledby="validity"><h2 id="validity">Validity and reproducibility</h2><p>Validity status: {escape(model["validity"]["status"])}</p><p>Evidence checksum: {escape(model["hashes"]["checksums"]["public"])}</p></section><section aria-labelledby="corrections"><h2 id="corrections">Corrections and provenance</h2><p>Status: {escape(correction["status"])}</p><p>{escape(correction["visible_notice"])}</p>{previous}{successor}<p>Evidence: {escape(model["source_evidence"]["url"])}</p></section></main><footer><p>Claims are typed and cited to frozen evidence at the stated granularity.</p></footer></body></html>'''
 
 
 def render_report_pdf(model: Mapping[str, Any]) -> bytes:
@@ -337,16 +386,16 @@ def render_report_pdf(model: Mapping[str, Any]) -> bytes:
     lines = [model["title"], model["scope"]["label"], f"Winner: {model['outcome']['winner']}", f"Decisive rule: {model['outcome']['decisive_rule']}"]
     lines.append("Competitor manifests:")
     lines.extend(f"{competitor['public_name']}: {competitor['model_id']}" for competitor in model["competitor_manifests"])
-    lines.append(f"Protocol: {json.dumps(model['protocol'], sort_keys=True)}")
-    lines.append(f"Score proof: {json.dumps(model['score_proof'], sort_keys=True)}")
+    lines.append(f"Protocol: {json.dumps(_thaw(model['protocol']), sort_keys=True)}")
+    lines.append(f"Score proof: {json.dumps(_thaw(model['score_proof']), sort_keys=True)}")
     for claim in model["claims"]:
         lines.append(f"{claim['id']} [{claim['type']}]: {claim['text']}")
     for chapter in model["technical_chapters"]:
         lines.append(chapter["heading"])
         lines.append(f"Evidence: {chapter['outcome']['evidence_event_id']}")
         lines.append(f"Blue Brief: {chapter['blue_brief']['family']}")
-        lines.append(f"Budgets: {json.dumps(chapter['budgets'], sort_keys=True)}")
-        lines.append(f"Match score proof: {json.dumps(chapter['score_proof'], sort_keys=True)}")
+        lines.append(f"Budgets: {json.dumps(_thaw(chapter['budgets']), sort_keys=True)}")
+        lines.append(f"Match score proof: {json.dumps(_thaw(chapter['score_proof']), sort_keys=True)}")
         lines.extend(f"Timeline: {event['event_id']} {event['event_type']}" for event in chapter["timeline"])
     lines.append(f"Validity: {model['validity']['status']}")
     lines.append(f"Evidence checksum: {model['hashes']['checksums']['public']}")
@@ -355,8 +404,11 @@ def render_report_pdf(model: Mapping[str, Any]) -> bytes:
     page_lines = [escaped[index : index + 52] for index in range(0, len(escaped), 52)]
     font_object = 3 + (2 * len(page_lines))
     info_object = font_object + 1
+    structure_object = info_object + 1
+    parent_tree_object = structure_object + 1
+    first_structure_element = parent_tree_object + 1
     objects: list[str] = [
-        "<< /Type /Catalog /Pages 2 0 R /Lang (en-US) /MarkInfo << /Marked true >> >>",
+        f"<< /Type /Catalog /Pages 2 0 R /Lang (en-US) /MarkInfo << /Marked true >> /StructTreeRoot {structure_object} 0 R >>",
         "",  # The Pages object is filled once every Page object has an ID.
     ]
     page_object_ids: list[int] = []
@@ -366,14 +418,20 @@ def render_report_pdf(model: Mapping[str, Any]) -> bytes:
         page_object_ids.append(page_object)
         stream = "BT /F1 10 Tf 54 790 Td " + " ".join(f"({line}) Tj 0 -13 Td" for line in page) + " ET"
         objects.extend([
-            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 {font_object} 0 R >> >> /Contents {stream_object} 0 R >>",
-            f"<< /Length {len(stream.encode('ascii'))} >>\nstream\n{stream}\nendstream",
+            f"<< /Type /Page /Parent 2 0 R /StructParents {index} /MediaBox [0 0 595 842] /Resources << /Font << /F1 {font_object} 0 R >> >> /Contents {stream_object} 0 R >>",
+            f"<< /Length {len((' /P <</MCID 0>> BDC ' + stream + ' EMC').encode('ascii'))} >>\nstream\n/P <</MCID 0>> BDC {stream} EMC\nendstream",
         ])
     objects[1] = f"<< /Type /Pages /Kids [{' '.join(f'{item} 0 R' for item in page_object_ids)}] /Count {len(page_object_ids)} >>"
     objects.extend([
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         f"<< /Title ({escaped[0]}) /Subject ({escaped[1]}) /Lang (en-US) >>",
+        f"<< /Type /StructTreeRoot /K [{' '.join(f'{first_structure_element + index} 0 R' for index in range(len(page_lines)))}] /ParentTree {parent_tree_object} 0 R >>",
+        f"<< /Nums [{' '.join(f'{index} [{first_structure_element + index} 0 R]' for index in range(len(page_lines)))}] >>",
     ])
+    objects.extend(
+        f"<< /Type /StructElem /S /Document /P {structure_object} 0 R /Pg {page_object_ids[index]} 0 R /K 0 >>"
+        for index in range(len(page_lines))
+    )
     document = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
     offsets = [0]
     for number, obj in enumerate(objects, start=1):
@@ -390,7 +448,7 @@ def render_report_pdf(model: Mapping[str, Any]) -> bytes:
 class ResultReport:
     """The synchronized outputs derived from one canonical report model."""
 
-    model: dict[str, Any]
+    model: ReportModel
     json: str
     html: str
     pdf: bytes
@@ -399,4 +457,4 @@ class ResultReport:
 generate_result_report = build_result_report
 
 
-__all__ = ["ResultReport", "ResultReportError", "build_result_report", "generate_result_report", "render_report_html", "render_report_pdf"]
+__all__ = ["ReportModel", "ResultReport", "ResultReportError", "build_result_report", "generate_result_report", "render_report_html", "render_report_pdf"]

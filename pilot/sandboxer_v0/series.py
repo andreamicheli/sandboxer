@@ -346,7 +346,7 @@ def _bundle(
         eligible = False
     else:
         try:
-            report = build_result_report(evidence_bundle).model
+            report = build_result_report(evidence_bundle).model.to_dict()
         except ResultReportError as error:
             report = {"schema_version": "sandboxer.result-report.v1", "error": str(error), "disclaimer": "experimental benchmark in a simulated CTF Arena", "score_proof": score_proof}
             eligible = False

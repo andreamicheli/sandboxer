@@ -398,33 +398,6 @@ wheels = [
 ]
 
 [[package]]
-name = "sandboxer-pilot"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "groq" },
-    { name = "inspect-ai" },
-    { name = "inspect-swe" },
-    { name = "openai" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "groq", specifier = ">=0.31,<1" },
-    { name = "inspect-ai", specifier = ">=0.3.234,<0.4" },
-    { name = "inspect-swe", specifier = ">=0.2.60,<0.3" },
-    { name = "openai", specifier = ">=1.99,<3" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.3,<9" }]
-
-[[package]]
 name = "debugpy"
 version = "1.8.21"
 source = { registry = "https://pypi.org/simple" }
@@ -1750,6 +1723,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pypdf"
+version = "6.15.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/17/17/ee75a92718ec7212de831e71454d702225aa5e474a805cce169806044453/pypdf-6.15.0.tar.gz", hash = "sha256:d39c4d955a76409284a905e2d65b40076d77ab76129e0faaeeb6612403ecfc79", size = 6993794, upload-time = "2026-08-06T13:06:49.929Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/af/72/ce3067ac31e214a66388159f8462ddb8c13dd00170f24d555a1f1ae8ee91/pypdf-6.15.0-py3-none-any.whl", hash = "sha256:14e001d6504822cb1ca9c7ed9a69bccb320f59b320730f55af804361abe4d5ee", size = 378123, upload-time = "2026-08-06T13:06:47.709Z" },
+]
+
+[[package]]
 name = "pytest"
 version = "8.4.2"
 source = { registry = "https://pypi.org/simple" }
@@ -2134,6 +2116,37 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/62/74/8d69dcb7a9efe8baa2046891735e5dfe433ad558ae23d9e3c14c633d1d58/s3transfer-0.14.0.tar.gz", hash = "sha256:eff12264e7c8b4985074ccce27a3b38a485bb7f7422cc8046fee9be4983e4125", size = 151547, upload-time = "2025-09-09T19:23:31.089Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/48/f0/ae7ca09223a81a1d890b2557186ea015f6e0502e9b8cb8e1813f1d8cfa4e/s3transfer-0.14.0-py3-none-any.whl", hash = "sha256:ea3b790c7077558ed1f02a3072fb3cb992bbbd253392f4b6e9e8976941c7d456", size = 85712, upload-time = "2025-09-09T19:23:30.041Z" },
+]
+
+[[package]]
+name = "sandboxer-pilot"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "groq" },
+    { name = "inspect-ai" },
+    { name = "inspect-swe" },
+    { name = "openai" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pypdf" },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "groq", specifier = ">=0.31,<1" },
+    { name = "inspect-ai", specifier = ">=0.3.234,<0.4" },
+    { name = "inspect-swe", specifier = ">=0.2.60,<0.3" },
+    { name = "openai", specifier = ">=1.99,<3" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pypdf", specifier = ">=6.0,<7" },
+    { name = "pytest", specifier = ">=8.3,<9" },
 ]
 
 [[package]]
