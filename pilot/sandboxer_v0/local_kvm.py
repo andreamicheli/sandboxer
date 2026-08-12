@@ -959,12 +959,15 @@ class LocalKvmRunnerProvider:
             raise PreflightWitnessFailed("LOCAL_KVM_RED_COUNTER_WITNESS_UNAVAILABLE") from error
         if set(counters) != {"arp_left", "arp_right", "tcp_left", "tcp_right", "response_left", "response_right"}:
             return "LOCAL_KVM_RED_COUNTER_WITNESS_INVALID"
-        if not counters["arp_left"] or not counters["arp_right"]:
-            return "LOCAL_KVM_RED_ARP_FORWARDING_WITNESS_FAILED"
-        if not counters["tcp_left"] or not counters["tcp_right"]:
-            return "LOCAL_KVM_RED_TCP_REQUEST_FORWARDING_WITNESS_FAILED"
-        if not counters["response_left"] or not counters["response_right"]:
-            return "LOCAL_KVM_RED_TCP_RESPONSE_FORWARDING_WITNESS_FAILED"
+        for direction in ("left", "right"):
+            if not counters[f"arp_{direction}"]:
+                return f"LOCAL_KVM_RED_ARP_{direction.upper()}_FORWARDING_WITNESS_FAILED"
+        for direction in ("left", "right"):
+            if not counters[f"tcp_{direction}"]:
+                return f"LOCAL_KVM_RED_TCP_REQUEST_{direction.upper()}_FORWARDING_WITNESS_FAILED"
+        for direction in ("left", "right"):
+            if not counters[f"response_{direction}"]:
+                return f"LOCAL_KVM_RED_TCP_RESPONSE_{direction.upper()}_FORWARDING_WITNESS_FAILED"
         return "LOCAL_KVM_RED_TCP_HANDSHAKE_WITNESS_FAILED"
 
     def _control_probe(self, record: _RunnerRecord) -> ControlProbe:

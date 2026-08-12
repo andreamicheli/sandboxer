@@ -430,9 +430,9 @@ def test_local_kvm_waits_for_guest_control_reopen_after_red_ack(tmp_path: Path, 
 @pytest.mark.parametrize(
     ("zero_counters", "reason_code"),
     [
-        (("arp_left",), "LOCAL_KVM_RED_ARP_FORWARDING_WITNESS_FAILED"),
-        (("tcp_left",), "LOCAL_KVM_RED_TCP_REQUEST_FORWARDING_WITNESS_FAILED"),
-        (("response_left",), "LOCAL_KVM_RED_TCP_RESPONSE_FORWARDING_WITNESS_FAILED"),
+        (("arp_left",), "LOCAL_KVM_RED_ARP_LEFT_FORWARDING_WITNESS_FAILED"),
+        (("tcp_left",), "LOCAL_KVM_RED_TCP_REQUEST_LEFT_FORWARDING_WITNESS_FAILED"),
+        (("response_left",), "LOCAL_KVM_RED_TCP_RESPONSE_LEFT_FORWARDING_WITNESS_FAILED"),
         ((), "LOCAL_KVM_RED_TCP_HANDSHAKE_WITNESS_FAILED"),
     ],
 )
