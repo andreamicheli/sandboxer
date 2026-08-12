@@ -1,0 +1,120 @@
+#!/bin/ash
+# Installed only in the immutable Runner image. Runtime metadata is read from
+# the read-only CIDATA disk; it is never interpreted as shell code.
+
+SANDBOXER_METADATA_MOUNT=/run/sandboxer-meta
+SANDBOXER_METADATA_DEVICE=/dev/sr0
+
+sandboxer_mount_metadata() {
+    mkdir -p "$SANDBOXER_METADATA_MOUNT"
+    if ! mountpoint -q "$SANDBOXER_METADATA_MOUNT"; then
+        mount -t iso9660 -o ro,nosuid,nodev,noexec "$SANDBOXER_METADATA_DEVICE" "$SANDBOXER_METADATA_MOUNT" || return 1
+    fi
+}
+
+sandboxer_metadata_value() {
+    key="$1"
+    sed -n "s/^${key}=//p" "$SANDBOXER_METADATA_MOUNT/meta-data" | sed -n '1p'
+}
+
+sandboxer_load_metadata() {
+    sandboxer_mount_metadata || return 1
+    SANDBOXER_NONCE="$(sandboxer_metadata_value nonce)"
+    SANDBOXER_IP="$(sandboxer_metadata_value ip)"
+    SANDBOXER_PEER_IP="$(sandboxer_metadata_value peer_ip)"
+    case "$SANDBOXER_NONCE" in
+        ????????*) ;;
+        *) return 1 ;;
+    esac
+    case "$SANDBOXER_IP:$SANDBOXER_PEER_IP" in
+        10.77.0.11:10.77.0.12|10.77.0.12:10.77.0.11) ;;
+        *) return 1 ;;
+    esac
+}
+
+# Emit exactly one route-state value on success.  Callers must compare the
+# value; command failure deliberately has no value so the caller can record
+# an unavailable witness and fail closed.  Do not use this as an `if`
+# predicate: an empty successful route listing is the normal no-route case.
+sandboxer_route_state() {
+    sandboxer_route_listing="$(/bin/busybox timeout -s KILL 1 /sbin/ip route show default)" || return 1
+    case "$sandboxer_route_listing" in
+        '') printf '%s\n' absent ;;
+        *) printf '%s\n' present ;;
+    esac
+}
+
+# Read the route table exactly once when a caller needs both the temporal
+# state and its categorical origin.  Two independent reads can observe a
+# transition and create an internally impossible READY frame (for example,
+# state=absent paired with origin=other).
+sandboxer_route_diagnostics() {
+    sandboxer_route_listing="$(/bin/busybox timeout -s KILL 1 /sbin/ip route show default)" || return 1
+    case "$sandboxer_route_listing" in
+        '') printf '%s\n' 'absent absent' ;;
+        *'proto dhcp'*) printf '%s\n' 'present dhcp' ;;
+        *'proto ra'*) printf '%s\n' 'present ra' ;;
+        *'proto static'*) printf '%s\n' 'present static' ;;
+        *) printf '%s\n' 'present other' ;;
+    esac
+}
+
+# Categorical only: never expose the route line, interface, or gateway.
+sandboxer_route_origin() {
+    sandboxer_route_listing="$(/bin/busybox timeout -s KILL 1 /sbin/ip route show default)" || return 1
+    case "$sandboxer_route_listing" in
+        '') printf '%s\n' absent ;;
+        *'proto dhcp'*) printf '%s\n' dhcp ;;
+        *'proto ra'*) printf '%s\n' ra ;;
+        *'proto static'*) printf '%s\n' static ;;
+        *) printf '%s\n' other ;;
+    esac
+}
+
+sandboxer_dhcp_client_present() {
+    for sandboxer_comm in /proc/[0-9]*/comm; do
+        test -r "$sandboxer_comm" || continue
+        case "$(cat "$sandboxer_comm" 2>/dev/null)" in udhcpc|dhcpcd) printf '%s\n' 1; return 0;; esac
+    done
+    printf '%s\n' 0
+}
+
+# The toy starts asynchronously under start-stop-daemon.  Prove an actual
+# local HTTP response rather than merely a TCP listener, and tolerate its
+# startup race within a fixed fourteen-second bound.
+sandboxer_toy_http_ready() {
+    sandboxer_toy_ip="$1"
+    sandboxer_toy_attempt=0
+    while test "$sandboxer_toy_attempt" -lt 5; do
+        if /bin/busybox timeout -s KILL 2 /bin/busybox wget -q -T 1 -O /dev/null "http://$sandboxer_toy_ip:8080/"; then
+            return 0
+        fi
+        sandboxer_toy_attempt=$((sandboxer_toy_attempt + 1))
+        test "$sandboxer_toy_attempt" -lt 5 && /bin/busybox sleep 1
+    done
+    return 1
+}
+
+sandboxer_local_address_ready() {
+    sandboxer_expected_ip="$1"
+    sandboxer_addresses="$(/bin/busybox timeout -s KILL 1 /sbin/ip -o -4 addr show dev eth0)" || return 1
+    case " $sandboxer_addresses " in
+        *" $sandboxer_expected_ip/24 "*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+sandboxer_private_mounts() {
+    ! awk '$3 ~ /^(9p|virtiofs|nfs|nfs4|cifs|smbfs|fuse\\.sshfs)$/ { found = 1 } END { exit found ? 0 : 1 }' /proc/mounts
+}
+
+sandboxer_no_credentials() {
+    for path in /root/.ssh /root/.aws /root/.config/gcloud /home/competitor/.ssh /home/competitor/.aws /home/competitor/.config/gcloud /run/secrets /var/run/secrets; do
+        test ! -e "$path" || return 1
+    done
+    for environment in /proc/1/environ /proc/self/environ; do
+        test -r "$environment" || continue
+        tr '\000' '\n' < "$environment" | grep -Eq '^(GROQ_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|COHERE_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|AZURE_.*TOKEN|.*_PASSWORD)=' && return 1
+    done
+    return 0
+}

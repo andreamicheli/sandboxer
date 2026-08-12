@@ -80,6 +80,14 @@ class ProvisioningFailed(RuntimeError):
         self.teardown_evidence = teardown_evidence
 
 
+class PreflightWitnessFailed(RuntimeError):
+    """A safe, provider-supplied category for an unavailable preflight witness."""
+
+    def __init__(self, reason_code: str) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+
+
 class RunnerProvider(Protocol):
     """The sole cloud/runtime extension point; never exposed to a Runner."""
 
@@ -133,8 +141,9 @@ class ProductionRunnerBackend:
         except Exception as error:
             # A failed witness is not an unknown that can be retried in-place:
             # these Runners are already live, so contain them before surfacing it.
+            reason_code = error.reason_code if isinstance(error, PreflightWitnessFailed) else "PREFLIGHT_EXECUTION_FAILED"
             raise RunnerPreflightFailed(
-                "PREFLIGHT_EXECUTION_FAILED", self._quarantine(runners, "PREFLIGHT_EXECUTION_FAILED")
+                reason_code, self._quarantine(runners, reason_code)
             ) from error
         failed = next((check for check in checks if not check.passed), None)
         if failed is not None:
@@ -142,7 +151,11 @@ class ProductionRunnerBackend:
             raise RunnerPreflightFailed(code, self._quarantine(runners, code))
         policy = ArenaNetworkPolicy(match_id, runners[0].name, runners[1].name)
         for phase in (Phase.BLUE, Phase.RED):
-            validation = policy.validate(phase, self._provider.network_observation(phase, runners))
+            try:
+                observation = self._provider.network_observation(phase, runners)
+            except PreflightWitnessFailed as error:
+                raise RunnerPreflightFailed(error.reason_code, self._quarantine(runners, error.reason_code)) from error
+            validation = policy.validate(phase, observation)
             if not validation.safe:
                 code = validation.reason_codes[0]
                 raise RunnerPreflightFailed(code, self._quarantine(runners, code))

@@ -1,0 +1,26 @@
+#!/bin/ash
+set -eu
+
+. /usr/local/libexec/sandboxer-common
+sandboxer_load_metadata
+
+ip link set lo up
+ip link set eth0 up
+ip addr flush dev eth0
+ip addr add "$SANDBOXER_IP/24" dev eth0
+# Delete every extant default route before recording a fixed, non-sensitive
+# temporal witness. A later network manager cannot hide behind a single-route
+# delete or cause the control probe to report an unexplained egress failure.
+while ip route del default 2>/dev/null; do :; done
+sandboxer_route_state > /run/sandboxer-route-after-setup || printf 'unknown\n' > /run/sandboxer-route-after-setup
+if ! mountpoint -q /workspace; then
+    if ! mount -o rw,nosuid,nodev,noexec /dev/vdb /workspace; then
+        mkfs.ext4 -F -L sandboxer-workspace /dev/vdb
+        mount -o rw,nosuid,nodev,noexec /dev/vdb /workspace
+    fi
+fi
+mkdir -p /workspace/notes
+chown competitor:competitor /workspace /workspace/notes
+chmod 0700 /workspace /workspace/notes
+printf 'Synthetic notes service for this disposable Runner.\n' > /workspace/notes/index.html
+chown competitor:competitor /workspace/notes/index.html
