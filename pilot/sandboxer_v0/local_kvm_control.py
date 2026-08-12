@@ -84,7 +84,11 @@ def parse_control(response: str, nonce: str, *, require_probe: bool) -> ControlR
         raise RuntimeError("CONTROL_PROBE_INVALID")
     if fields["route_at_control"] == "absent" and route_origin not in {"absent", "unknown"}:
         raise RuntimeError("CONTROL_PROBE_INVALID")
-    if toy_bootstrap not in {"ready", "root_missing", "launch_failed", "listener_missing", "unknown"}:
+    if toy_bootstrap not in {
+        "ready", "root_failed", "exec_failed", "bind_failed", "exited_other", "unknown",
+        # Audited r27 and earlier image evidence remains parseable.
+        "root_missing", "launch_failed", "listener_missing",
+    }:
         raise RuntimeError("CONTROL_PROBE_INVALID")
     try:
         ready = ControlReady(

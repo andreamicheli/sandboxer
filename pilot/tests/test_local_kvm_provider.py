@@ -878,6 +878,22 @@ def test_local_kvm_unknown_route_marker_is_diagnostic_when_active_proofs_pass(tm
     assert not (tmp_path / "evidence" / f"{hashlib.sha256(runners[0].runner_id.encode()).hexdigest()[:16]}.serial-stages").exists()
 
 
+@pytest.mark.parametrize("toy_state", ["root_failed", "exec_failed", "bind_failed", "exited_other"])
+def test_local_kvm_surfaces_fixed_toy_lifecycle_outcomes(tmp_path: Path, monkeypatch, toy_state: str) -> None:
+    provider, _host = configured_provider(tmp_path)
+    runners = provider.provision(f"kvm-toy-{toy_state.replace('_', '-')}", ("atlas", "borealis"))
+    probe = ControlProbe(
+        "n", 1001, "11111111-1111-1111-1111-111111111111", True, True, "absent", "absent",
+        route_origin="absent", dhcp_client="0", clock_epoch=1, toy_bootstrap=toy_state,
+    )
+    monkeypatch.setattr(provider, "_control_probe", lambda _record: probe)
+
+    with pytest.raises(PreflightWitnessFailed, match=f"LOCAL_KVM_TOY_BOOTSTRAP_{toy_state.upper()}"):
+        provider.probe(runners)
+
+    assert all(provider.destroy(runner).state is TeardownState.DESTROYED for runner in runners)
+
+
 def test_runtime_metadata_never_asks_cloud_init_to_write_the_runner_root(tmp_path: Path) -> None:
     provider, _host = configured_provider(tmp_path)
     runners = provider.provision("kvm-rehearsal-007", ("atlas", "borealis"))

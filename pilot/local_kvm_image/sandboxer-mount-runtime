@@ -19,27 +19,38 @@ printf 'SANDBOXER_STAGE_SETUP\n' > /dev/ttyS0
 /usr/local/libexec/sandboxer-setup > /dev/ttyS0 2>&1 || { printf 'SANDBOXER_SETUP_FAILED\n' > /dev/ttyS0; exit 1; }
 route_marker AFTER_SETUP
 printf 'SANDBOXER_STAGE_TOY\n' > /dev/ttyS0
-toy_state() { printf '%s\n' "$1" > /run/sandboxer-toy-bootstrap-state; }
+toy_outcome() {
+    printf '%s\n' "$1" > /run/sandboxer-toy-bootstrap-state
+    case "$1" in
+        root_failed) printf 'SANDBOXER_TOY_ROOT_FAILED\n' > /dev/ttyS0 ;;
+        exec_failed) printf 'SANDBOXER_TOY_EXEC_FAILED\n' > /dev/ttyS0 ;;
+        bind_failed) printf 'SANDBOXER_TOY_BIND_FAILED\n' > /dev/ttyS0 ;;
+        exited_other) printf 'SANDBOXER_TOY_EXITED_OTHER\n' > /dev/ttyS0 ;;
+        ready) printf 'SANDBOXER_TOY_READY\n' > /dev/ttyS0 ;;
+        *) printf 'SANDBOXER_TOY_EXITED_OTHER\n' > /dev/ttyS0 ;;
+    esac
+}
 if ! test -r /workspace/notes/index.html; then
-    toy_state root_missing
-    printf 'SANDBOXER_TOY_ROOT_MISSING\n' > /dev/ttyS0
+    toy_outcome root_failed
     exit 1
 fi
-start-stop-daemon --start --background --make-pidfile --pidfile /run/sandboxer-toy.pid --exec /usr/local/libexec/sandboxer-toy || {
-    printf 'SANDBOXER_TOY_FAILED\n' > /dev/ttyS0
+start-stop-daemon --start --background --make-pidfile --pidfile /run/sandboxer-toy.pid --exec /usr/local/libexec/sandboxer-toy >/dev/null 2>&1 || {
+    toy_outcome exec_failed
     exit 1
 }
 if ! test -s /run/sandboxer-toy.pid || ! kill -0 "$(cat /run/sandboxer-toy.pid)" 2>/dev/null; then
-    toy_state launch_failed
-    printf 'SANDBOXER_TOY_LAUNCH_FAILED\n' > /dev/ttyS0
+    toy_outcome exec_failed
 else
-    sandboxer_load_metadata || { printf 'SANDBOXER_TOY_LISTENER_MISSING\n' > /dev/ttyS0; }
-    if test -n "${SANDBOXER_IP:-}" && sandboxer_toy_http_ready "$SANDBOXER_IP"; then
-        toy_state ready
-        printf 'SANDBOXER_TOY_READY\n' > /dev/ttyS0
+    if ! sandboxer_load_metadata; then
+        toy_outcome exec_failed
+    elif sandboxer_toy_http_ready "$SANDBOXER_IP"; then
+        toy_outcome ready
+    elif kill -0 "$(cat /run/sandboxer-toy.pid)" 2>/dev/null; then
+        # The process survived the full bounded HTTP witness but no listener
+        # answered. In this fixed launch contract that is the bind outcome.
+        toy_outcome bind_failed
     else
-        toy_state listener_missing
-        printf 'SANDBOXER_TOY_LISTENER_MISSING\n' > /dev/ttyS0
+        toy_outcome exited_other
     fi
 fi
 route_marker AFTER_TOY

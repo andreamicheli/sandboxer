@@ -108,10 +108,11 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert "/usr/local/libexec/sandboxer-setup" in bootstrap
     assert "/usr/local/libexec/sandboxer-toy" in bootstrap
     assert "/usr/local/libexec/sandboxer-control" in bootstrap
-    assert "SANDBOXER_TOY_ROOT_MISSING" in bootstrap
-    assert "SANDBOXER_TOY_LAUNCH_FAILED" in bootstrap
-    assert "SANDBOXER_TOY_LISTENER_MISSING" in bootstrap
     assert "SANDBOXER_TOY_READY" in bootstrap
+    assert "SANDBOXER_TOY_ROOT_FAILED" in bootstrap
+    assert "SANDBOXER_TOY_EXEC_FAILED" in bootstrap
+    assert "SANDBOXER_TOY_BIND_FAILED" in bootstrap
+    assert "SANDBOXER_TOY_EXITED_OTHER" in bootstrap
     assert "kill -0" in bootstrap and "sandboxer_toy_http_ready" in bootstrap
     assert "timeout -s KILL 2" in (rendered / "sandboxer-common").read_text()
     assert "/etc/init.d/sandboxer-runner start" not in bootstrap
@@ -183,7 +184,7 @@ def test_rendered_toy_health_retries_a_bounded_http_request_after_background_sta
     document_root = tmp_path / "notes"; document_root.mkdir()
     (document_root / "index.html").write_text("synthetic", encoding="ascii")
     listener = subprocess.Popen(
-        ["/usr/bin/busybox", "sh", "-c", f"sleep 1; exec /usr/bin/busybox httpd -f -p 127.0.0.2:8080 -h {document_root}"],
+        ["/usr/bin/busybox", "sh", "-c", f"sleep 3; exec /usr/bin/busybox httpd -f -p 127.0.0.2:8080 -h {document_root}"],
     )
     try:
         # The service contract is an HTTP response, and a single immediate
@@ -405,7 +406,7 @@ def test_rendered_guest_control_keeps_one_route_snapshot_and_emits_it_once(tmp_p
         process.terminate(); process.wait(timeout=2); os.close(master); os.close(slave)
 
 
-@pytest.mark.parametrize("toy_bootstrap", ["ready", "root_missing", "launch_failed", "listener_missing", "unknown"])
+@pytest.mark.parametrize("toy_bootstrap", ["ready", "root_failed", "exec_failed", "bind_failed", "exited_other", "unknown"])
 def test_rendered_guest_control_emits_each_current_toy_bootstrap_state(tmp_path: Path, toy_bootstrap: str) -> None:
     """The guest's exact READY field order remains compatible with the parser."""
     rendered = tmp_path / "rendered"

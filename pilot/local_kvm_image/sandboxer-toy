@@ -2,6 +2,8 @@
 set -eu
 
 . /usr/local/libexec/sandboxer-common
-sandboxer_load_metadata
+test -r /workspace/notes/index.html || exit 65
+test -x /usr/sbin/httpd || exit 127
+sandboxer_load_metadata || exit 127
 export SANDBOXER_IP
 exec su -s /bin/ash -c 'exec /usr/sbin/httpd -f -p "$SANDBOXER_IP:8080" -h /workspace/notes' competitor
