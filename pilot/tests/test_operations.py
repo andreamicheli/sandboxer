@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import math
 
 import pytest
 
@@ -309,6 +310,7 @@ def test_ttl_reconciliation_cancels_inflight_executor_before_quarantine(tmp_path
 
         def cancel(self, series_id):
             cancelled.append(series_id)
+            return {f"{series_id}:runner-set": "quarantined"}
 
     path = tmp_path / "operations.json"
     operations = SeriesOperations(path, executor=Probe())
@@ -318,6 +320,33 @@ def test_ttl_reconciliation_cancels_inflight_executor_before_quarantine(tmp_path
     result, = SeriesOperations(path, executor=Probe()).reconcile(now=5)
     assert cancelled == ["ttl-cancel-001"]
     assert result.reason_code == "RUNNER_TTL_EXPIRED"
+
+
+def test_ttl_cleanup_without_acknowledgement_stays_explicitly_unresolved_and_retryable(tmp_path) -> None:
+    calls = []
+    class IgnoringCleanup:
+        def __call__(self, _spec):
+            raise KeyboardInterrupt()
+        def cancel(self, series_id):
+            calls.append(series_id)
+            return None
+    path = tmp_path / "operations.json"
+    operations = SeriesOperations(path, executor=IgnoringCleanup())
+    operations.submit(_spec("unresolved-001"), mode=OperationMode.BATCH_LAB, controls=OperationControls(runner_ttl_seconds=1))
+    with pytest.raises(KeyboardInterrupt):
+        operations.advance(now=0)
+    operations.reconcile(now=1)
+    state = json.loads(path.read_text())
+    assert state["runners"]["unresolved-001:runner-set"]["state"] == "CLEANUP_UNRESOLVED"
+    SeriesOperations(path, executor=IgnoringCleanup()).reconcile(now=2)
+    assert calls == ["unresolved-001", "unresolved-001"]
+
+
+@pytest.mark.parametrize("cost", [-1, math.inf, math.nan])
+def test_execution_result_rejects_invalid_actual_cost(cost) -> None:
+    from sandboxer_v0 import execute_series
+    with pytest.raises(ValueError, match="actual execution cost"):
+        ExecutionResult(execute_series(_spec("invalid-cost")), actual_cost=cost)
 
 
 def test_batch_persists_intrinsically_non_public_release_bundle(tmp_path) -> None:

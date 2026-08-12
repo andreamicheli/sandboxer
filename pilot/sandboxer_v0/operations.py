@@ -10,7 +10,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 import json
+import math
 from pathlib import Path
+import threading
+import time
 from typing import Any, Callable, Iterator, Protocol
 import fcntl
 from contextlib import contextmanager
@@ -73,6 +76,10 @@ class ExecutionResult:
     bundle: ReleaseBundle
     actual_cost: int | float = 0
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.actual_cost, (int, float)) or isinstance(self.actual_cost, bool) or not math.isfinite(self.actual_cost) or self.actual_cost < 0:
+            raise ValueError("actual execution cost must be finite and non-negative")
+
 
 @dataclass(frozen=True)
 class OperationControls:
@@ -84,13 +91,14 @@ class OperationControls:
     wait_cost_ceiling: int | float = 0
     execution_cost_ceiling: int | float = 0
     runner_ttl_seconds: int | float = 900
+    cleanup_timeout_seconds: int | float = 30
 
     def __post_init__(self) -> None:
         if self.wait_deadline_seconds <= 0 or self.initial_backoff_seconds <= 0:
             raise ValueError("wait deadline and initial backoff must be positive")
         if self.max_backoff_seconds < self.initial_backoff_seconds:
             raise ValueError("maximum backoff cannot be below initial backoff")
-        if min(self.wait_cost_ceiling, self.execution_cost_ceiling) < 0 or self.runner_ttl_seconds <= 0:
+        if min(self.wait_cost_ceiling, self.execution_cost_ceiling) < 0 or self.runner_ttl_seconds <= 0 or self.cleanup_timeout_seconds <= 0:
             raise ValueError("cost ceilings must be non-negative and Runner TTL positive")
 
 
@@ -156,7 +164,7 @@ class SeriesOperations:
         self._path = path
         self._availability = availability or _AlwaysAvailable()
         self._executor = executor
-        self._clock = clock or (lambda: 0)
+        self._clock = clock or time.time
         self._state: dict[str, Any] = {}
         self._reload()
 
@@ -400,21 +408,53 @@ class SeriesOperations:
     def reconcile(self, *, now: int | float) -> tuple[OperationSnapshot, ...]:
         """Quarantine expired Runner sets and reconcile their owning Series."""
         with self._lock():
-            expired = tuple(runner["series_id"] for runner in self._state["runners"].values() if runner["state"] == "RUNNING" and now >= runner["expires_at"])
-        for series_id in expired:
-            if hasattr(self._executor, "cancel"):
-                self._executor.cancel(series_id)
+            expired = tuple((runner["series_id"], runner["ttl_seconds"]) for runner in self._state["runners"].values() if runner["state"] in {"RUNNING", "CLEANUP_UNRESOLVED"} and now >= runner["expires_at"])
+        for series_id, _ttl in expired:
+            self._apply_cleanup(series_id)
         with self._lock():
-            return self._reconcile(now)
+            reconciled = self._reconcile(now)
+            if reconciled:
+                return reconciled
+            return tuple(self._snapshot(series_id) for series_id, _ttl in expired)
 
     def _reconcile(self, now: int | float) -> tuple[OperationSnapshot, ...]:
         reconciled: list[OperationSnapshot] = []
         for resource_id, runner in tuple(self._state["runners"].items()):
-            if runner["state"] == "RUNNING" and now >= runner["expires_at"]:
+            if runner["state"] in {"RUNNING", "CLEANUP_UNRESOLVED"} and now >= runner["expires_at"]:
                 series_id = runner["series_id"]
                 self._quarantine(series_id, "RUNNER_TTL_EXPIRED")
                 reconciled.append(self._snapshot(series_id))
         return tuple(reconciled)
+
+    def _apply_cleanup(self, series_id: str) -> None:
+        """Bounded best-effort cleanup; only acknowledged evidence changes Runner state."""
+        with self._lock():
+            controls = OperationControls(**self._series(series_id)["controls"])
+        outcome: dict[str, str] | None = None
+        error: list[BaseException] = []
+        def invoke() -> None:
+            nonlocal outcome
+            try:
+                outcome = self._executor.cancel(series_id) if hasattr(self._executor, "cancel") else None
+            except BaseException as caught:  # cleanup errors are recorded, never hidden
+                error.append(caught)
+        worker = threading.Thread(target=invoke, daemon=True)
+        worker.start()
+        worker.join(controls.cleanup_timeout_seconds)
+        with self._lock():
+            for runner_id, runner in self._state["runners"].items():
+                if runner["series_id"] != series_id or runner["state"] not in {"RUNNING", "CLEANUP_UNRESOLVED"}:
+                    continue
+                state = outcome.get(runner_id) if outcome else None
+                if state == "destroyed":
+                    runner.update(state="DESTROYED", evidence="EXECUTOR_CLEANUP_ACKNOWLEDGED", reason_code=None)
+                elif state == "quarantined":
+                    runner.update(state="QUARANTINED", evidence="EXECUTOR_CLEANUP_ACKNOWLEDGED", reason_code="RUNNER_TTL_EXPIRED")
+                else:
+                    runner.update(state="CLEANUP_UNRESOLVED", evidence="EXECUTOR_CLEANUP_TIMEOUT" if worker.is_alive() else "EXECUTOR_CLEANUP_UNACKNOWLEDGED", reason_code="RUNNER_TTL_EXPIRED")
+            if self._series(series_id)["state"] == "RUNNING":
+                self._quarantine(series_id, "RUNNER_TTL_EXPIRED", write=False)
+            self._write()
 
     def retry_as_new_series(self, series_id: str, *, new_series_id: str) -> OperationSnapshot:
         with self._lock():
@@ -534,7 +574,7 @@ class SeriesOperations:
 
     def _quarantine_runners(self, series_id: str, reason_code: str) -> None:
         for record in self._state["runners"].values():
-            if record["series_id"] == series_id and record["state"] != "DESTROYED":
+            if record["series_id"] == series_id and record["state"] not in {"DESTROYED", "CLEANUP_UNRESOLVED"}:
                 record["state"] = "QUARANTINED"
                 record["reason_code"] = reason_code
 
