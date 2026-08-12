@@ -379,7 +379,6 @@ date() { printf '%s\\n' 1720000000; }
             "SANDBOXER_NETPROBE_STAGE=egress",
             "SANDBOXER_NETPROBE_STAGE=orchestrator",
             "SANDBOXER_NETPROBE_STAGE=emit",
-            "SANDBOXER_NETPROBE_RESULT phase=blue peer_denied=1 peer_tcp=0 toy_http=0 alternate_denied=1 icmp_denied=1 egress_denied=1 egress_reason=blocked orchestrator_denied=1 local_toy=0",
             "SANDBOXER_NETPROBE_STAGE=emitted",
         ]
 
