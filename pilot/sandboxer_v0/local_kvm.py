@@ -127,6 +127,8 @@ class LocalKvmHost(Protocol):
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str: ...
 
+    def close_control(self, socket_path: Path) -> None: ...
+
     def process_alive(self, pid: int) -> bool: ...
 
     def process_identity(self, pid: int) -> str | None: ...
@@ -158,6 +160,7 @@ class SubprocessLocalKvmHost:
     def __init__(self, *, cgroup_root: Path = Path("/sys/fs/cgroup/sandboxer")) -> None:
         self._cgroup_root = cgroup_root
         self._diagnostic_threads: dict[int, threading.Thread] = {}
+        self._control_clients: dict[Path, socket.socket] = {}
 
     def run(
         self, argv: tuple[str, ...], *, input_text: str | None = None, timeout_seconds: float = 10
@@ -248,9 +251,17 @@ class SubprocessLocalKvmHost:
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
         single_line_response = payload.startswith(("NETPROBE ", "PHASE_RED "))
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client = self._control_clients.get(socket_path)
+        if client is None:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                client.connect(os.fspath(socket_path))
+            except Exception:
+                client.close()
+                raise
+            self._control_clients[socket_path] = client
+        try:
             client.settimeout(timeout_seconds)
-            client.connect(os.fspath(socket_path))
             client.sendall(payload.encode("ascii"))
             chunks: list[bytes] = []
             received = 0
@@ -269,7 +280,15 @@ class SubprocessLocalKvmHost:
                     break
             if received > _MAX_CONTROL_RESPONSE:
                 raise RuntimeError("CONTROL_RESPONSE_TOO_LARGE")
-        return b"".join(chunks).decode("ascii", errors="strict")
+            return b"".join(chunks).decode("ascii", errors="strict")
+        except Exception:
+            self.close_control(socket_path)
+            raise
+
+    def close_control(self, socket_path: Path) -> None:
+        client = self._control_clients.pop(socket_path, None)
+        if client is not None:
+            client.close()
 
     def process_alive(self, pid: int) -> bool:
         try:
@@ -1036,6 +1055,7 @@ class LocalKvmRunnerProvider:
 
     def _destroy_record(self, record: _RunnerRecord, reason_code: str | None) -> TeardownEvidence:
         failures: list[str] = []
+        self._host.close_control(record.control_socket)
         if record.ttl_token is not None:
             if not self._cancel_ttl(record.ttl_token):
                 failures.append("TTL_WATCHDOG_REMAINS")

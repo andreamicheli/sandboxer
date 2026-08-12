@@ -144,6 +144,9 @@ class RecordingKvmHost:
         nonce = payload.split()[1]
         return f"READY nonce={nonce} uid=1001 boot_id={boot_id} no_credentials=1 private_mounts=1 route_after_setup=absent route_at_control=absent toy_bootstrap=ready\nPROBE_OK nonce={nonce} uid=1001 clock_epoch=1720000000\n"
 
+    def close_control(self, socket_path: Path) -> None:
+        del socket_path
+
     def process_alive(self, pid: int) -> bool:
         return pid in self.alive
 
@@ -583,6 +586,35 @@ def test_subprocess_host_returns_a_complete_netprobe_frame_without_waiting_for_e
 
     assert request_received.is_set()
     assert request == [b"NETPROBE aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blue\n"]
+
+
+def test_subprocess_host_reuses_one_control_connection_until_explicit_teardown(tmp_path: Path) -> None:
+    socket_path = tmp_path / "control.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    listener.listen(1)
+    requests: list[bytes] = []
+
+    def serve() -> None:
+        connection, _ = listener.accept()
+        with connection:
+            for response in (b"PHASE_RED_OK nonce=n\n", b"NETWORK_PROBE nonce=n\n"):
+                requests.append(connection.recv(4096))
+                connection.sendall(response)
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    host = SubprocessLocalKvmHost()
+    try:
+        assert host.control_exchange(socket_path, "PHASE_RED n\n") == "PHASE_RED_OK nonce=n\n"
+        assert host.control_exchange(socket_path, "NETPROBE n red\n") == "NETWORK_PROBE nonce=n\n"
+        host.close_control(socket_path)
+        thread.join(timeout=2)
+    finally:
+        listener.close()
+
+    assert not thread.is_alive()
+    assert requests == [b"PHASE_RED n\n", b"NETPROBE n red\n"]
 
 
 def test_subprocess_host_preserves_temporal_ready_fields_through_a_persistent_socket(tmp_path: Path) -> None:
