@@ -75,6 +75,7 @@ network_proof() {
     network_stage emit
     printf 'NETWORK_PROBE nonce=%s phase=%s peer_denied=%s peer_tcp=%s toy_http=%s alternate_denied=%s icmp_denied=%s egress_denied=%s egress_reason=%s orchestrator_denied=%s local_toy=%s\n' \
         "$SANDBOXER_NONCE" "$phase" "$peer_denied" "$peer_tcp" "$toy_http" "$alternate_denied" "$icmp_denied" "$egress_denied" "$egress_reason" "$orchestrator_denied" "$local_toy"
+    network_stage emitted
 }
 
 while :; do

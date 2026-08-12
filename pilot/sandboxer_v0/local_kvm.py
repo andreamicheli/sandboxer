@@ -1019,7 +1019,7 @@ class LocalKvmRunnerProvider:
                     "SANDBOXER_NETPROBE_STAGE=start", "SANDBOXER_NETPROBE_STAGE=local_toy", "SANDBOXER_NETPROBE_STAGE=peer",
                     "SANDBOXER_NETPROBE_STAGE=alternate", "SANDBOXER_NETPROBE_STAGE=icmp",
                     "SANDBOXER_NETPROBE_STAGE=egress", "SANDBOXER_NETPROBE_STAGE=orchestrator",
-                    "SANDBOXER_NETPROBE_STAGE=emit",
+                    "SANDBOXER_NETPROBE_STAGE=emit", "SANDBOXER_NETPROBE_STAGE=emitted",
                 }
                 labels = [line for line in raw.splitlines() if line in allowed or line in netprobe_stages]
                 if not labels:

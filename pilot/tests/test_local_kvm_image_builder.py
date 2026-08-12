@@ -94,6 +94,7 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert "/usr/sbin/httpd -f" in toy
     assert "/bin/busybox httpd" not in toy
     assert "PROBE_OK" in control and "NETWORK_PROBE" in control
+    assert "network_stage emitted" in control
     assert "sandboxer_no_credentials" in control and "sandboxer_private_mounts" in control
     setup = (rendered / "sandboxer-setup").read_text()
     bootstrap = (rendered / "sandboxer-mount-runtime").read_text()
@@ -378,6 +379,7 @@ date() { printf '%s\\n' 1720000000; }
             "SANDBOXER_NETPROBE_STAGE=egress",
             "SANDBOXER_NETPROBE_STAGE=orchestrator",
             "SANDBOXER_NETPROBE_STAGE=emit",
+            "SANDBOXER_NETPROBE_STAGE=emitted",
         ]
 
         os.write(master, b"PROBE aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")
