@@ -820,7 +820,7 @@ def test_local_kvm_serial_failure_evidence_is_allowlisted_external_and_survives_
     record = provider._records[runners[0].runner_id]
     (record.root / "serial.log").write_text(
         "SANDBOXER_STAGE_SETUP\nOPENAI_API_KEY=do-not-disclose\n"
-        "198.51.100.1 /private/path arbitrary text\nSANDBOXER_CONTROL_FAILED\n",
+        "198.51.100.1 /private/path arbitrary text\nSANDBOXER_NETPROBE_STAGE=attacker_value\nSANDBOXER_CONTROL_FAILED\n",
         encoding="ascii",
     )
     monkeypatch.setattr(

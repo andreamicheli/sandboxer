@@ -935,7 +935,13 @@ class LocalKvmRunnerProvider:
         for record in records:
             try:
                 raw = (record.root / "serial.log").read_text(encoding="ascii", errors="ignore")[-8192:]
-                labels = [line for line in raw.splitlines() if line in allowed or re.fullmatch(r"SANDBOXER_NETPROBE_STAGE=[a-z_]+", line)]
+                netprobe_stages = {
+                    "SANDBOXER_NETPROBE_STAGE=start", "SANDBOXER_NETPROBE_STAGE=peer",
+                    "SANDBOXER_NETPROBE_STAGE=alternate", "SANDBOXER_NETPROBE_STAGE=icmp",
+                    "SANDBOXER_NETPROBE_STAGE=egress", "SANDBOXER_NETPROBE_STAGE=orchestrator",
+                    "SANDBOXER_NETPROBE_STAGE=emit",
+                }
+                labels = [line for line in raw.splitlines() if line in allowed or line in netprobe_stages]
                 if not labels:
                     continue
                 evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)

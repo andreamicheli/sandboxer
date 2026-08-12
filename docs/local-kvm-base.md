@@ -20,7 +20,7 @@ The image must have a sibling JSON profile with exactly these fields:
 ```
 
 The profile is a binding requirement, not evidence of image contents. Build
-the local image only through the controlled build VM:
+the local image only through the controlled temporary build environment:
 
 ```sh
 cd pilot
@@ -43,8 +43,9 @@ actively tests Blue peer denial and Red HTTP access, plus an alternate port,
 ICMP, default-route/direct-egress, and an unreachable Orchestrator IP path.
 These are containment witnesses, not a proof of adversarial escape resistance.
 
-Run the real two-VM rehearsal as root because KVM, network namespaces, TAPs,
-nftables and cgroups are host-privileged:
+Run the real two-Runner rehearsal as root because the implementation uses
+QEMU/KVM together with host-privileged network namespaces, TAPs, nftables and
+cgroups:
 
 ```sh
 sudo -n env PYTHONPATH="$PWD" .venv/bin/python scripts/rehearse_local_kvm.py \
