@@ -794,6 +794,8 @@ class LocalKvmRunnerProvider:
                 f'add rule bridge sandboxer forward iifname "{right.tap}" oifname "{left.tap}" ether type arp accept\n'
                 f'add rule bridge sandboxer forward iifname "{left.tap}" oifname "{right.tap}" ether type ip ip protocol tcp tcp dport {port} accept\n'
                 f'add rule bridge sandboxer forward iifname "{right.tap}" oifname "{left.tap}" ether type ip ip protocol tcp tcp dport {port} accept\n'
+                f'add rule bridge sandboxer forward iifname "{left.tap}" oifname "{right.tap}" ether type ip ip protocol tcp tcp sport {port} tcp flags & (ack|rst) != 0 accept\n'
+                f'add rule bridge sandboxer forward iifname "{right.tap}" oifname "{left.tap}" ether type ip ip protocol tcp tcp sport {port} tcp flags & (ack|rst) != 0 accept\n'
                 "add rule bridge sandboxer forward ct state established,related accept\n"
             )
             # Install a complete deny-by-default Red ruleset before the first
