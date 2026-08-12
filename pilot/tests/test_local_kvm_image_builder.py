@@ -105,6 +105,11 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert "/usr/local/libexec/sandboxer-setup" in bootstrap
     assert "/usr/local/libexec/sandboxer-toy" in bootstrap
     assert "/usr/local/libexec/sandboxer-control" in bootstrap
+    assert "SANDBOXER_TOY_ROOT_MISSING" in bootstrap
+    assert "SANDBOXER_TOY_LAUNCH_FAILED" in bootstrap
+    assert "SANDBOXER_TOY_LISTENER_MISSING" in bootstrap
+    assert "SANDBOXER_TOY_READY" in bootstrap
+    assert "kill -0" in bootstrap and "wget -q -T 2" in bootstrap
     assert "/etc/init.d/sandboxer-runner start" not in bootstrap
 
 
