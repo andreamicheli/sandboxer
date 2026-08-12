@@ -75,7 +75,7 @@ def test_control_route_origin_diagnostics_are_categorical_and_strict() -> None:
 
 
 @pytest.mark.parametrize("toy_bootstrap", [
-    "ready", "root_failed", "exec_failed", "bind_failed", "exited_other", "unknown",
+    "ready", "root_failed", "exec_failed", "address_unavailable", "httpd_bind_exit", "exited_other", "unknown",
     # Retain parser compatibility with the previous audited image evidence.
     "root_missing", "launch_failed", "listener_missing",
 ])

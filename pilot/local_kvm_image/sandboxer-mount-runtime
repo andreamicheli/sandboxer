@@ -24,7 +24,8 @@ toy_outcome() {
     case "$1" in
         root_failed) printf 'SANDBOXER_TOY_ROOT_FAILED\n' > /dev/ttyS0 ;;
         exec_failed) printf 'SANDBOXER_TOY_EXEC_FAILED\n' > /dev/ttyS0 ;;
-        bind_failed) printf 'SANDBOXER_TOY_BIND_FAILED\n' > /dev/ttyS0 ;;
+        address_unavailable) printf 'SANDBOXER_TOY_ADDRESS_UNAVAILABLE\n' > /dev/ttyS0 ;;
+        httpd_bind_exit) printf 'SANDBOXER_TOY_HTTPD_BIND_EXIT\n' > /dev/ttyS0 ;;
         exited_other) printf 'SANDBOXER_TOY_EXITED_OTHER\n' > /dev/ttyS0 ;;
         ready) printf 'SANDBOXER_TOY_READY\n' > /dev/ttyS0 ;;
         *) printf 'SANDBOXER_TOY_EXITED_OTHER\n' > /dev/ttyS0 ;;
@@ -49,13 +50,13 @@ else
         toy_pid="$(cat /run/sandboxer-toy.pid)"
         process_outcome="$(cat /run/sandboxer-toy-process-outcome 2>/dev/null || printf unknown)"
         case "$process_outcome" in
-            root_failed|exec_failed|bind_failed|exited_other) toy_outcome "$process_outcome" ;;
+            root_failed|exec_failed|address_unavailable|httpd_bind_exit|exited_other) toy_outcome "$process_outcome" ;;
             *)
                 toy_process_state="$(awk '{print $3}' /proc/"$toy_pid"/stat 2>/dev/null || printf unknown)"
                 case "$toy_process_state" in
                     Z) toy_outcome exited_other ;;
                     unknown) toy_outcome exited_other ;;
-                    *) toy_outcome bind_failed ;;
+                    *) toy_outcome httpd_bind_exit ;;
                 esac
                 ;;
         esac

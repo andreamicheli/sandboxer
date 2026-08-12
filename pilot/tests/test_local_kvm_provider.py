@@ -878,7 +878,7 @@ def test_local_kvm_unknown_route_marker_is_diagnostic_when_active_proofs_pass(tm
     assert not (tmp_path / "evidence" / f"{hashlib.sha256(runners[0].runner_id.encode()).hexdigest()[:16]}.serial-stages").exists()
 
 
-@pytest.mark.parametrize("toy_state", ["root_failed", "exec_failed", "bind_failed", "exited_other"])
+@pytest.mark.parametrize("toy_state", ["root_failed", "exec_failed", "address_unavailable", "httpd_bind_exit", "exited_other"])
 def test_local_kvm_surfaces_fixed_toy_lifecycle_outcomes(tmp_path: Path, monkeypatch, toy_state: str) -> None:
     provider, _host = configured_provider(tmp_path)
     runners = provider.provision(f"kvm-toy-{toy_state.replace('_', '-')}", ("atlas", "borealis"))

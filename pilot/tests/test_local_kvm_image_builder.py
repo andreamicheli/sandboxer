@@ -111,7 +111,8 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert "SANDBOXER_TOY_READY" in bootstrap
     assert "SANDBOXER_TOY_ROOT_FAILED" in bootstrap
     assert "SANDBOXER_TOY_EXEC_FAILED" in bootstrap
-    assert "SANDBOXER_TOY_BIND_FAILED" in bootstrap
+    assert "SANDBOXER_TOY_ADDRESS_UNAVAILABLE" in bootstrap
+    assert "SANDBOXER_TOY_HTTPD_BIND_EXIT" in bootstrap
     assert "SANDBOXER_TOY_EXITED_OTHER" in bootstrap
     assert "kill -0" in bootstrap and "sandboxer_toy_http_ready" in bootstrap
     assert "timeout -s KILL 2" in (rendered / "sandboxer-common").read_text()
@@ -214,12 +215,50 @@ def test_rendered_toy_reports_address_bind_and_process_outcomes_without_raw_outp
 
     assert "sandboxer_local_address_ready" in toy
     assert "/run/sandboxer-toy-process-outcome" in toy
-    assert "toy_process_outcome bind_failed" in toy
+    assert "toy_process_outcome address_unavailable" in toy
+    assert "toy_process_outcome httpd_bind_exit" in toy
     assert "toy_process_outcome exited_other" in toy
     assert "2>" not in toy and "stderr" not in toy
     assert "cat /run/sandboxer-toy-process-outcome" in bootstrap
     assert "awk '{print $3}' /proc/\"$toy_pid\"/stat" in bootstrap
     assert "Z) toy_outcome exited_other" in bootstrap
+    assert "SANDBOXER_TOY_ADDRESS_UNAVAILABLE" in bootstrap
+    assert "SANDBOXER_TOY_HTTPD_BIND_EXIT" in bootstrap
+
+
+@pytest.mark.parametrize(
+    ("address_ready", "su_status", "expected"),
+    [(False, 0, "address_unavailable"), (True, 1, "httpd_bind_exit")],
+)
+def test_rendered_toy_reproduces_fixed_bind_subcauses_offline(
+    tmp_path: Path, address_ready: bool, su_status: int, expected: str,
+) -> None:
+    rendered = tmp_path / "rendered"
+    subprocess.run([sys.executable, str(BUILDER), "--render-only", str(rendered)], check=True)
+    common = tmp_path / "common"
+    common.write_text(
+        "sandboxer_load_metadata() { SANDBOXER_IP=192.0.2.10; return 0; }\n"
+        f"sandboxer_local_address_ready() {{ return {0 if address_ready else 1}; }}\n",
+        encoding="ascii",
+    )
+    document = tmp_path / "index.html"; document.write_text("synthetic", encoding="ascii")
+    outcome = tmp_path / "outcome"
+    fake_bin = tmp_path / "bin"; fake_bin.mkdir()
+    fake_su = fake_bin / "su"
+    fake_su.write_text(f"#!/bin/sh\nexit {su_status}\n", encoding="ascii"); fake_su.chmod(0o755)
+    toy = (rendered / "sandboxer-toy").read_text(encoding="utf-8")
+    toy = toy.replace("/usr/local/libexec/sandboxer-common", str(common))
+    toy = toy.replace("/workspace/notes/index.html", str(document))
+    toy = toy.replace("/usr/sbin/httpd", "/bin/true")
+    toy = toy.replace("/run/sandboxer-toy-process-outcome", str(outcome))
+    script = tmp_path / "toy"; script.write_text(toy, encoding="utf-8")
+
+    subprocess.run(
+        ["/usr/bin/busybox", "ash", str(script)], env={**os.environ, "PATH": f"{fake_bin}:/usr/bin:/bin"},
+        check=False, capture_output=True, text=True,
+    )
+
+    assert outcome.read_text(encoding="ascii").strip() == expected
 
 
 def test_rendered_route_state_is_a_value_contract_not_a_shell_predicate(tmp_path: Path) -> None:
@@ -422,7 +461,7 @@ def test_rendered_guest_control_keeps_one_route_snapshot_and_emits_it_once(tmp_p
         process.terminate(); process.wait(timeout=2); os.close(master); os.close(slave)
 
 
-@pytest.mark.parametrize("toy_bootstrap", ["ready", "root_failed", "exec_failed", "bind_failed", "exited_other", "unknown"])
+@pytest.mark.parametrize("toy_bootstrap", ["ready", "root_failed", "exec_failed", "address_unavailable", "httpd_bind_exit", "exited_other", "unknown"])
 def test_rendered_guest_control_emits_each_current_toy_bootstrap_state(tmp_path: Path, toy_bootstrap: str) -> None:
     """The guest's exact READY field order remains compatible with the parser."""
     rendered = tmp_path / "rendered"
