@@ -907,7 +907,8 @@ class LocalKvmRunnerProvider:
     def _require_red_network_proofs(proofs: list[NetworkProof]) -> None:
         checks = (
             ("LOCAL_KVM_RED_LOCAL_TOY_SERVICE_WITNESS_FAILED", lambda proof: proof.local_toy),
-            ("LOCAL_KVM_RED_DECLARED_TOY_SERVICE_WITNESS_FAILED", lambda proof: not proof.peer_denied and proof.toy_http),
+            ("LOCAL_KVM_RED_DECLARED_TOY_TCP_WITNESS_FAILED", lambda proof: proof.peer_tcp),
+            ("LOCAL_KVM_RED_DECLARED_TOY_HTTP_WITNESS_FAILED", lambda proof: not proof.peer_denied and proof.toy_http),
             ("LOCAL_KVM_RED_ALTERNATE_PORT_WITNESS_FAILED", lambda proof: proof.alternate_denied),
             ("LOCAL_KVM_RED_ICMP_WITNESS_FAILED", lambda proof: proof.icmp_denied),
             ("LOCAL_KVM_RED_EGRESS_WITNESS_FAILED", lambda proof: proof.egress_denied),

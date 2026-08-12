@@ -46,9 +46,11 @@ network_proof() {
     network_stage local_toy
     tcp_http "$SANDBOXER_IP" 8080 && local_toy=1
     network_stage peer
+    peer_tcp=0
     if test "$phase" = blue; then
         tcp_connect "$SANDBOXER_PEER_IP" 8080 || peer_denied=1
     else
+        tcp_connect "$SANDBOXER_PEER_IP" 8080 && peer_tcp=1
         tcp_http "$SANDBOXER_PEER_IP" 8080 && toy_http=1
     fi
     alternate_denied=0
@@ -69,8 +71,8 @@ network_proof() {
     network_stage orchestrator
     tcp_connect 10.77.0.1 1 || orchestrator_denied=1
     network_stage emit
-    printf 'NETWORK_PROBE nonce=%s phase=%s peer_denied=%s toy_http=%s alternate_denied=%s icmp_denied=%s egress_denied=%s egress_reason=%s orchestrator_denied=%s local_toy=%s\n' \
-        "$SANDBOXER_NONCE" "$phase" "$peer_denied" "$toy_http" "$alternate_denied" "$icmp_denied" "$egress_denied" "$egress_reason" "$orchestrator_denied" "$local_toy"
+    printf 'NETWORK_PROBE nonce=%s phase=%s peer_denied=%s peer_tcp=%s toy_http=%s alternate_denied=%s icmp_denied=%s egress_denied=%s egress_reason=%s orchestrator_denied=%s local_toy=%s\n' \
+        "$SANDBOXER_NONCE" "$phase" "$peer_denied" "$peer_tcp" "$toy_http" "$alternate_denied" "$icmp_denied" "$egress_denied" "$egress_reason" "$orchestrator_denied" "$local_toy"
 }
 
 while :; do

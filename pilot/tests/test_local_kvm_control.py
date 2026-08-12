@@ -123,6 +123,7 @@ def test_network_proof_requires_all_active_denial_checks() -> None:
         NONCE, "red",
     )
     assert proof.toy_http is True
+    assert proof.peer_tcp is True
     assert proof.egress_reason == "blocked"
     with pytest.raises(RuntimeError, match="NETWORK_PROOF_INVALID"):
         parse_network_proof(
