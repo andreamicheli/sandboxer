@@ -36,9 +36,9 @@ network_stage() {
 
 network_proof() {
     phase="$1"
-    # Blue has four one-second TCP attempts plus a two-second ICMP attempt;
-    # Red replaces one TCP attempt with a three-second HTTP request.  Both
-    # paths are therefore bounded below the host's 12-second control deadline.
+    # Every subprocess has its own hard bound.  The Red path is at most twelve
+    # seconds of guest work; the host deadline is deliberately twice that bound
+    # so scheduling and virtio delivery cannot erase an already-produced proof.
     network_stage start
     peer_denied=0
     toy_http=0

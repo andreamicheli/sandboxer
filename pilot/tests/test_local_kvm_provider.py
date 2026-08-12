@@ -233,7 +233,7 @@ def test_local_kvm_rehearsal_uses_distinct_overlays_control_and_a_disposable_net
     assert all(item.state is TeardownState.DESTROYED for item in report.teardown_evidence)
     assert len({request.split()[1] for request in host.control_requests}) == 2
     assert {timeout for request, timeout in host.control_timeouts if request.startswith("PROBE ")} == {5}
-    assert {timeout for request, timeout in host.control_timeouts if request.startswith("NETPROBE ")} == {16}
+    assert {timeout for request, timeout in host.control_timeouts if request.startswith("NETPROBE ")} == {24}
     blue_route_witnesses = [
         command for command in host.commands
         if len(command) == 6 and command[:2] == ("ip", "-n") and command[2].startswith("sbb-") and command[3:] == ("route", "show", "default")

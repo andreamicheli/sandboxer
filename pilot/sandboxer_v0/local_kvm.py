@@ -34,7 +34,7 @@ from .runner_backend import PreflightCheck, PreflightWitnessFailed, Provisioning
 
 _SAFE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 _MAX_CONTROL_RESPONSE = 4096
-_NETWORK_PROBE_TIMEOUT_SECONDS = 16
+_NETWORK_PROBE_TIMEOUT_SECONDS = 24
 _MAX_QEMU_STDERR_BYTES = 1024
 _SOCKET_WITNESS_TIMEOUT_SECONDS = 1.0
 _SOCKET_WITNESS_MESSAGE_BYTES = 64
