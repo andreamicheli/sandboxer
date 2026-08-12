@@ -218,6 +218,8 @@ def test_rendered_toy_reports_address_bind_and_process_outcomes_without_raw_outp
     assert "toy_process_outcome address_unavailable" in toy
     assert "toy_process_outcome httpd_bind_exit" in toy
     assert "-u competitor" in toy
+    assert "-p 8080" in toy
+    assert '"$SANDBOXER_IP:8080"' not in toy
     assert "exec su " not in toy
     assert "toy_process_outcome exited_other" in toy
     assert "2>" not in toy and "stderr" not in toy
