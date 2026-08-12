@@ -74,6 +74,45 @@ def test_control_route_origin_diagnostics_are_categorical_and_strict() -> None:
         )
 
 
+@pytest.mark.parametrize("toy_bootstrap", ["ready", "root_missing", "launch_failed", "listener_missing", "unknown"])
+def test_control_accepts_each_declared_toy_bootstrap_state(toy_bootstrap: str) -> None:
+    """The immutable guest's current READY schema is accepted end-to-end."""
+    response = (
+        f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials=1 private_mounts=1 "
+        f"route_after_setup=absent route_at_control=absent route_origin=absent dhcp_client=0 "
+        f"toy_bootstrap={toy_bootstrap}\n"
+        f"PROBE_OK nonce={NONCE} uid=1001 clock_epoch=1720000000\n"
+    )
+
+    probe = parse_control(response, NONCE, require_probe=True)
+
+    assert probe.toy_bootstrap == toy_bootstrap
+
+
+def test_control_rejects_incoherent_route_snapshot() -> None:
+    """A route state and origin must represent the same control-start read."""
+    response = (
+        f"READY nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials=1 private_mounts=1 "
+        "route_after_setup=absent route_at_control=absent route_origin=other dhcp_client=1 toy_bootstrap=ready\n"
+        f"PROBE_OK nonce={NONCE} uid=1001 clock_epoch=1720000000\n"
+    )
+
+    with pytest.raises(RuntimeError, match="CONTROL_PROBE_INVALID"):
+        parse_control(response, NONCE, require_probe=True)
+
+
+def test_control_rejects_fields_rendered_on_the_wrong_protocol_line() -> None:
+    """READY and PROBE_OK have distinct strict schemas, regardless of order."""
+    response = (
+        f"READY nonce={NONCE}\n"
+        f"PROBE_OK nonce={NONCE} uid=1001 boot_id={BOOT_ID} no_credentials=1 private_mounts=1 "
+        "route_after_setup=absent route_at_control=absent clock_epoch=1720000000\n"
+    )
+
+    with pytest.raises(RuntimeError, match="CONTROL_PROBE_INVALID"):
+        parse_control(response, NONCE, require_probe=True)
+
+
 def test_network_proof_requires_all_active_denial_checks() -> None:
     proof = parse_network_proof(
         f"NETWORK_PROBE nonce={NONCE} phase=red peer_denied=0 toy_http=1 alternate_denied=1 icmp_denied=1 egress_denied=1 egress_reason=blocked orchestrator_denied=1\n",

@@ -44,7 +44,9 @@ class NetworkProof:
 
 def parse_control(response: str, nonce: str, *, require_probe: bool) -> ControlReady | ControlProbe:
     fields: dict[str, str] = {}
-    known = {"nonce", "uid", "boot_id", "no_credentials", "private_mounts", "route_after_setup", "route_at_control", "route_origin", "dhcp_client", "toy_bootstrap", "clock_epoch"}
+    ready_required = {"nonce", "uid", "boot_id", "no_credentials", "private_mounts", "route_after_setup", "route_at_control"}
+    ready_allowed = ready_required | {"route_origin", "dhcp_client", "toy_bootstrap"}
+    probe_required = {"nonce", "uid", "clock_epoch"}
     saw_ready = False
     saw_probe = False
     for line in response.splitlines():
@@ -52,19 +54,22 @@ def parse_control(response: str, nonce: str, *, require_probe: bool) -> ControlR
             continue
         if line.startswith("READY "):
             saw_ready = True
+            allowed, required_on_line = ready_allowed, ready_required
         elif line.startswith("PROBE_OK "):
             saw_probe = True
+            allowed, required_on_line = probe_required, probe_required
         else:
             raise RuntimeError("CONTROL_PROBE_INVALID")
+        line_fields: dict[str, str] = {}
         for token in line.split()[1:]:
             key, separator, value = token.partition("=")
-            if not separator or key not in known or (key in fields and fields[key] != value):
+            if not separator or key not in allowed or key in line_fields or (key in fields and fields[key] != value):
                 raise RuntimeError("CONTROL_PROBE_INVALID")
+            line_fields[key] = value
             fields[key] = value
-    required = {"nonce", "uid", "boot_id", "no_credentials", "private_mounts", "route_after_setup", "route_at_control"}
-    if require_probe:
-        required.add("clock_epoch")
-    if not saw_ready or (require_probe and not saw_probe) or required - fields.keys():
+        if required_on_line - line_fields.keys():
+            raise RuntimeError("CONTROL_PROBE_INVALID")
+    if not saw_ready or (require_probe and not saw_probe) or ready_required - fields.keys() or (require_probe and probe_required - fields.keys()):
         raise RuntimeError("CONTROL_PROBE_INVALID")
     if fields["nonce"] != nonce or not _BOOT_ID.fullmatch(fields["boot_id"]):
         raise RuntimeError("CONTROL_PROBE_INVALID")

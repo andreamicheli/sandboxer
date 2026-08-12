@@ -3,6 +3,9 @@ set -eu
 
 . /usr/local/libexec/sandboxer-common
 PORT=/dev/virtio-ports/org.sandboxer.control
+route_at_control=unknown
+route_origin=unknown
+dhcp_client=unknown
 
 probe_bool() {
     if "$1"; then printf 1; else printf 0; fi
@@ -74,14 +77,34 @@ while :; do
     sandboxer_load_metadata || { sleep 1; continue; }
     # Compute the temporal control-start witness before accepting requests.
     # The first PROBE must only read fixed local markers, never invoke ip.
-    test -e /run/sandboxer-route-at-control || sandboxer_route_state > /run/sandboxer-route-at-control || printf 'SANDBOXER_ROUTE_MARKER_UNAVAILABLE\n' >> /dev/ttyS0 2>/dev/null || true
-    route_origin="$(sandboxer_route_origin)" || route_origin=unknown
-    dhcp_client="$(sandboxer_dhcp_client_present)" || dhcp_client=unknown
-    case "$route_origin" in
-        absent|dhcp|ra|static|other) printf 'SANDBOXER_ROUTE_ORIGIN_%s\n' "$(printf '%s' "$route_origin" | tr a-z A-Z)" >> /dev/ttyS0 2>/dev/null || true ;;
-        *) printf 'SANDBOXER_ROUTE_ORIGIN_UNKNOWN\n' >> /dev/ttyS0 2>/dev/null || true ;;
-    esac
-    case "$dhcp_client" in 0|1) printf 'SANDBOXER_DHCP_CLIENT_%s\n' "$dhcp_client" >> /dev/ttyS0 2>/dev/null || true;; *) printf 'SANDBOXER_DHCP_CLIENT_UNKNOWN\n' >> /dev/ttyS0 2>/dev/null || true;; esac
+    # Persist one coherent route snapshot and emit its serial labels once so
+    # they cannot displace useful bootstrap evidence from the bounded tail.
+    if ! test -e /run/sandboxer-control-diagnostics-emitted; then
+        route_diagnostics="$(sandboxer_route_diagnostics)" || route_diagnostics='unknown unknown'
+        set -- $route_diagnostics
+        if test "$#" -eq 2; then
+            route_at_control="$1"
+            route_origin="$2"
+        else
+            route_at_control=unknown
+            route_origin=unknown
+        fi
+        case "$route_at_control:$route_origin" in
+            absent:absent|present:dhcp|present:ra|present:static|present:other) ;;
+            *) route_at_control=unknown; route_origin=unknown ;;
+        esac
+        printf '%s\n' "$route_at_control" > /run/sandboxer-route-at-control
+        printf '%s\n' "$route_origin" > /run/sandboxer-route-origin
+        dhcp_client="$(sandboxer_dhcp_client_present)" || dhcp_client=unknown
+        case "$dhcp_client" in 0|1|unknown) ;; *) dhcp_client=unknown;; esac
+        printf '%s\n' "$dhcp_client" > /run/sandboxer-dhcp-client
+        case "$route_origin" in
+            absent|dhcp|ra|static|other) printf 'SANDBOXER_ROUTE_ORIGIN_%s\n' "$(printf '%s' "$route_origin" | tr a-z A-Z)" >> /dev/ttyS0 2>/dev/null || true ;;
+            *) printf 'SANDBOXER_ROUTE_ORIGIN_UNKNOWN\n' >> /dev/ttyS0 2>/dev/null || true ;;
+        esac
+        case "$dhcp_client" in 0|1) printf 'SANDBOXER_DHCP_CLIENT_%s\n' "$dhcp_client" >> /dev/ttyS0 2>/dev/null || true;; *) printf 'SANDBOXER_DHCP_CLIENT_UNKNOWN\n' >> /dev/ttyS0 2>/dev/null || true;; esac
+        : > /run/sandboxer-control-diagnostics-emitted
+    fi
     exec 3<> "$PORT"
     if IFS= read -r command <&3; then
         set -- $command

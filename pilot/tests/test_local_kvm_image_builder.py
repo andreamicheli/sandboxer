@@ -5,6 +5,7 @@ import json
 import os
 import pty
 import select
+import socket
 import subprocess
 import sys
 import time
@@ -111,7 +112,8 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert "SANDBOXER_TOY_LAUNCH_FAILED" in bootstrap
     assert "SANDBOXER_TOY_LISTENER_MISSING" in bootstrap
     assert "SANDBOXER_TOY_READY" in bootstrap
-    assert "kill -0" in bootstrap and "wget -q -T 2" in bootstrap
+    assert "kill -0" in bootstrap and "sandboxer_toy_http_ready" in bootstrap
+    assert "timeout -s KILL 2" in (rendered / "sandboxer-common").read_text()
     assert "/etc/init.d/sandboxer-runner start" not in bootstrap
 
 
@@ -129,7 +131,7 @@ def test_image_builder_renders_sanitized_and_bounded_network_probes(tmp_path: Pa
     common = (rendered / "sandboxer-common").read_text()
     assert "/bin/busybox timeout -s KILL 1 /sbin/ip route show default" in common
     assert "/bin/busybox timeout -s KILL 1 ip route show default" not in common
-    assert "sandboxer_route_state" in control
+    assert "sandboxer_route_diagnostics" in control
     assert "has_default_route" not in control
     assert "if sandboxer_route_state" not in control
     assert "/bin/busybox timeout -s KILL 2 ping -c 1 -W 1 \"$1\"" in control
@@ -141,6 +143,66 @@ def test_image_builder_renders_sanitized_and_bounded_network_probes(tmp_path: Pa
     assert "tcp_connect 10.77.0.1 1" in control
     assert "tcp_http \"$SANDBOXER_PEER_IP\" 8081" not in control
     assert "wget -q -T 2 -O /dev/null http://198.51.100.1:81/" not in control
+
+
+def test_rendered_toy_health_retries_a_bounded_http_request_after_background_start(tmp_path: Path) -> None:
+    """A TCP-only probe is not a toy health check and can race httpd startup."""
+    rendered = tmp_path / "rendered"
+    subprocess.run([sys.executable, str(BUILDER), "--render-only", str(rendered)], check=True)
+    common = (rendered / "sandboxer-common").read_text(encoding="utf-8")
+    assert "sandboxer_toy_http_ready" in common
+    assert "busybox wget -q -T 1 -O /dev/null" in common
+    assert "sandboxer_toy_http_ready" in (rendered / "sandboxer-mount-runtime").read_text(encoding="utf-8")
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        decoy_port = reservation.getsockname()[1]
+    decoy = subprocess.Popen(
+        ["/usr/bin/busybox", "sh", "-c", f"sleep 5 | exec /usr/bin/busybox nc -l -p {decoy_port}"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        time.sleep(0.1)
+        bare_tcp = subprocess.run(
+            ["/usr/bin/busybox", "nc", "-w", "1", "127.0.0.1", str(decoy_port)],
+            input="", check=False, capture_output=True, text=True, timeout=2,
+        )
+        non_http = subprocess.run(
+            ["/usr/bin/busybox", "wget", "-q", "-T", "1", "-O", "/dev/null", f"http://127.0.0.1:{decoy_port}/"],
+            check=False, capture_output=True, text=True, timeout=2,
+        )
+        assert bare_tcp.returncode == 0
+        assert non_http.returncode != 0
+    finally:
+        decoy.terminate()
+        try:
+            decoy.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            decoy.kill(); decoy.wait(timeout=2)
+
+    document_root = tmp_path / "notes"; document_root.mkdir()
+    (document_root / "index.html").write_text("synthetic", encoding="ascii")
+    listener = subprocess.Popen(
+        ["/usr/bin/busybox", "sh", "-c", f"sleep 1; exec /usr/bin/busybox httpd -f -p 127.0.0.2:8080 -h {document_root}"],
+    )
+    try:
+        # The service contract is an HTTP response, and a single immediate
+        # request can race a daemon launched in the background.
+        immediate = subprocess.run(
+            ["/usr/bin/busybox", "wget", "-q", "-T", "1", "-O", "/dev/null", "http://127.0.0.2:8080/"],
+            check=False,
+        )
+        assert immediate.returncode != 0
+        helper = tmp_path / "toy-health"
+        helper.write_text(common.replace("/bin/busybox", "/usr/bin/busybox") + "\nsandboxer_toy_http_ready 127.0.0.2\n", encoding="utf-8")
+        result = subprocess.run(["/usr/bin/busybox", "ash", str(helper)], check=False, capture_output=True, text=True, timeout=5)
+        assert result.returncode == 0, result.stderr
+    finally:
+        listener.terminate()
+        try:
+            listener.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            listener.kill(); listener.wait(timeout=2)
 
 
 def test_rendered_route_state_is_a_value_contract_not_a_shell_predicate(tmp_path: Path) -> None:
@@ -187,8 +249,7 @@ def test_rendered_guest_control_bounds_hanging_netprobe_subcommands_and_keeps_th
 }
 sandboxer_no_credentials() { return 0; }
 sandboxer_private_mounts() { return 0; }
-sandboxer_route_state() { printf '%s\\n' absent; }
-sandboxer_route_origin() { printf '%s\\n' absent; }
+    sandboxer_route_diagnostics() { printf '%s\\n' 'absent absent'; }
 sandboxer_dhcp_client_present() { printf '%s\\n' 0; }
 ip() { return 0; }
 ping() { return 1; }
@@ -209,12 +270,18 @@ date() { printf '%s\\n' 1720000000; }
     control_port = os.ttyname(slave)
     stage_log = tmp_path / "netprobe-stages.log"
     route_at_control = tmp_path / "sandboxer-route-at-control"
+    route_origin = tmp_path / "sandboxer-route-origin"
+    dhcp_client = tmp_path / "sandboxer-dhcp-client"
+    emitted = tmp_path / "sandboxer-control-diagnostics-emitted"
     test_control = tmp_path / "sandboxer-control"
     test_control.write_text(
         (rendered / "sandboxer-control").read_text(encoding="utf-8")
         .replace("/usr/local/libexec/sandboxer-common", f"{libexec}/sandboxer-common")
-        .replace("PORT=/dev/virtio-ports/org.sandboxer.control", f"PORT={control_port}")
-        .replace("/run/sandboxer-route-at-control", str(route_at_control))
+            .replace("PORT=/dev/virtio-ports/org.sandboxer.control", f"PORT={control_port}")
+            .replace("/run/sandboxer-route-at-control", str(route_at_control))
+            .replace("/run/sandboxer-route-origin", str(route_origin))
+            .replace("/run/sandboxer-dhcp-client", str(dhcp_client))
+            .replace("/run/sandboxer-control-diagnostics-emitted", str(emitted))
         .replace("/bin/busybox nc -w 1 \"$1\" \"$2\" </dev/null >/dev/null 2>&1", "/bin/busybox sleep 30")
         .replace("ping -c 1 -W 1 \"$1\" >/dev/null 2>&1", "/bin/busybox sleep 30")
         .replace("> /dev/ttyS0", f"> {stage_log}"),
@@ -272,12 +339,12 @@ def test_rendered_guest_control_emits_unknown_for_a_missing_route_marker(tmp_pat
     libexec = tmp_path / "libexec"; libexec.mkdir()
     (libexec / "sandboxer-common").write_text(
         "sandboxer_load_metadata() { SANDBOXER_NONCE=" + "a" * 64 + "; }\n"
-        "sandboxer_no_credentials() { return 0; }\nsandboxer_private_mounts() { return 0; }\nsandboxer_route_state() { echo absent; }\n"
+        "sandboxer_no_credentials() { return 0; }\nsandboxer_private_mounts() { return 0; }\nsandboxer_route_diagnostics() { return 1; }\nsandboxer_dhcp_client_present() { echo unknown; }\n"
         "id() { echo 1001; }\ncat() { case \"$1\" in *after-setup) echo absent;; *at-control) return 1;; *) echo 11111111-1111-1111-1111-111111111111;; esac; }\ndate() { echo 1; }\n",
     )
     master, slave = pty.openpty(); tty.setraw(slave)
     stage = tmp_path / "stage"; port = os.ttyname(slave)
-    control = (rendered / "sandboxer-control").read_text().replace("/usr/local/libexec/sandboxer-common", str(libexec / "sandboxer-common")).replace("PORT=/dev/virtio-ports/org.sandboxer.control", f"PORT={port}").replace("sandboxer_route_state > /run/sandboxer-route-at-control", "false").replace(">> /dev/ttyS0", f">> {stage}")
+    control = (rendered / "sandboxer-control").read_text().replace("/usr/local/libexec/sandboxer-common", str(libexec / "sandboxer-common")).replace("PORT=/dev/virtio-ports/org.sandboxer.control", f"PORT={port}").replace("/run/sandboxer-route-at-control", str(tmp_path / "route-at-control")).replace("/run/sandboxer-route-origin", str(tmp_path / "route-origin")).replace("/run/sandboxer-dhcp-client", str(tmp_path / "dhcp-client")).replace("/run/sandboxer-control-diagnostics-emitted", str(tmp_path / "emitted")).replace(">> /dev/ttyS0", f">> {stage}")
     path = tmp_path / "control"; path.write_text(control)
     process = subprocess.Popen(["/usr/bin/busybox", "ash", str(path)])
     try:
@@ -285,6 +352,90 @@ def test_rendered_guest_control_emits_unknown_for_a_missing_route_marker(tmp_pat
         response = _read_protocol_line(master, timeout_seconds=2, minimum_lines=2)
         assert parse_control(response, "a" * 64, require_probe=True).route_at_control == "unknown"
         assert "SANDBOXER_ROUTE_MARKER_UNAVAILABLE" in stage.read_text()
+    finally:
+        process.terminate(); process.wait(timeout=2); os.close(master); os.close(slave)
+
+
+def test_rendered_guest_control_keeps_one_route_snapshot_and_emits_it_once(tmp_path: Path) -> None:
+    """A PROBE cannot combine an absent state with a later present origin."""
+    rendered = tmp_path / "rendered"
+    subprocess.run([sys.executable, str(BUILDER), "--render-only", str(rendered)], check=True)
+    libexec = tmp_path / "libexec"; libexec.mkdir()
+    calls = tmp_path / "route-diagnostic-calls"
+    (libexec / "sandboxer-common").write_text(
+        "sandboxer_load_metadata() { SANDBOXER_NONCE=" + "a" * 64 + "; }\n"
+        f"sandboxer_route_diagnostics() {{ printf x >> {calls}; printf '%s\\n' 'absent absent'; }}\n"
+        "sandboxer_dhcp_client_present() { echo 0; }\n"
+        "sandboxer_no_credentials() { return 0; }\nsandboxer_private_mounts() { return 0; }\n"
+        "id() { echo 1001; }\n"
+        "cat() { case \"$1\" in *after-setup) echo absent;; /proc/sys/kernel/random/boot_id) echo 11111111-1111-1111-1111-111111111111;; *) command cat \"$@\";; esac; }\n"
+        "date() { echo 1; }\n",
+    )
+    master, slave = pty.openpty(); tty.setraw(slave)
+    stage = tmp_path / "stage"; port = os.ttyname(slave)
+    route_state = tmp_path / "route-at-control"
+    route_origin = tmp_path / "route-origin"
+    dhcp_client = tmp_path / "dhcp-client"
+    emitted = tmp_path / "route-diagnostics-emitted"
+    control = (rendered / "sandboxer-control").read_text()
+    control = control.replace("/usr/local/libexec/sandboxer-common", str(libexec / "sandboxer-common"))
+    control = control.replace("PORT=/dev/virtio-ports/org.sandboxer.control", f"PORT={port}")
+    control = control.replace("/run/sandboxer-route-at-control", str(route_state))
+    control = control.replace("/run/sandboxer-route-origin", str(route_origin))
+    control = control.replace("/run/sandboxer-dhcp-client", str(dhcp_client))
+    control = control.replace("/run/sandboxer-control-diagnostics-emitted", str(emitted))
+    control = control.replace(">> /dev/ttyS0", f">> {stage}")
+    path = tmp_path / "control"; path.write_text(control)
+    process = subprocess.Popen(["/usr/bin/busybox", "ash", str(path)])
+    try:
+        command = b"PROBE " + b"a" * 64 + b"\n"
+        os.write(master, command)
+        first = _read_protocol_line(master, timeout_seconds=2, minimum_lines=2)
+        os.write(master, command)
+        second = _read_protocol_line(master, timeout_seconds=2, minimum_lines=2)
+        for response in (first, second):
+            probe = parse_control(response, "a" * 64, require_probe=True)
+            assert probe.route_at_control == "absent"
+            assert probe.route_origin == "absent"
+        assert calls.read_text(encoding="ascii") == "x"
+        assert stage.read_text(encoding="ascii").splitlines() == [
+            "SANDBOXER_ROUTE_ORIGIN_ABSENT", "SANDBOXER_DHCP_CLIENT_0",
+        ]
+    finally:
+        process.terminate(); process.wait(timeout=2); os.close(master); os.close(slave)
+
+
+@pytest.mark.parametrize("toy_bootstrap", ["ready", "root_missing", "launch_failed", "listener_missing", "unknown"])
+def test_rendered_guest_control_emits_each_current_toy_bootstrap_state(tmp_path: Path, toy_bootstrap: str) -> None:
+    """The guest's exact READY field order remains compatible with the parser."""
+    rendered = tmp_path / "rendered"
+    subprocess.run([sys.executable, str(BUILDER), "--render-only", str(rendered)], check=True)
+    libexec = tmp_path / "libexec"; libexec.mkdir()
+    (libexec / "sandboxer-common").write_text(
+        "sandboxer_load_metadata() { SANDBOXER_NONCE=" + "a" * 64 + "; }\n"
+        "sandboxer_route_diagnostics() { echo 'absent absent'; }\nsandboxer_dhcp_client_present() { echo 0; }\n"
+        "sandboxer_no_credentials() { return 0; }\nsandboxer_private_mounts() { return 0; }\n"
+        "id() { echo 1001; }\n"
+        "cat() { case \"$1\" in *after-setup) echo absent;; /proc/sys/kernel/random/boot_id) echo 11111111-1111-1111-1111-111111111111;; *) command cat \"$@\";; esac; }\n"
+        "date() { echo 1; }\n",
+    )
+    toy_state = tmp_path / "toy-state"; toy_state.write_text(toy_bootstrap + "\n", encoding="ascii")
+    master, slave = pty.openpty(); tty.setraw(slave)
+    port = os.ttyname(slave)
+    control = (rendered / "sandboxer-control").read_text()
+    control = control.replace("/usr/local/libexec/sandboxer-common", str(libexec / "sandboxer-common"))
+    control = control.replace("PORT=/dev/virtio-ports/org.sandboxer.control", f"PORT={port}")
+    control = control.replace("/run/sandboxer-route-at-control", str(tmp_path / "route-at-control"))
+    control = control.replace("/run/sandboxer-route-origin", str(tmp_path / "route-origin"))
+    control = control.replace("/run/sandboxer-dhcp-client", str(tmp_path / "dhcp-client"))
+    control = control.replace("/run/sandboxer-control-diagnostics-emitted", str(tmp_path / "emitted"))
+    control = control.replace("/run/sandboxer-toy-bootstrap-state", str(toy_state))
+    path = tmp_path / "control"; path.write_text(control)
+    process = subprocess.Popen(["/usr/bin/busybox", "ash", str(path)])
+    try:
+        os.write(master, b"PROBE " + b"a" * 64 + b"\n")
+        response = _read_protocol_line(master, timeout_seconds=2, minimum_lines=2)
+        assert parse_control(response, "a" * 64, require_probe=True).toy_bootstrap == toy_bootstrap
     finally:
         process.terminate(); process.wait(timeout=2); os.close(master); os.close(slave)
 
