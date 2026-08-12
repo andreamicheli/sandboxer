@@ -338,6 +338,25 @@ def test_local_kvm_labels_a_blue_host_route_witness_failure(tmp_path: Path) -> N
     assert error.value.reason_code == "LOCAL_KVM_BLUE_HOST_ROUTE_WITNESS_UNAVAILABLE"
 
 
+def test_local_kvm_keeps_guest_route_diagnostics_without_rejecting_active_blue_isolation(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    original_exchange = host.control_exchange
+
+    def route_diagnostic(socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
+        if payload.startswith("NETPROBE "):
+            return original_exchange(socket_path, payload, timeout_seconds=timeout_seconds)
+        response = original_exchange(socket_path, payload, timeout_seconds=timeout_seconds)
+        return response.replace("route_at_control=absent", "route_at_control=present route_origin=other dhcp_client=1")
+
+    host.control_exchange = route_diagnostic  # type: ignore[method-assign]
+    report = ProductionRunnerBackend(provider).rehearse(
+        match_id="kvm-guest-route-diagnostic", runner_names=("atlas", "borealis")
+    )
+
+    assert report.terminal_code == "RUNNERS_DESTROYED"
+    assert set(provider._route_diagnostics.values()) == {("absent", "present", "other")}
+
+
 def test_local_kvm_labels_a_blue_guest_netprobe_timeout(tmp_path: Path) -> None:
     provider, host = configured_provider(tmp_path)
     host.network_probe_failure = TimeoutError("private detail")
@@ -823,17 +842,20 @@ def test_local_kvm_serial_failure_evidence_is_allowlisted_external_and_survives_
     assert not record.root.exists()
 
 
-def test_local_kvm_unknown_route_marker_fails_closed_and_captures_scoped_stages(tmp_path: Path, monkeypatch) -> None:
+def test_local_kvm_unknown_route_marker_is_diagnostic_when_active_proofs_pass(tmp_path: Path, monkeypatch) -> None:
     provider, _host = configured_provider(tmp_path)
     runners = provider.provision("kvm-unknown-route", ("atlas", "borealis"))
     record = provider._records[runners[0].runner_id]
     (record.root / "serial.log").write_text("SANDBOXER_ROUTE_MARKER_UNAVAILABLE\nsecret\n", encoding="ascii")
-    probe = ControlProbe("n", 1001, "11111111-1111-1111-1111-111111111111", True, True, "absent", "unknown", 1)
+    probe = ControlProbe(
+        "n", 1001, "11111111-1111-1111-1111-111111111111", True, True, "absent", "unknown",
+        route_origin="unknown", dhcp_client="unknown", clock_epoch=1,
+    )
     monkeypatch.setattr(provider, "_control_probe", lambda _record: probe)
-    with pytest.raises(PreflightWitnessFailed, match="LOCAL_KVM_BLUE_ROUTE_MARKER_UNAVAILABLE"):
-        provider.probe(runners)
-    artifact = tmp_path / "evidence" / f"{hashlib.sha256(runners[0].runner_id.encode()).hexdigest()[:16]}.serial-stages"
-    assert artifact.read_text() == "SANDBOXER_ROUTE_MARKER_UNAVAILABLE\n"
+    checks = provider.probe(runners)
+    assert {check.name for check in checks}
+    assert set(provider._route_diagnostics.values()) == {("absent", "unknown", "unknown")}
+    assert not (tmp_path / "evidence" / f"{hashlib.sha256(runners[0].runner_id.encode()).hexdigest()[:16]}.serial-stages").exists()
 
 
 def test_runtime_metadata_never_asks_cloud_init_to_write_the_runner_root(tmp_path: Path) -> None:

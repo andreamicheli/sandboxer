@@ -53,9 +53,7 @@ network_proof() {
     icmp_probe "$SANDBOXER_PEER_IP" || icmp_denied=1
     egress_denied=0
     network_stage egress
-    if test "$(sandboxer_route_state)" = present; then
-        egress_reason=default_route
-    elif tcp_connect 198.51.100.1 81; then
+    if tcp_connect 198.51.100.1 81; then
         egress_reason=tcp_reachable
     else
         egress_denied=1

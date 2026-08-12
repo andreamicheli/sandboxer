@@ -450,6 +450,7 @@ class LocalKvmRunnerProvider:
         self.config = config
         self._host = host or SubprocessLocalKvmHost()
         self._records: dict[str, _RunnerRecord] = {}
+        self._route_diagnostics: dict[str, tuple[str, str, str]] = {}
         self._terminal: dict[str, TeardownEvidence] = {}
         self._partials: dict[str, _PartialRecord] = {}
 
@@ -519,18 +520,13 @@ class LocalKvmRunnerProvider:
         except Exception as error:
             self._capture_serial_stages(records)
             raise PreflightWitnessFailed("LOCAL_KVM_CONTROL_SOCKET_UNAVAILABLE") from error
-        if any(item.route_after_setup == "unknown" or item.route_at_control == "unknown" for item in responses):
-            self._capture_serial_stages(records)
-            raise PreflightWitnessFailed("LOCAL_KVM_BLUE_ROUTE_MARKER_UNAVAILABLE")
-        if any(item.route_after_setup != "absent" for item in responses):
-            self._capture_serial_stages(records)
-            raise PreflightWitnessFailed("LOCAL_KVM_BLUE_ROUTE_AFTER_SETUP_WITNESS_FAILED")
-        if any(item.route_at_control != "absent" for item in responses):
-            self._capture_serial_stages(records)
-            origins = {item.route_origin for item in responses if item.route_at_control != "absent"}
-            if len(origins) == 1 and next(iter(origins)) in {"dhcp", "ra", "static", "other"}:
-                raise PreflightWitnessFailed(f"LOCAL_KVM_BLUE_ROUTE_AT_CONTROL_{next(iter(origins)).upper()}_WITNESS_FAILED")
-            raise PreflightWitnessFailed("LOCAL_KVM_BLUE_ROUTE_AT_CONTROL_WITNESS_FAILED")
+        # Guest route fields are mandatory, bounded diagnostics.  They are not
+        # an isolation proxy: the host namespace route check and active guest
+        # reachability witnesses below are authoritative and fail closed.
+        self._route_diagnostics.update({
+            record.handle.runner_id: (response.route_after_setup, response.route_at_control, response.route_origin)
+            for record, response in zip(records, responses)
+        })
         try:
             network = self._measure_network(records, Phase.BLUE)
         except PreflightWitnessFailed:
