@@ -91,7 +91,7 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert "iface eth0 inet dhcp" not in provision
     assert "sandboxer-mount-runtime" in provision
     toy = (rendered / "sandboxer-toy").read_text()
-    assert "exec /usr/sbin/httpd" in toy
+    assert "/usr/sbin/httpd -f" in toy
     assert "/bin/busybox httpd" not in toy
     assert "PROBE_OK" in control and "NETWORK_PROBE" in control
     assert "sandboxer_no_credentials" in control and "sandboxer_private_mounts" in control
@@ -217,6 +217,8 @@ def test_rendered_toy_reports_address_bind_and_process_outcomes_without_raw_outp
     assert "/run/sandboxer-toy-process-outcome" in toy
     assert "toy_process_outcome address_unavailable" in toy
     assert "toy_process_outcome httpd_bind_exit" in toy
+    assert "-u competitor" in toy
+    assert "exec su " not in toy
     assert "toy_process_outcome exited_other" in toy
     assert "2>" not in toy and "stderr" not in toy
     assert "cat /run/sandboxer-toy-process-outcome" in bootstrap
@@ -243,18 +245,17 @@ def test_rendered_toy_reproduces_fixed_bind_subcauses_offline(
     )
     document = tmp_path / "index.html"; document.write_text("synthetic", encoding="ascii")
     outcome = tmp_path / "outcome"
-    fake_bin = tmp_path / "bin"; fake_bin.mkdir()
-    fake_su = fake_bin / "su"
-    fake_su.write_text(f"#!/bin/sh\nexit {su_status}\n", encoding="ascii"); fake_su.chmod(0o755)
+    fake_httpd = tmp_path / "httpd"
+    fake_httpd.write_text(f"#!/bin/sh\nexit {su_status}\n", encoding="ascii"); fake_httpd.chmod(0o755)
     toy = (rendered / "sandboxer-toy").read_text(encoding="utf-8")
     toy = toy.replace("/usr/local/libexec/sandboxer-common", str(common))
     toy = toy.replace("/workspace/notes/index.html", str(document))
-    toy = toy.replace("/usr/sbin/httpd", "/bin/true")
+    toy = toy.replace("/usr/sbin/httpd", str(fake_httpd))
     toy = toy.replace("/run/sandboxer-toy-process-outcome", str(outcome))
     script = tmp_path / "toy"; script.write_text(toy, encoding="utf-8")
 
     subprocess.run(
-        ["/usr/bin/busybox", "ash", str(script)], env={**os.environ, "PATH": f"{fake_bin}:/usr/bin:/bin"},
+        ["/usr/bin/busybox", "ash", str(script)], env=os.environ,
         check=False, capture_output=True, text=True,
     )
 

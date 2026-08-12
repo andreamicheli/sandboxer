@@ -8,7 +8,7 @@ test -x /usr/sbin/httpd || { toy_process_outcome exec_failed; exit 127; }
 sandboxer_load_metadata || { toy_process_outcome exec_failed; exit 127; }
 sandboxer_local_address_ready "$SANDBOXER_IP" || { toy_process_outcome address_unavailable; exit 66; }
 export SANDBOXER_IP
-if su -s /bin/ash -c 'exec /usr/sbin/httpd -f -p "$SANDBOXER_IP:8080" -h /workspace/notes' competitor; then
+if /usr/sbin/httpd -f -p "$SANDBOXER_IP:8080" -u competitor -h /workspace/notes; then
     toy_process_outcome exited_other
     exit 0
 fi
