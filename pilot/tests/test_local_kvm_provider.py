@@ -1046,6 +1046,9 @@ def test_blue_uses_two_separate_runner_namespaces_and_red_installs_deny_first_po
 
     assert len(blue_namespaces) == 2
     assert len(set(blue_namespaces)) == 2
+    red_namespace = provider._records[runners[0].runner_id].red_namespace
+    red_bridge = provider._records[runners[0].runner_id].red_bridge
+    assert ("ip", "-n", red_namespace, "link", "set", "dev", red_bridge, "addrgenmode", "none") in host.commands
     qemu_commands = [command for command in host.commands if "qemu-system-x86_64" in command]
     assert {command[command.index("exec") + 1] for command in qemu_commands} == set(blue_namespaces)
     assert not any("master" in command and command[-1].startswith("br-") for command in host.commands)
@@ -1054,7 +1057,6 @@ def test_blue_uses_two_separate_runner_namespaces_and_red_installs_deny_first_po
 
     assert red.direct_egress is False
     assert red.edges == ArenaNetworkPolicy("kvm-rehearsal-008", "atlas", "borealis").expected(Phase.RED).edges
-    red_namespace = provider._records[runners[0].runner_id].red_namespace
     assert ("ip", "-n", red_namespace, "route", "show", "default") in host.commands
     assert any("policy drop" in rules and "tcp dport 8080" in rules for rules in host.inputs)
     assert sum("netns" in command and any(item.startswith("tap-") for item in command) for command in host.commands) >= 2

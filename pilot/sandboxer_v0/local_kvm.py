@@ -494,6 +494,7 @@ class LocalKvmRunnerProvider:
         try:
             self._run(("ip", "netns", "add", red_namespace), "NETWORK_NAMESPACE_CREATE_FAILED")
             self._run(("ip", "-n", red_namespace, "link", "add", red_bridge, "type", "bridge"), "BRIDGE_CREATE_FAILED")
+            self._run(("ip", "-n", red_namespace, "link", "set", "dev", red_bridge, "addrgenmode", "none"), "BRIDGE_ADDRESS_GENERATION_DISABLE_FAILED")
             self._run(("ip", "-n", red_namespace, "link", "set", "lo", "up"), "LOOPBACK_ENABLE_FAILED")
             self._run(("ip", "-n", red_namespace, "link", "set", red_bridge, "up"), "BRIDGE_ENABLE_FAILED")
             self._install_red_policy(red_namespace, "")
