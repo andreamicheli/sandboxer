@@ -88,6 +88,21 @@ def test_red_network_drift_fails_closed_before_any_competitor_call() -> None:
     assert provider.competitor_calls == 0
 
 
+def test_typed_red_measurement_failure_is_not_collapsed_to_missing_edge() -> None:
+    class BrokenRedFixture(SimulatedRunnerProvider):
+        def network_observation(self, phase, runners):  # type: ignore[no-untyped-def]
+            if phase is Phase.RED:
+                raise PreflightWitnessFailed("LOCAL_KVM_RED_GUEST_NETPROBE_TIMEOUT")
+            return super().network_observation(phase, runners)
+
+    provider = BrokenRedFixture()
+    with pytest.raises(RunnerPreflightFailed) as error:
+        ProductionRunnerBackend(provider).rehearse(match_id="rehearsal-red-witness", runner_names=("atlas", "borealis"))
+
+    assert error.value.reason_code == "LOCAL_KVM_RED_GUEST_NETPROBE_TIMEOUT"
+    assert provider.quarantine_calls == ["rehearsal-red-witness:atlas", "rehearsal-red-witness:borealis"]
+
+
 def test_provider_probe_exception_is_quarantined_instead_of_leaking_live_runners() -> None:
     class BrokenProbeFixture(SimulatedRunnerProvider):
         def probe(self, runners):  # type: ignore[no-untyped-def]

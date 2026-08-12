@@ -556,6 +556,10 @@ class LocalKvmRunnerProvider:
             self._enforce_ttl(records)
             self._apply_network_phase(phase, records)
             return self._measure_network(records, phase)
+        except PreflightWitnessFailed:
+            if phase is Phase.RED:
+                raise
+            return NetworkObservation(frozenset(), True, True, True)
         except Exception as error:
             # An unavailable witness is unsafe by definition; never infer safety.
             return NetworkObservation(frozenset(), True, True, True)
@@ -830,22 +834,30 @@ class LocalKvmRunnerProvider:
                 False, False, False,
             )
         namespace, bridge = records[0].red_namespace, records[0].red_bridge
-        nft = self._run(("ip", "netns", "exec", namespace, "nft", "list", "table", "bridge", "sandboxer"), "NETWORK_WITNESS_UNAVAILABLE")
-        addresses = self._run(("ip", "-n", namespace, "-j", "addr", "show", "dev", bridge), "NETWORK_WITNESS_UNAVAILABLE")
-        routes = self._run(("ip", "-n", namespace, "ip", "route", "show", "default"), "NETWORK_WITNESS_UNAVAILABLE")
+        try:
+            nft = self._run(("ip", "netns", "exec", namespace, "nft", "list", "table", "bridge", "sandboxer"), "NETWORK_WITNESS_UNAVAILABLE")
+        except Exception as error:
+            raise PreflightWitnessFailed("LOCAL_KVM_RED_HOST_NFT_WITNESS_UNAVAILABLE") from error
+        try:
+            addresses = self._run(("ip", "-n", namespace, "-j", "addr", "show", "dev", bridge), "NETWORK_WITNESS_UNAVAILABLE")
+        except Exception as error:
+            raise PreflightWitnessFailed("LOCAL_KVM_RED_HOST_BRIDGE_ADDRESS_WITNESS_UNAVAILABLE") from error
+        try:
+            routes = self._run(("ip", "-n", namespace, "ip", "route", "show", "default"), "NETWORK_WITNESS_UNAVAILABLE")
+        except Exception as error:
+            raise PreflightWitnessFailed("LOCAL_KVM_RED_HOST_ROUTE_WITNESS_UNAVAILABLE") from error
         try:
             bridge_addresses = json.loads(addresses.stdout)
         except json.JSONDecodeError as error:
-            raise RuntimeError("NETWORK_WITNESS_UNAVAILABLE") from error
+            raise PreflightWitnessFailed("LOCAL_KVM_RED_HOST_BRIDGE_ADDRESS_WITNESS_INVALID") from error
         public_ingress = any(item.get("addr_info") for item in bridge_addresses)
         direct_egress = bool(routes.stdout.strip())
         expected_rules = ["policy drop", "ether type arp", f"tcp dport {self.config.toy_service_port}", records[0].tap, records[1].tap]
         rule_set_ok = all(rule in nft.stdout for rule in expected_rules)
         if not rule_set_ok:
-            return NetworkObservation(frozenset(), True, True, True)
+            raise PreflightWitnessFailed("LOCAL_KVM_RED_HOST_NFT_POLICY_WITNESS_FAILED")
         proofs = [self._network_proof(record, phase) for record in records]
-        if not all(not proof.peer_denied and proof.toy_http and proof.alternate_denied and proof.icmp_denied and proof.egress_denied and proof.orchestrator_denied for proof in proofs):
-            return NetworkObservation(frozenset(), True, True, True)
+        self._require_red_network_proofs(proofs)
         # Share the canonical names with the backend policy rather than
         # independently reconstructing endpoint identifiers here.
         edges = ArenaNetworkPolicy(
@@ -874,6 +886,19 @@ class LocalKvmRunnerProvider:
             if any(proof.egress_reason == "default_route" for proof in proofs):
                 raise PreflightWitnessFailed("LOCAL_KVM_BLUE_EGRESS_DEFAULT_ROUTE_WITNESS_FAILED")
             raise PreflightWitnessFailed("LOCAL_KVM_BLUE_EGRESS_TCP_WITNESS_FAILED")
+
+    @staticmethod
+    def _require_red_network_proofs(proofs: list[NetworkProof]) -> None:
+        checks = (
+            ("LOCAL_KVM_RED_DECLARED_TOY_SERVICE_WITNESS_FAILED", lambda proof: not proof.peer_denied and proof.toy_http),
+            ("LOCAL_KVM_RED_ALTERNATE_PORT_WITNESS_FAILED", lambda proof: proof.alternate_denied),
+            ("LOCAL_KVM_RED_ICMP_WITNESS_FAILED", lambda proof: proof.icmp_denied),
+            ("LOCAL_KVM_RED_EGRESS_WITNESS_FAILED", lambda proof: proof.egress_denied),
+            ("LOCAL_KVM_RED_ORCHESTRATOR_WITNESS_FAILED", lambda proof: proof.orchestrator_denied),
+        )
+        for reason_code, passed in checks:
+            if not all(passed(proof) for proof in proofs):
+                raise PreflightWitnessFailed(reason_code)
 
     def _control_probe(self, record: _RunnerRecord) -> ControlProbe:
         try:
@@ -908,13 +933,13 @@ class LocalKvmRunnerProvider:
                 timeout_seconds=_NETWORK_PROBE_TIMEOUT_SECONDS,
             )
         except (TimeoutError, socket.timeout) as error:
-            raise PreflightWitnessFailed("LOCAL_KVM_BLUE_GUEST_NETPROBE_TIMEOUT") from error
+            raise PreflightWitnessFailed(f"LOCAL_KVM_{phase.value.upper()}_GUEST_NETPROBE_TIMEOUT") from error
         except (FileNotFoundError, ConnectionRefusedError, OSError) as error:
-            raise PreflightWitnessFailed("LOCAL_KVM_BLUE_GUEST_NETPROBE_REQUEST_UNAVAILABLE") from error
+            raise PreflightWitnessFailed(f"LOCAL_KVM_{phase.value.upper()}_GUEST_NETPROBE_REQUEST_UNAVAILABLE") from error
         try:
             return parse_network_proof(response, record.nonce, phase.value)
         except Exception as error:
-            raise PreflightWitnessFailed("LOCAL_KVM_BLUE_GUEST_NETPROBE_INVALID_RESPONSE") from error
+            raise PreflightWitnessFailed(f"LOCAL_KVM_{phase.value.upper()}_GUEST_NETPROBE_INVALID_RESPONSE") from error
 
     def _parse_control(self, response: str, nonce: str, *, require_probe: bool) -> ControlReady | ControlProbe:
         if len(response.encode("ascii", errors="ignore")) > _MAX_CONTROL_RESPONSE:

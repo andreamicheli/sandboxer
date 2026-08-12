@@ -151,7 +151,11 @@ class ProductionRunnerBackend:
             raise RunnerPreflightFailed(code, self._quarantine(runners, code))
         policy = ArenaNetworkPolicy(match_id, runners[0].name, runners[1].name)
         for phase in (Phase.BLUE, Phase.RED):
-            validation = policy.validate(phase, self._provider.network_observation(phase, runners))
+            try:
+                observation = self._provider.network_observation(phase, runners)
+            except PreflightWitnessFailed as error:
+                raise RunnerPreflightFailed(error.reason_code, self._quarantine(runners, error.reason_code)) from error
+            validation = policy.validate(phase, observation)
             if not validation.safe:
                 code = validation.reason_codes[0]
                 raise RunnerPreflightFailed(code, self._quarantine(runners, code))
