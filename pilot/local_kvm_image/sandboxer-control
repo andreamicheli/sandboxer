@@ -125,6 +125,12 @@ while :; do
             printf 'PROBE_OK nonce=%s uid=%s clock_epoch=%s\n' "$SANDBOXER_NONCE" "$(id -u competitor)" "$(date +%s)" >&3
         elif test "$1" = NETPROBE && test "${2:-}" = "$SANDBOXER_NONCE" && { test "${3:-}" = blue || test "${3:-}" = red; } && test "$#" -eq 3; then
             network_proof "$3" >&3
+        elif test "$1" = PHASE_RED && test "${2:-}" = "$SANDBOXER_NONCE" && test "$#" -eq 2; then
+            if /bin/busybox timeout -s KILL 2 /sbin/ip neigh flush dev eth0 >/dev/null 2>&1; then
+                printf 'PHASE_RED_OK nonce=%s\n' "$SANDBOXER_NONCE" >&3
+            else
+                printf 'PHASE_RED_FAILED nonce=%s\n' "$SANDBOXER_NONCE" >&3
+            fi
         fi
     fi
     exec 3>&-

@@ -136,6 +136,9 @@ class RecordingKvmHost:
             if phase == "blue":
                 return f"NETWORK_PROBE nonce={nonce} phase=blue peer_denied=1 toy_http=0 alternate_denied=1 icmp_denied=1 egress_denied=1 egress_reason=blocked orchestrator_denied=1\n"
             return f"NETWORK_PROBE nonce={nonce} phase=red peer_denied=0 toy_http=1 alternate_denied=1 icmp_denied=1 egress_denied=1 egress_reason=blocked orchestrator_denied=1\n"
+        if payload.startswith("PHASE_RED "):
+            nonce = payload.split()[1]
+            return f"PHASE_RED_OK nonce={nonce}\n"
         runner_number = len(self.control_requests)
         boot_id = "11111111-1111-1111-1111-111111111111" if runner_number == 1 else "22222222-2222-2222-2222-222222222222"
         nonce = payload.split()[1]
@@ -379,6 +382,26 @@ def test_local_kvm_labels_a_blue_guest_netprobe_invalid_response(tmp_path: Path)
         )
 
     assert error.value.reason_code == "LOCAL_KVM_BLUE_GUEST_NETPROBE_INVALID_RESPONSE"
+
+
+def test_local_kvm_fails_closed_when_red_neighbor_reset_is_not_acknowledged(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    original_exchange = host.control_exchange
+
+    def failed_reset(socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
+        if payload.startswith("PHASE_RED "):
+            return "PHASE_RED_FAILED nonce=redacted\n"
+        return original_exchange(socket_path, payload, timeout_seconds=timeout_seconds)
+
+    host.control_exchange = failed_reset  # type: ignore[method-assign]
+
+    with pytest.raises(RunnerPreflightFailed) as error:
+        ProductionRunnerBackend(provider).rehearse(
+            match_id="kvm-red-neighbor-reset", runner_names=("atlas", "borealis")
+        )
+
+    assert error.value.reason_code == "LOCAL_KVM_RED_NEIGHBOR_RESET_FAILED"
+    assert all(item.state is TeardownState.DESTROYED for item in error.value.teardown_evidence)
 
 
 def test_local_kvm_does_not_mislabel_a_failed_blue_peer_witness_as_orchestrator_reachability(tmp_path: Path) -> None:

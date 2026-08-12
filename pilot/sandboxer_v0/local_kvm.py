@@ -247,7 +247,7 @@ class SubprocessLocalKvmHost:
         return SocketWitnessResult(stage, None if stage is SocketWitnessStage.SUCCESS and numeric_errno == 0 else numeric_errno)
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
-        network_probe = payload.startswith("NETPROBE ")
+        single_line_response = payload.startswith(("NETPROBE ", "PHASE_RED "))
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(timeout_seconds)
             client.connect(os.fspath(socket_path))
@@ -265,7 +265,7 @@ class SubprocessLocalKvmHost:
                 # QEMU chardev socket can remain open while it immediately
                 # reopens the port.  NETPROBE is a single newline-framed
                 # response, so EOF is not its completion signal.
-                if b"PROBE_OK" in response or (network_probe and b"\n" in response):
+                if b"PROBE_OK" in response or (single_line_response and b"\n" in response):
                     break
             if received > _MAX_CONTROL_RESPONSE:
                 raise RuntimeError("CONTROL_RESPONSE_TOO_LARGE")
@@ -560,6 +560,8 @@ class LocalKvmRunnerProvider:
         try:
             self._enforce_ttl(records)
             self._apply_network_phase(phase, records)
+            if phase is Phase.RED:
+                self._prepare_red_network(records)
             return self._measure_network(records, phase)
         except PreflightWitnessFailed:
             if phase is Phase.RED:
@@ -958,6 +960,19 @@ class LocalKvmRunnerProvider:
             return parse_network_proof(response, record.nonce, phase.value)
         except Exception as error:
             raise PreflightWitnessFailed(f"LOCAL_KVM_{phase.value.upper()}_GUEST_NETPROBE_INVALID_RESPONSE") from error
+
+    def _prepare_red_network(self, records: list[_RunnerRecord]) -> None:
+        for record in records:
+            try:
+                response = self._host.control_exchange(
+                    record.control_socket,
+                    f"PHASE_RED {record.nonce}\n",
+                    timeout_seconds=5,
+                )
+            except (TimeoutError, socket.timeout, FileNotFoundError, ConnectionRefusedError, OSError) as error:
+                raise PreflightWitnessFailed("LOCAL_KVM_RED_NEIGHBOR_RESET_UNAVAILABLE") from error
+            if response != f"PHASE_RED_OK nonce={record.nonce}\n":
+                raise PreflightWitnessFailed("LOCAL_KVM_RED_NEIGHBOR_RESET_FAILED")
 
     def _parse_control(self, response: str, nonce: str, *, require_probe: bool) -> ControlReady | ControlProbe:
         if len(response.encode("ascii", errors="ignore")) > _MAX_CONTROL_RESPONSE:
