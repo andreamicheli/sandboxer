@@ -11,10 +11,20 @@ from typing import Mapping
 MAX_TOOL_MESSAGE_BYTES = 64 * 1024
 _NONCE = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _RESPONSE = re.compile(r"TOOL_RESULT nonce=([A-Za-z0-9_-]+) status=([01]) output=([A-Za-z0-9+/]*={0,2})\n\Z")
+_SAFE_EXECUTION_FAILURES = frozenset({
+    "HTTP_REQUEST_APPLICATION_UNAVAILABLE", "HTTP_REQUEST_ARGUMENTS_INVALID",
+})
+
+
+class RunnerToolExecutionError(RuntimeError):
+    """A finite, non-sensitive Runner tool failure surfaced to the Orchestrator."""
 
 
 def _encoded(value: str) -> str:
-    return base64.b64encode(value.encode()).decode("ascii")
+    # Shell tokenization in the Runner deliberately treats whitespace as a
+    # separator.  Reserve '-' as the only empty-value sentinel (it is not a
+    # Base64 character) so optional HTTP header/body fields retain arity.
+    return base64.b64encode(value.encode()).decode("ascii") or "-"
 
 
 def encode_tool_request(nonce: str, tool: str, arguments: Mapping[str, object]) -> str:
@@ -23,10 +33,10 @@ def encode_tool_request(nonce: str, tool: str, arguments: Mapping[str, object]) 
     values: tuple[str, ...]
     if tool == "inspect_service" and not arguments:
         values = ()
-    elif tool == "write_service_file" and set(arguments) == {"path", "content"}:
-        values = (str(arguments["path"]), str(arguments["content"]))
-    elif tool == "run_service_command" and set(arguments) == {"command"}:
-        values = (str(arguments["command"]),)
+    elif tool == "orchestrator_deploy_service" and set(arguments) == {"config"}:
+        values = (str(arguments["config"]),)
+    elif tool == "orchestrator_http_request" and set(arguments) == {"peer", "method", "path", "headers", "body"}:
+        values = tuple(str(arguments[key]) for key in ("peer", "method", "path", "headers", "body"))
     elif tool == "submit_flag" and set(arguments) == {"flag"}:
         values = (str(arguments["flag"]),)
     elif tool == "orchestrator_place_flag" and set(arguments) == {"flag"}:
@@ -56,5 +66,8 @@ def parse_tool_response(response: str, nonce: str) -> str:
     except (binascii.Error, UnicodeDecodeError) as error:
         raise RuntimeError("RUNNER_TOOL_RESPONSE_INVALID") from error
     if match.group(2) != "0":
-        raise RuntimeError("RUNNER_TOOL_EXECUTION_FAILED")
+        failure = output.strip()
+        if failure in _SAFE_EXECUTION_FAILURES:
+            raise RunnerToolExecutionError(failure)
+        raise RunnerToolExecutionError("RUNNER_TOOL_EXECUTION_FAILED")
     return output

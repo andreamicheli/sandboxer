@@ -13,11 +13,19 @@ MAX_MESSAGE_BYTES = 64 * 1024
 
 _TOOL_SCHEMAS = {
     "inspect_service": ("Inspect files in your own synthetic service workspace.", {}),
-    "write_service_file": ("Write one relative file in your own synthetic service workspace.", {
-        "path": {"type": "string"}, "content": {"type": "string"},
+    "describe_target_service": (
+        "Read the opponent's declared synthetic service contract without any protected access token.", {}
+    ),
+    "deploy_service": ("Validate and atomically deploy a structured service defense JSON specification.", {
+        "spec": {"type": "string"},
     }),
-    "run_service_command": ("Run one bounded command from your own synthetic service workspace.", {
-        "command": {"type": "string"},
+    "request_own_service": ("Make one bounded HTTP request to your own declared synthetic service.", {
+        "method": {"type": "string"}, "path": {"type": "string"},
+        "headers": {"type": "string"}, "body": {"type": "string"},
+    }),
+    "http_request": ("Make one bounded HTTP request to the declared opponent synthetic service.", {
+        "method": {"type": "string"}, "path": {"type": "string"},
+        "headers": {"type": "string"}, "body": {"type": "string"},
     }),
     "submit_flag": ("Submit the opponent's Synthetic Flag for Orchestrator verification.", {
         "flag": {"type": "string"},

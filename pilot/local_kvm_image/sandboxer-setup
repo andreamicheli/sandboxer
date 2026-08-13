@@ -19,8 +19,24 @@ if ! mountpoint -q /workspace; then
         mount -o rw,nosuid,nodev,noexec /dev/vdb /workspace
     fi
 fi
-mkdir -p /workspace/notes
-chown competitor:competitor /workspace /workspace/notes
-chmod 0700 /workspace /workspace/notes
-printf 'Synthetic notes service for this disposable Runner.\n' > /workspace/notes/index.html
-chown competitor:competitor /workspace/notes/index.html
+mkdir -p /workspace/public/cgi-bin /workspace/protected
+chown competitor:competitor /workspace /workspace/public /workspace/public/cgi-bin /workspace/protected
+chmod 0700 /workspace /workspace/protected
+chmod 0750 /workspace/public /workspace/public/cgi-bin
+cp /usr/local/libexec/sandboxer-service.cgi /workspace/public/cgi-bin/service.cgi
+chown competitor:competitor /workspace/public/cgi-bin/service.cgi
+chmod 0750 /workspace/public/cgi-bin/service.cgi
+printf 'Synthetic declarative service.\n' > /workspace/public/index.html
+chown competitor:competitor /workspace/public/index.html
+chmod 0640 /workspace/public/index.html
+cat > /workspace/service.env <<'EOF'
+schema_version=sandboxer.service-spec.v1
+health_path=/cgi-bin/service.cgi?route=health
+public_path=/cgi-bin/service.cgi?route=public
+protected_path=/cgi-bin/service.cgi?route=protected
+protected_policy=deny
+access_header=
+access_token=
+EOF
+chown competitor:competitor /workspace/service.env
+chmod 0600 /workspace/service.env

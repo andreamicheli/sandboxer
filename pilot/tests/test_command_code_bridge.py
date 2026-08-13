@@ -19,6 +19,14 @@ def test_bridge_exposes_only_explicit_runner_tools(monkeypatch):
     assert submit["inputSchema"]["additionalProperties"] is False
 
 
+def test_bridge_renders_target_contract_tool_without_input_fields(monkeypatch):
+    monkeypatch.setenv("SANDBOXER_RUNNER_TOOLS", "describe_target_service")
+    result = asyncio.run(_handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+    tool = result["result"]["tools"][0]
+    assert tool["name"] == "describe_target_service"
+    assert tool["inputSchema"] == {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+
+
 def test_bridge_denies_unlisted_tool_without_touching_runner(monkeypatch):
     monkeypatch.setenv("SANDBOXER_RUNNER_TOOLS", "read_note")
     monkeypatch.setenv("SANDBOXER_RUNNER_SOCKET", "/must/not/connect")

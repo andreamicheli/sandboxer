@@ -29,6 +29,7 @@ TEMPLATE_NAMES = (
     "sandboxer-mount-runtime",
     "sandboxer-setup",
     "sandboxer-toy",
+    "sandboxer-service.cgi",
     "sandboxer-control",
     "sandboxer-runner.init",
     "provision-image",

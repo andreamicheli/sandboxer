@@ -12,6 +12,7 @@ install -m 0755 /run/sandboxer-build/sandboxer-common /usr/local/libexec/sandbox
 install -m 0755 /run/sandboxer-build/sandboxer-mount-runtime /usr/local/libexec/sandboxer-mount-runtime
 install -m 0755 /run/sandboxer-build/sandboxer-setup /usr/local/libexec/sandboxer-setup
 install -m 0755 /run/sandboxer-build/sandboxer-toy /usr/local/libexec/sandboxer-toy
+install -m 0755 /run/sandboxer-build/sandboxer-service.cgi /usr/local/libexec/sandboxer-service.cgi
 install -m 0755 /run/sandboxer-build/sandboxer-control /usr/local/libexec/sandboxer-control
 install -m 0755 /run/sandboxer-build/sandboxer-runner.init /etc/init.d/sandboxer-runner
 mkdir -p /workspace

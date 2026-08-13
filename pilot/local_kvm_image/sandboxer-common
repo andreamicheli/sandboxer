@@ -86,7 +86,7 @@ sandboxer_toy_http_ready() {
     sandboxer_toy_ip="$1"
     sandboxer_toy_attempt=0
     while test "$sandboxer_toy_attempt" -lt 5; do
-        if /bin/busybox timeout -s KILL 2 /bin/busybox wget -q -T 1 -O /dev/null "http://$sandboxer_toy_ip:8080/"; then
+        if /bin/busybox timeout -s KILL 2 /bin/busybox wget -q -T 1 -O /dev/null "http://$sandboxer_toy_ip:8080/cgi-bin/service.cgi?route=health"; then
             return 0
         fi
         sandboxer_toy_attempt=$((sandboxer_toy_attempt + 1))

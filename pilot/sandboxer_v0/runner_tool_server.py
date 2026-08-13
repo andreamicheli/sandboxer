@@ -7,14 +7,14 @@ import inspect
 import json
 import os
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Awaitable, Callable, Mapping
 
 
 _MAX_MESSAGE_BYTES = 64 * 1024
 _PHASE_TOOLS = {
-    "blue": frozenset({"inspect_service", "write_service_file", "run_service_command", "finish_phase"}),
-    "red": frozenset({"inspect_service", "run_service_command", "submit_flag", "finish_phase"}),
+    "blue": frozenset({"inspect_service", "deploy_service", "request_own_service", "finish_phase"}),
+    "red": frozenset({"inspect_service", "describe_target_service", "http_request", "submit_flag", "finish_phase"}),
 }
 
 
@@ -125,8 +125,10 @@ class RunnerToolServer:
             return False
         expected = {
             "inspect_service": frozenset(),
-            "write_service_file": frozenset({"path", "content"}),
-            "run_service_command": frozenset({"command"}),
+            "describe_target_service": frozenset(),
+            "deploy_service": frozenset({"spec"}),
+            "request_own_service": frozenset({"method", "path", "headers", "body"}),
+            "http_request": frozenset({"method", "path", "headers", "body"}),
             "submit_flag": frozenset({"flag"}),
             "finish_phase": frozenset({"summary"}),
         }[tool]
@@ -134,9 +136,8 @@ class RunnerToolServer:
             return False
         if any(len(value.encode()) > _MAX_MESSAGE_BYTES // 2 for value in arguments.values()):
             return False
-        if tool == "write_service_file":
-            path = PurePosixPath(arguments["path"])
-            return not path.is_absolute() and ".." not in path.parts and path.parts != ()
+        if tool in {"request_own_service", "http_request"}:
+            return arguments["method"] in {"GET", "POST"} and arguments["path"].startswith("/")
         return all(value.strip() for value in arguments.values()) if arguments else True
 
     @staticmethod

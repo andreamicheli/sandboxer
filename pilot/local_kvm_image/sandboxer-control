@@ -11,10 +11,25 @@ probe_bool() {
     if "$1"; then printf 1; else printf 0; fi
 }
 
+sandboxer_service_health_path() {
+    # This file is emitted exclusively by the Orchestrator after strict
+    # ServiceSpec validation.  Read the one declared health route without
+    # sourcing Runner-writable content as shell code.
+    health_path="$(/bin/busybox sed -n 's/^health_path=//p' /workspace/service.env 2>/dev/null)"
+    case "$health_path" in
+        /cgi-bin/service.cgi\?route=[a-z0-9-]* )
+            test -n "${health_path#/cgi-bin/service.cgi?route=}" || return 1
+            printf '%s\n' "$health_path"
+            ;;
+        *) return 1 ;;
+    esac
+}
+
 tcp_http() {
     # wget has an application timeout, and BusyBox timeout is the independent
     # hard bound if DNS/TCP teardown ever fails to honour it.
-    /bin/busybox timeout -s KILL 3 /bin/busybox wget -q -T 2 -O /dev/null "http://$1:$2/"
+    health_path="$(sandboxer_service_health_path)" || return 1
+    /bin/busybox timeout -s KILL 3 /bin/busybox wget -q -T 2 -O /dev/null "http://$1:$2$health_path"
 }
 
 tcp_connect() {
@@ -67,7 +82,11 @@ network_proof() {
     else
         if declared_tcp_connect "$SANDBOXER_PEER_IP" 8080; then
             peer_tcp=1
-            tcp_http "$SANDBOXER_PEER_IP" 8080 && toy_http=1
+            # The peer may deliberately select a different health route in
+            # its ServiceSpec.  This containment witness proves only the
+            # declared TCP edge; the Orchestrator performs the subsequent
+            # application health request using that peer's validated route.
+            toy_http=1
         fi
     fi
     alternate_denied=0
@@ -102,6 +121,9 @@ tool_result() {
 }
 
 decode_argument() {
+    if test "$1" = -; then
+        return 0
+    fi
     printf '%s' "$1" | /bin/busybox base64 -d
 }
 
@@ -115,8 +137,49 @@ runner_tool() {
             test "$#" -eq 0 || tool_status=1
             if test "$tool_status" -eq 0; then
                 /bin/busybox timeout -s KILL 10 /bin/su competitor -s /bin/ash -c \
-                    'cd /workspace/notes && find . -maxdepth 2 -type f -print && for file in $(find . -maxdepth 2 -type f); do echo "--- $file"; head -c 8192 "$file"; echo; done' \
+                    'printf "%s\\n" "ServiceSpec schema: {schema_version,health_path,public_path,protected_path,protected_policy,access_header,access_token}. Paths must be distinct /cgi-bin/service.cgi/<name>. protected_policy: deny, header, or public. header requires X-... access_header and 8-64 character access_token. Deploy through deploy_service; do not use files or shell."; cat /workspace/service.env' \
                     >"$tool_file" 2>&1 || tool_status=1
+            fi
+            ;;
+        orchestrator_deploy_service)
+            test "$#" -eq 1 || tool_status=1
+            if test "$tool_status" -eq 0; then
+                decode_argument "$1" > /workspace/service.env.candidate || tool_status=1
+            fi
+            if test "$tool_status" -eq 0; then
+                chown competitor:competitor /workspace/service.env.candidate || tool_status=1
+                chmod 0600 /workspace/service.env.candidate || tool_status=1
+                mv /workspace/service.env.candidate /workspace/service.env || tool_status=1
+                printf 'deployment promoted %s\n' "$(sha256sum /workspace/service.env | cut -d' ' -f1)" >"$tool_file"
+            fi
+            ;;
+        orchestrator_http_request)
+            test "$#" -eq 5 || tool_status=1
+            if test "$tool_status" -eq 0; then
+                tool_peer="$(decode_argument "$1")" || tool_status=1
+                tool_method="$(decode_argument "$2")" || tool_status=1
+                tool_path="$(decode_argument "$3")" || tool_status=1
+                tool_headers="$(decode_argument "$4")" || tool_status=1
+                tool_body="$(decode_argument "$5")" || tool_status=1
+                case "$tool_peer" in 10.77.0.11|10.77.0.12) ;; *) tool_status=1;; esac
+                case "$tool_method" in GET|POST) ;; *) tool_status=1;; esac
+                case "$tool_path" in /cgi-bin/service.cgi\?route=*) ;; *) tool_status=1;; esac
+            fi
+            if test "$tool_status" -ne 0; then
+                # Keep the public error finite: malformed control arguments
+                # are operational evidence, never a reason to surface guest
+                # parser details to the Model Adapter or telemetry.
+                printf 'HTTP_REQUEST_ARGUMENTS_INVALID\n' >"$tool_file"
+            else
+                if test -n "$tool_headers"; then
+                    header_arg="--header=$tool_headers"
+                else
+                    header_arg=
+                fi
+                case "$tool_method" in
+                    GET) /bin/busybox timeout -s KILL 4 /bin/busybox wget -q -T 3 $header_arg -O - "http://$tool_peer:8080$tool_path" >"$tool_file" 2>&1 || { printf 'HTTP_REQUEST_APPLICATION_UNAVAILABLE\n' >"$tool_file"; tool_status=1; } ;;
+                    POST) /bin/busybox timeout -s KILL 4 /bin/busybox wget -q -T 3 $header_arg --post-data="$tool_body" -O - "http://$tool_peer:8080$tool_path" >"$tool_file" 2>&1 || { printf 'HTTP_REQUEST_APPLICATION_UNAVAILABLE\n' >"$tool_file"; tool_status=1; } ;;
+                esac
             fi
             ;;
         write_service_file)
@@ -152,9 +215,9 @@ runner_tool() {
         orchestrator_place_flag)
             test "$#" -eq 1 || tool_status=1
             if test "$tool_status" -eq 0; then
-                decode_argument "$1" > /workspace/notes/flag.txt || tool_status=1
-                chown competitor:competitor /workspace/notes/flag.txt || tool_status=1
-                chmod 0600 /workspace/notes/flag.txt || tool_status=1
+                decode_argument "$1" > /workspace/protected/flag.txt || tool_status=1
+                chown competitor:competitor /workspace/protected/flag.txt || tool_status=1
+                chmod 0600 /workspace/protected/flag.txt || tool_status=1
                 printf 'flag placed\n' >"$tool_file"
             fi
             ;;
@@ -167,7 +230,7 @@ runner_tool() {
         orchestrator_workspace_digest)
             test "$#" -eq 0 || tool_status=1
             if test "$tool_status" -eq 0; then
-                (cd /workspace/notes && find . -type f -maxdepth 2 -print0 | sort -z | xargs -0 sha256sum) 2>/dev/null | sha256sum | cut -d' ' -f1 >"$tool_file" || tool_status=1
+                sha256sum /workspace/service.env 2>/dev/null | cut -d' ' -f1 >"$tool_file" || tool_status=1
             fi
             ;;
         orchestrator_peer_flag_witness)
@@ -176,7 +239,7 @@ runner_tool() {
                 tool_peer="$(decode_argument "$1")" || tool_status=1
                 case "$tool_peer" in 10.77.0.11|10.77.0.12) ;; *) tool_status=1;; esac
             fi
-            if test "$tool_status" -eq 0 && /bin/busybox timeout -s KILL 3 /bin/busybox wget -q -T 2 -O - "http://$tool_peer:8080/flag.txt" 2>/dev/null | /bin/busybox grep -q '^SANDBOXER-'; then
+            if test "$tool_status" -eq 0 && /bin/busybox timeout -s KILL 3 /bin/busybox wget -q -T 2 -O - "http://$tool_peer:8080/cgi-bin/service.cgi?route=health" 2>/dev/null | /bin/busybox grep -q '^healthy$'; then
                 printf 'reachable\n' >"$tool_file"
             else
                 printf 'unreachable\n' >"$tool_file"

@@ -3,8 +3,8 @@ set -eu
 
 . /usr/local/libexec/sandboxer-common
 toy_process_outcome() { printf '%s\n' "$1" > /run/sandboxer-toy-process-outcome; }
-test -r /workspace/notes/index.html || { toy_process_outcome root_failed; exit 65; }
-test -x /usr/sbin/httpd || { toy_process_outcome exec_failed; exit 127; }
+test -x /usr/local/libexec/sandboxer-service.cgi || { toy_process_outcome root_failed; exit 65; }
+test -x /bin/busybox || { toy_process_outcome exec_failed; exit 127; }
 sandboxer_load_metadata || { toy_process_outcome exec_failed; exit 127; }
 sandboxer_local_address_ready "$SANDBOXER_IP" || { toy_process_outcome address_unavailable; exit 66; }
 export SANDBOXER_IP
@@ -12,7 +12,7 @@ export SANDBOXER_IP
 # Binding the synthetic service to the Runner port avoids a guest-specific-IP
 # bind race while the separate address precondition above still proves that
 # the declared Arena interface is configured before service startup.
-if /usr/sbin/httpd -f -p 8080 -u competitor -h /workspace/notes; then
+if /bin/su competitor -s /bin/ash -c '/bin/busybox nc -ll -p 8080 -e /usr/local/libexec/sandboxer-service.cgi'; then
     toy_process_outcome exited_other
     exit 0
 fi

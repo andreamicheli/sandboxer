@@ -91,8 +91,7 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert "iface eth0 inet dhcp" not in provision
     assert "sandboxer-mount-runtime" in provision
     toy = (rendered / "sandboxer-toy").read_text()
-    assert "/usr/sbin/httpd -f" in toy
-    assert "/bin/busybox httpd" not in toy
+    assert "busybox nc -ll -p 8080 -e /usr/local/libexec/sandboxer-service.cgi" in toy
     assert "PROBE_OK" in control and "NETWORK_PROBE" in control
     assert "network_stage emitted" in control
     assert 'declared_tcp_connect "$SANDBOXER_PEER_IP" 8080' in control
@@ -104,12 +103,12 @@ def test_image_builder_renders_an_immutable_runner_contract_without_building_a_v
     assert setup.index("ip link set lo up") < setup.index("ip link set eth0 up")
     assert "ip route del default" in setup
     assert "sandboxer-route-after-setup" in setup
-    assert setup.index("mount -o rw,nosuid,nodev,noexec /dev/vdb /workspace") < setup.index("mkdir -p /workspace/notes")
+    assert setup.index("mount -o rw,nosuid,nodev,noexec /dev/vdb /workspace") < setup.index("mkdir -p /workspace/public/cgi-bin /workspace/protected")
     assert "SANDBOXER_STAGE_SETUP" in bootstrap
     assert "SANDBOXER_STAGE_TOY" in bootstrap
     assert "SANDBOXER_STAGE_CONTROL" in bootstrap
     assert "/usr/local/libexec/sandboxer-setup" in bootstrap
-    assert "/usr/sbin/httpd -p 8080 -u competitor -h /workspace/notes" in bootstrap
+    assert "--pidfile /run/sandboxer-toy.pid --exec /usr/local/libexec/sandboxer-toy" in bootstrap
     assert "sandboxer_toy_http_ready 127.0.0.1" in bootstrap
     assert "/usr/local/libexec/sandboxer-control" in bootstrap
     assert "SANDBOXER_TOY_READY" in bootstrap
@@ -142,8 +141,15 @@ def test_image_builder_renders_sanitized_and_bounded_network_probes(tmp_path: Pa
     assert "if sandboxer_route_state" not in control
     assert "/bin/busybox timeout -s KILL 2 ping -c 1 -W 1 \"$1\"" in control
     assert "SANDBOXER_NETPROBE_STAGE=" in control
+    # The preflight witness must query the same explicit health route exposed
+    # by the declarative service, rather than treating the root 404 as a
+    # service failure.
+    assert "sandboxer_service_health_path" in control
+    assert 'test "$1" = -' in control
+    assert '"http://$1:$2$health_path"' in control
     assert 'tcp_connect "$SANDBOXER_PEER_IP" 8080 || peer_denied=1' in control
-    assert 'tcp_http "$SANDBOXER_PEER_IP" 8080 && toy_http=1' in control
+    assert 'peer_tcp=1' in control and 'toy_http=1' in control
+    assert 'tcp_http "$SANDBOXER_PEER_IP" 8080' not in control
     assert 'tcp_connect "$SANDBOXER_PEER_IP" 8081 || alternate_denied=1' in control
     assert "tcp_connect 198.51.100.1 81" in control
     assert "tcp_connect 10.77.0.1 1" in control
@@ -203,7 +209,7 @@ def test_rendered_toy_health_retries_a_bounded_http_request_after_background_sta
         )
         assert immediate.returncode != 0
         helper = tmp_path / "toy-health"
-        helper.write_text(common.replace("/bin/busybox", "/usr/bin/busybox").replace(":8080/", f":{health_port}/") + "\nsandboxer_toy_http_ready 127.0.0.2\n", encoding="utf-8")
+        helper.write_text(common.replace("/bin/busybox", "/usr/bin/busybox").replace(":8080/cgi-bin/service.cgi?route=health", f":{health_port}/") + "\nsandboxer_toy_http_ready 127.0.0.2\n", encoding="utf-8")
         result = subprocess.run(["/usr/bin/busybox", "ash", str(helper)], check=False, capture_output=True, text=True, timeout=5)
         assert result.returncode == 0, result.stderr
     finally:
@@ -224,10 +230,10 @@ def test_rendered_toy_reports_address_bind_and_process_outcomes_without_raw_outp
     assert "/run/sandboxer-toy-process-outcome" in toy
     assert "toy_process_outcome address_unavailable" in toy
     assert "toy_process_outcome httpd_bind_exit" in toy
-    assert "-u competitor" in toy
+    assert "/bin/su competitor" in toy
     assert "-p 8080" in toy
     assert '"$SANDBOXER_IP:8080"' not in toy
-    assert "/usr/sbin/httpd -p 8080 -u competitor -h /workspace/notes" in bootstrap
+    assert "--pidfile /run/sandboxer-toy.pid --exec /usr/local/libexec/sandboxer-toy" in bootstrap
     assert "exec su " not in toy
     assert "toy_process_outcome exited_other" in toy
     assert "2>" not in toy and "stderr" not in toy
@@ -253,14 +259,15 @@ def test_rendered_toy_reproduces_fixed_bind_subcauses_offline(
         f"sandboxer_local_address_ready() {{ return {0 if address_ready else 1}; }}\n",
         encoding="ascii",
     )
-    document = tmp_path / "index.html"; document.write_text("synthetic", encoding="ascii")
+    document = tmp_path / "index.html"; document.write_text("synthetic", encoding="ascii"); document.chmod(0o755)
     outcome = tmp_path / "outcome"
     fake_httpd = tmp_path / "httpd"
     fake_httpd.write_text(f"#!/bin/sh\nexit {su_status}\n", encoding="ascii"); fake_httpd.chmod(0o755)
     toy = (rendered / "sandboxer-toy").read_text(encoding="utf-8")
     toy = toy.replace("/usr/local/libexec/sandboxer-common", str(common))
-    toy = toy.replace("/workspace/notes/index.html", str(document))
-    toy = toy.replace("/usr/sbin/httpd", str(fake_httpd))
+    toy = toy.replace("/usr/local/libexec/sandboxer-service.cgi", str(document))
+    toy = toy.replace("/bin/su competitor -s /bin/ash -c ", "")
+    toy = toy.replace("/bin/busybox nc -ll -p 8080 -e", str(fake_httpd))
     toy = toy.replace("/run/sandboxer-toy-process-outcome", str(outcome))
     script = tmp_path / "toy"; script.write_text(toy, encoding="utf-8")
 

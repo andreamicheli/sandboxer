@@ -31,6 +31,7 @@ from .arena_safety import ArenaNetworkPolicy, NetworkObservation, Phase, Teardow
 from .local_kvm_control import ControlProbe, ControlReady, NetworkProof, parse_control, parse_network_proof
 from .local_kvm_tools import MAX_TOOL_MESSAGE_BYTES, encode_tool_request, parse_tool_response
 from .runner_backend import PreflightCheck, PreflightWitnessFailed, ProvisioningFailed, RunnerHandle
+from .service_spec import ServiceSpec, parse_service_spec
 
 
 _SAFE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
@@ -614,6 +615,27 @@ class LocalKvmRunnerProvider:
 
     def place_synthetic_flag(self, runner: RunnerHandle, flag: str) -> None:
         self.execute_tool(runner, "orchestrator_place_flag", {"flag": flag})
+
+    def deploy_service(self, runner: RunnerHandle, raw_spec: str) -> ServiceSpec:
+        """Validate a declarative defense outside the Runner, then promote it."""
+        spec = parse_service_spec(raw_spec)
+        result = self.execute_tool(runner, "orchestrator_deploy_service", {"config": spec.render_runtime_config()})
+        if not result.startswith("deployment promoted "):
+            raise RuntimeError("SERVICE_DEPLOYMENT_UNPROMOTED")
+        return spec
+
+    def service_request(
+        self, runner: RunnerHandle, *, peer: str, method: str, path: str, headers: str, body: str
+    ) -> str:
+        return self.execute_tool(runner, "orchestrator_http_request", {
+            "peer": peer, "method": method, "path": path, "headers": headers, "body": body,
+        })
+
+    def runner_address(self, runner: RunnerHandle) -> str:
+        record = self._records.get(runner.runner_id)
+        if record is None or record.handle != runner:
+            raise RuntimeError("RUNNER_TOOL_RUNNER_UNKNOWN")
+        return record.ip_address
 
     def verified_submission(self, runner: RunnerHandle) -> str:
         try:
