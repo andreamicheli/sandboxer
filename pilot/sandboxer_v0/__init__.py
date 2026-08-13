@@ -52,6 +52,7 @@ from .operations import (
     SeriesOperations,
     StaleRevision,
 )
+from .command_code import CommandCodeAdapter, CommandCodeError, CommandCodePreflight, CommandCodeResult
 
 __all__ = [
     "ControlledCompetitor",
@@ -109,4 +110,8 @@ __all__ = [
     "PublicationBlocked",
     "SeriesOperations",
     "StaleRevision",
+    "CommandCodeAdapter",
+    "CommandCodeError",
+    "CommandCodePreflight",
+    "CommandCodeResult",
 ]
