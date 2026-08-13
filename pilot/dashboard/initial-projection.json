@@ -1,0 +1,1 @@
+{"artifact":{"label":null,"state":"NOT_STARTED"},"auditor_alerts":[],"budgets":{},"capacity":{"next_attempt_at":null,"reason_code":"AWAITING_LIVE_REHEARSAL","wait_attempts":0},"cleanup":{"terminal":true,"total":0},"mode":"supervised","phase":"NOT_STARTED","queue":{"position":null},"schema":"sandboxer.dashboard.v1","series_id":"sandboxer-live-pending","series_state":"NOT_STARTED"}

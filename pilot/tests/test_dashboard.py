@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import io
 from pathlib import Path
 
 from sandboxer_v0.dashboard import DashboardApp, ProjectionStore, project_operation
@@ -14,6 +15,14 @@ def _call(app, path, *, token=None, remote="203.0.113.4"):
     if token: environ["HTTP_AUTHORIZATION"]=f"Bearer {token}"
     body=b"".join(app(environ,lambda value,items:(status.append(value),headers.extend(items))))
     return int(status[0].split()[0]),dict(headers),body
+
+
+def _web_call(app, path, *, method="GET", body=b"", cookie=None, remote="100.64.0.8"):
+    status=[]; headers=[]
+    environ={"PATH_INFO":path,"REQUEST_METHOD":method,"REMOTE_ADDR":remote,"wsgi.input":io.BytesIO(body),"CONTENT_LENGTH":str(len(body))}
+    if cookie: environ["HTTP_COOKIE"]=cookie
+    payload=b"".join(app(environ,lambda value,items:(status.append(value),headers.extend(items))))
+    return int(status[0].split()[0]),dict(headers),payload
 
 
 def test_projection_is_closed_and_excludes_restricted_fields(tmp_path):
@@ -58,3 +67,25 @@ def test_dashboard_is_read_only_rate_limited_and_audited(tmp_path):
     assert status[0].startswith("405")
     audit=(tmp_path/"audit.jsonl").read_text()
     assert "correct" not in audit and '"status":429' in audit
+
+
+def test_operator_can_exchange_token_for_secure_browser_session(tmp_path):
+    store=ProjectionStore(tmp_path/"projection.json",published_root=tmp_path/"published")
+    store.write({"schema":"sandboxer.dashboard.v1","series_id":"s","series_state":"RUNNING"})
+    app=DashboardApp(store,token_hash=DashboardApp.hash_token("correct horse"),audit_path=tmp_path/"audit.jsonl",rate_limit=20)
+    status,headers,body=_web_call(app,"/login")
+    assert status==200 and b"Operator access" in body
+    status,headers,_body=_web_call(app,"/login",method="POST",body=b"token=correct+horse")
+    assert status==303 and headers["Location"]=="/"
+    cookie=headers["Set-Cookie"]
+    assert "HttpOnly" in cookie and "Secure" in cookie and "SameSite=Strict" in cookie and "correct" not in cookie
+    status,headers,body=_web_call(app,"/",cookie=cookie.split(";",1)[0])
+    assert status==200 and b"Sandboxer // operations" in body and headers["Cache-Control"]=="private, no-store"
+
+
+def test_browser_login_rejects_bad_token_without_setting_cookie(tmp_path):
+    store=ProjectionStore(tmp_path/"projection.json",published_root=tmp_path/"published")
+    store.write({"schema":"sandboxer.dashboard.v1"})
+    app=DashboardApp(store,token_hash=DashboardApp.hash_token("correct"),audit_path=tmp_path/"audit.jsonl",rate_limit=20)
+    status,headers,_body=_web_call(app,"/login",method="POST",body=b"token=wrong")
+    assert status==401 and "Set-Cookie" not in headers
