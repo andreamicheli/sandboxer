@@ -1,0 +1,8 @@
+{
+  "name": "sandboxer-video",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {"typecheck": "tsc --noEmit", "render": "remotion render src/index.tsx SandboxerSeries"},
+  "dependencies": {"@remotion/cli": "4.0.509", "react": "19.1.1", "react-dom": "19.1.1", "remotion": "4.0.509"},
+  "devDependencies": {"@types/react": "19.1.10", "typescript": "5.9.2"}
+}

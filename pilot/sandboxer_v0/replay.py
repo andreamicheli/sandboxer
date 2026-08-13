@@ -239,6 +239,7 @@ def build_replay(
             "event_id": _safe_label(raw_event.get("event_id"), f"event-{sequence}"),
             "event_type": _safe_label(raw_event.get("event_type"), "telemetry-event"),
             "phase": _safe_label(raw_event.get("phase"), "unspecified"),
+            "match_number": raw_event.get("match_number") if isinstance(raw_event.get("match_number"), int) else None,
             "turn": raw_event.get("turn") if isinstance(raw_event.get("turn"), int) else None,
             "pane": pane_index,
             "text": text,
