@@ -133,6 +133,7 @@ async def execute_match(args: argparse.Namespace) -> dict[str, object]:
                     spec = provider.deploy_service(selected, str(values["spec"]))
                     deployment_graphs[selected_model].append(spec.graph_hash)
                     deployment_specs[selected_model] = spec
+                    emit("deployment_promoted", model=selected_model, **spec.calibration_metadata())
                     return f"deployment promoted graph_hash={spec.graph_hash}"
                 if tool == "describe_target_service":
                     opponent = MODELS[1] if selected_model == MODELS[0] else MODELS[0]
@@ -278,6 +279,7 @@ async def execute_match(args: argparse.Namespace) -> dict[str, object]:
         payload = {
             "result": "passed", "publication_enabled": False, "provider": "command_code",
             "models": list(MODELS), "winner": winner, "captures": list(captures),
+            "defenses": {model: deployment_specs[model].calibration_metadata() for model in MODELS},
             "usage": {"blue": [_usage(item) for item in blue], "interview": [_usage(item) for item in interviews],
                       "red": [_usage(item) for item in red]},
             "tool_counts": tool_counts, "tool_names": tool_names, "calibration_only": True,

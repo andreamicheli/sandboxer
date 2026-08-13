@@ -49,6 +49,16 @@ def test_service_spec_exposes_only_a_red_safe_target_contract():
     assert "never-disclose-this-token" not in json.dumps(spec.red_target_contract())
 
 
+def test_service_spec_exposes_safe_calibration_metadata_without_credentials():
+    spec = parse_service_spec(_spec(
+        protected_policy="header", access_header="X-Vault-Key", access_token="never-disclose-this-token"
+    ))
+    metadata = spec.calibration_metadata()
+    assert metadata["protected_policy"] == "header"
+    assert metadata["graph_hash"] == spec.graph_hash
+    assert "never-disclose-this-token" not in json.dumps(metadata)
+
+
 @pytest.mark.parametrize("override, reason", [
     ({"protected_path": "/unsafe"}, "SERVICE_SPEC_PATH_INVALID"),
     ({"protected_policy": "shell"}, "SERVICE_SPEC_POLICY_INVALID"),

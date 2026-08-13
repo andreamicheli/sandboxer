@@ -71,6 +71,10 @@ class ServiceSpec:
             "access_header": self.access_header,
         }
 
+    def calibration_metadata(self) -> dict[str, str]:
+        """Return the minimal non-secret evidence needed to interpret a Match."""
+        return {"graph_hash": self.graph_hash, "protected_policy": self.protected_policy}
+
 
 def parse_service_spec(raw: str) -> ServiceSpec:
     try:
