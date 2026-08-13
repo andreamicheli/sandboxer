@@ -109,9 +109,12 @@ class RunnerToolServer:
         self._audit(decision)
         if reason is not None:
             return self._error(reason)
-        result = self._execute(tool, arguments)
-        if inspect.isawaitable(result):
-            result = await result
+        try:
+            result = self._execute(tool, arguments)
+            if inspect.isawaitable(result):
+                result = await result
+        except Exception:
+            return self._error("RUNNER_TOOL_EXECUTION_FAILED")
         if not isinstance(result, str):
             return self._error("RUNNER_TOOL_RESPONSE_INVALID")
         return {"content": [{"type": "text", "text": result}], "isError": False}

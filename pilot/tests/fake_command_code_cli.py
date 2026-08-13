@@ -14,6 +14,8 @@ else:
     emit({"type":"event","event":{"type":"model_request_start","model":model}})
     if mode == "streaming": time.sleep(.15)
     if mode == "tool": emit({"type":"event","event":{"type":"tool_running","toolName":"shell_command"}})
+    if mode == "native_tool_queued": emit({"type":"event","event":{"type":"tool_queued","toolName":"read_directory","toolCallId":"native-1"}})
+    if mode == "native_tool_denied": emit({"type":"event","event":{"type":"tool_denied","toolName":"read_directory","toolCallId":"native-1"}})
     if mode == "runner_tool": emit({"type":"event","event":{"type":"tool_running","toolName":"mcp__runner__read_note"}})
     if mode == "runner_tool_lifecycle":
         emit({"type":"event","event":{"type":"tool_start","toolName":"mcp__runner__read_note","toolCallId":"call-1"}})

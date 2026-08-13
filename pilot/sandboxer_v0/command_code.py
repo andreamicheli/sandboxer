@@ -17,9 +17,10 @@ from typing import Any, Callable, Mapping, Sequence
 class CommandCodeError(RuntimeError):
     """A stable, non-sensitive Command Code boundary failure."""
 
-    def __init__(self, reason_code: str) -> None:
+    def __init__(self, reason_code: str, *, model_id: str | None = None) -> None:
         super().__init__(reason_code)
         self.reason_code = reason_code
+        self.model_id = model_id
 
 
 @dataclass(frozen=True)
@@ -139,6 +140,14 @@ class CommandCodeAdapter:
     """Provider-neutral adapter; native Command Code tools never cross this seam."""
 
     adapter_version = "sandboxer.command-code.v1"
+    native_tool_denylist = (
+        "read_file", "read_directory", "read_multiple_files", "write_file", "edit_file",
+        "grep", "glob", "shell_command", "powershell", "monitor_command", "monitor_events",
+        "shell_tasks", "bash_output", "kill_shell", "web_search", "web_fetch", "agent",
+        "task_create", "task_update", "task_list", "task_get", "task_output", "task_stop",
+        "cron_create", "cron_list", "cron_delete", "todo_write", "ask_user_question",
+        "get_diagnostics", "get_command_code_knowledge", "enter_plan_mode", "exit_plan_mode",
+    )
 
     def __init__(
         self,
@@ -175,8 +184,7 @@ class CommandCodeAdapter:
             "permissions": {
                 "defaultMode": "dont-ask",
                 "allow": [f"mcp__runner__{item}" for item in tools],
-                "deny": ["Shell(*)", "Read(**)", "Write(**)", "Edit(**)", "Grep(*)", "Glob(*)",
-                         "WebFetch(*)", "WebSearch(*)", "NotebookEdit(*)"],
+                "deny": list(CommandCodeAdapter.native_tool_denylist),
             }
         }
         mcp = {"mcpServers": {"runner": {
@@ -210,14 +218,14 @@ class CommandCodeAdapter:
                 config.mkdir(mode=0o700)
                 (config / "settings.json").write_text(json.dumps({"permissions": {
                     "defaultMode": "dont-ask", "allow": [],
-                    "deny": ["Shell(*)", "Read(**)", "Write(**)", "Edit(**)", "Grep(*)", "Glob(*)",
-                             "WebFetch(*)", "WebSearch(*)", "NotebookEdit(*)"],
+                    "deny": list(self.native_tool_denylist),
                 }}, sort_keys=True, separators=(",", ":")), encoding="utf-8")
                 (config / "settings.json").chmod(0o600)
             else:
+                default_bridge = (sys.executable, str(Path(__file__).with_name("command_code_bridge.py").resolve()))
                 self.prepare_workspace(
                     root,
-                    runner_bridge=runner_bridge or (sys.executable, "-m", "sandboxer_v0.command_code_bridge"),
+                    runner_bridge=runner_bridge or default_bridge,
                     runner_socket=runner_socket,
                     allowed_tools=allowed_tools,
                 )
@@ -260,7 +268,10 @@ class CommandCodeAdapter:
             finally:
                 if stderr_task is not None:
                     await stderr_task
-            result = self._result(frames, process.returncode, model, output_token_budget, frozenset(allowed_tools))
+            try:
+                result = self._result(frames, process.returncode, model, output_token_budget, frozenset(allowed_tools))
+            except CommandCodeError as error:
+                raise CommandCodeError(error.reason_code, model_id=model) from error
             if budget is not None:
                 budget.charge(result.output_tokens)
             return result
@@ -321,6 +332,8 @@ class CommandCodeAdapter:
                 if isinstance(tool_name, str) and tool_name.startswith(prefix) and tool_name[len(prefix):] in allowed_tools:
                     if isinstance(tool_call_id, str):
                         runner_tool_calls.add(tool_call_id)
+                elif kind in {"tool_queued", "tool_denied"}:
+                    continue
                 elif not isinstance(tool_call_id, str) or tool_call_id not in runner_tool_calls:
                     raise CommandCodeError("COMMAND_CODE_NATIVE_TOOL_REJECTED")
             if kind in {"model_request_start", "model_request_end"} and isinstance(event.get("model"), str): observed.add(event["model"])
@@ -332,6 +345,8 @@ class CommandCodeAdapter:
             if any(token in message for token in ("auth", "login", "authenticated")): code = "COMMAND_CODE_AUTH_REQUIRED"
             elif any(token in message for token in ("credit", "balance", "quota")): code = "COMMAND_CODE_CREDITS_INSUFFICIENT"
             elif any(token in message for token in ("rate", "concurrency", "too many")): code = "COMMAND_CODE_CAPACITY_UNAVAILABLE"
+            elif any(token in message for token in ("mcp", "tool", "server")): code = "COMMAND_CODE_TOOL_BOUNDARY_FAILURE"
+            elif any(token in message for token in ("turn", "max turns")): code = "COMMAND_CODE_TURN_LIMIT"
             else: code = "COMMAND_CODE_PROVIDER_FAILURE"
             raise CommandCodeError(code)
         if observed != {model}: raise CommandCodeError("COMMAND_CODE_MODEL_MISMATCH")

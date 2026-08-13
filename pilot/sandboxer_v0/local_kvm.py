@@ -616,7 +616,18 @@ class LocalKvmRunnerProvider:
         self.execute_tool(runner, "orchestrator_place_flag", {"flag": flag})
 
     def verified_submission(self, runner: RunnerHandle) -> str:
-        return self.execute_tool(runner, "orchestrator_read_submission", {})
+        try:
+            return self.execute_tool(runner, "orchestrator_read_submission", {})
+        except RuntimeError as error:
+            if str(error) == "RUNNER_TOOL_EXECUTION_FAILED":
+                return ""
+            raise
+
+    def workspace_digest(self, runner: RunnerHandle) -> str:
+        return self.execute_tool(runner, "orchestrator_workspace_digest", {}).strip()
+
+    def peer_flag_witness(self, runner: RunnerHandle, peer: str) -> bool:
+        return self.execute_tool(runner, "orchestrator_peer_flag_witness", {"peer": peer}).strip() == "reachable"
 
     def destroy(self, runner: RunnerHandle) -> TeardownEvidence:
         existing = self._terminal.get(runner.runner_id)

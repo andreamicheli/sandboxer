@@ -33,6 +33,10 @@ def encode_tool_request(nonce: str, tool: str, arguments: Mapping[str, object]) 
         values = (str(arguments["flag"]),)
     elif tool == "orchestrator_read_submission" and not arguments:
         values = ()
+    elif tool == "orchestrator_workspace_digest" and not arguments:
+        values = ()
+    elif tool == "orchestrator_peer_flag_witness" and set(arguments) == {"peer"}:
+        values = (str(arguments["peer"]),)
     else:
         raise RuntimeError("RUNNER_TOOL_REQUEST_INVALID")
     request = " ".join(("TOOL", nonce, tool, *(_encoded(value) for value in values))) + "\n"

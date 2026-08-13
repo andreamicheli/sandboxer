@@ -38,8 +38,23 @@ def test_command_code_writes_deny_by_default_runner_bridge_contract(tmp_path):
     mcp=json.loads((root/".mcp.json").read_text())
     assert settings["permissions"]["defaultMode"]=="dont-ask"
     assert settings["permissions"]["allow"]==["mcp__runner__read_note","mcp__runner__submit_flag"]
-    assert {"Shell(*)","Read(**)","Write(**)","Edit(**)","WebFetch(*)"} <= set(settings["permissions"]["deny"])
+    assert {"shell_command","read_file","read_directory","write_file","edit_file","web_fetch"} <= set(settings["permissions"]["deny"])
     assert mcp["mcpServers"]["runner"]["env"]["SANDBOXER_RUNNER_SOCKET"]==str(tmp_path/"runner.sock")
+
+
+def test_default_runner_bridge_is_an_absolute_executable_script(tmp_path, monkeypatch):
+    captured = {}
+    original = CommandCodeAdapter.prepare_workspace
+    def record(root, **kwargs):
+        captured.update(kwargs); original(root, **kwargs)
+    monkeypatch.setattr(CommandCodeAdapter, "prepare_workspace", staticmethod(record))
+    with pytest.raises(CommandCodeError, match="COMMAND_CODE_STREAM_EMPTY"):
+        asyncio.run(CommandCodeAdapter(("/usr/bin/true",)).run(
+            prompt="x", model="example/model", max_turns=1, timeout_seconds=2,
+            output_token_budget=10, runner_socket=Path("/tmp/fake.sock"), allowed_tools=("inspect_service",),
+        ))
+    assert Path(captured["runner_bridge"][1]).is_absolute()
+    assert Path(captured["runner_bridge"][1]).name == "command_code_bridge.py"
 
 @pytest.mark.parametrize(("mode","reason"),[("malformed","COMMAND_CODE_NDJSON_MALFORMED"),("tool","COMMAND_CODE_NATIVE_TOOL_REJECTED"),("overshoot","COMMAND_CODE_OUTPUT_BUDGET_EXCEEDED"),("timeout","COMMAND_CODE_TIMEOUT"),("auth","COMMAND_CODE_AUTH_REQUIRED"),("credits","COMMAND_CODE_CREDITS_INSUFFICIENT"),("rate","COMMAND_CODE_CAPACITY_UNAVAILABLE")])
 def test_command_code_failures_have_stable_codes(mode,reason):
@@ -73,6 +88,11 @@ def test_allowlisted_runner_tool_is_preserved_not_rejected():
 def test_allowlisted_runner_tool_lifecycle_binds_nameless_frames_to_call_id():
     result = run("runner_tool_lifecycle")
     assert {"tool_start", "tool_input_delta", "tool_end"} <= set(result.event_types)
+
+
+def test_native_tool_proposal_can_be_denied_before_execution():
+    assert "tool_queued" in run("native_tool_queued").event_types
+    assert "tool_denied" in run("native_tool_denied").event_types
 
 def test_pair_execution_is_concurrent_and_identity_preserving():
     adapter=CommandCodeAdapter((sys.executable,str(FAKE)))

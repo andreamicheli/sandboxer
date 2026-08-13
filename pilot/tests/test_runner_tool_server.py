@@ -90,3 +90,22 @@ def test_runner_tool_server_rejects_unknown_fields_and_unsafe_paths(tmp_path):
     unknown, traversal = asyncio.run(exercise())
     assert unknown["content"][0]["text"] == "RUNNER_TOOL_DENIED"
     assert traversal["content"][0]["text"] == "RUNNER_TOOL_ARGUMENTS_INVALID"
+
+
+def test_runner_tool_execution_failure_is_returned_as_a_tool_error(tmp_path):
+    socket_path = tmp_path / "competitor.sock"
+    async def exercise():
+        server = RunnerToolServer(
+            socket_path, competitor="model", phase=lambda: "red",
+            execute=lambda tool, arguments: (_ for _ in ()).throw(RuntimeError("private detail")),
+            audit=lambda decision: None,
+        )
+        await server.start()
+        try:
+            return await asyncio.to_thread(
+                _call, socket_path, {"tool": "run_service_command", "arguments": {"command": "false"}}
+            )
+        finally:
+            await server.close()
+    response = asyncio.run(exercise())
+    assert response == {"content": [{"type": "text", "text": "RUNNER_TOOL_EXECUTION_FAILED"}], "isError": True}

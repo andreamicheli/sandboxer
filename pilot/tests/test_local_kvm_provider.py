@@ -148,7 +148,14 @@ class RecordingKvmHost:
             return f"PHASE_RED_OK nonce={nonce}\n"
         if payload.startswith("TOOL "):
             nonce = payload.split()[1]
-            output = b"SANDBOXER-example" if "orchestrator_read_submission" in payload else b"service-ok"
+            if "orchestrator_read_submission" in payload:
+                output = b"SANDBOXER-example"
+            elif "orchestrator_workspace_digest" in payload:
+                output = b"a" * 64
+            elif "orchestrator_peer_flag_witness" in payload:
+                output = b"reachable"
+            else:
+                output = b"service-ok"
             encoded = __import__("base64").b64encode(output).decode()
             return f"TOOL_RESULT nonce={nonce} status=0 output={encoded}\n"
         runner_number = len(self.control_requests)
@@ -303,6 +310,8 @@ def test_local_kvm_provider_owns_flag_injection_and_submission_verification(tmp_
     try:
         provider.place_synthetic_flag(runners[0], "SANDBOXER-example")
         assert provider.verified_submission(runners[1]) == "SANDBOXER-example"
+        assert provider.workspace_digest(runners[0]) == "a" * 64
+        assert provider.peer_flag_witness(runners[0], "10.77.0.12") is True
         assert any("orchestrator_place_flag" in request for request in host.control_requests)
         assert any("orchestrator_read_submission" in request for request in host.control_requests)
     finally:

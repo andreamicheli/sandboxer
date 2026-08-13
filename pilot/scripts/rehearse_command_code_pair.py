@@ -10,6 +10,7 @@ import json
 import os
 import pwd
 import sys
+import tempfile
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -57,6 +58,9 @@ async def rehearse(arguments: argparse.Namespace) -> dict[str, object]:
     runners = ()
     servers: list[RunnerToolServer] = []
     phase = "blue"
+    socket_root = Path(tempfile.mkdtemp(prefix=f"sandboxer-{arguments.match_id}-", dir="/var/tmp"))
+    os.chown(socket_root, command_account.pw_uid, command_account.pw_gid)
+    os.chmod(socket_root, 0o700)
 
     def emit(kind: str, **fields: object) -> None:
         telemetry.write(json.dumps({"kind": kind, "monotonic_ns": time.monotonic_ns(), **fields}, sort_keys=True) + "\n")
@@ -76,7 +80,8 @@ async def rehearse(arguments: argparse.Namespace) -> dict[str, object]:
                     if isinstance(event.get(key), (str, int)):
                         safe[key] = event[key]
                 tool_name = event.get("toolName")
-                if isinstance(tool_name, str) and not tool_name.startswith("mcp__runner__"):
+                if isinstance(tool_name, str) and not tool_name.startswith("mcp__runner__") and event.get("type") not in {"tool_queued", "tool_denied"}:
+                    emit("provider_tool_rejected", model=model, event_type=event.get("type"), tool_name=tool_name)
                     raise CommandCodeError("COMMAND_CODE_NATIVE_TOOL_REJECTED")
             emit("provider_frame", **safe)
         return monitor
@@ -88,7 +93,7 @@ async def rehearse(arguments: argparse.Namespace) -> dict[str, object]:
             raise RuntimeError("RUNNER_PREFLIGHT_FAILED")
         emit("pair_started", models=MODELS, phase=phase, publication_enabled=False)
         for model, runner in zip(MODELS, runners):
-            socket_path = arguments.evidence_dir / f"{arguments.match_id}-{runner.name}.sock"
+            socket_path = socket_root / f"{runner.name}.sock"
 
             def execute(tool: str, values: dict[str, object], *, selected=runner) -> str:
                 if tool == "finish_phase":
@@ -147,6 +152,7 @@ async def rehearse(arguments: argparse.Namespace) -> dict[str, object]:
         teardown = [provider.destroy(runner) for runner in runners]
         emit("teardown", states=[item.state.value for item in teardown])
         telemetry.close()
+        socket_root.rmdir()
 
 
 def main(argv: list[str] | None = None) -> int:

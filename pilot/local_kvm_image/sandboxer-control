@@ -164,6 +164,24 @@ runner_tool() {
                 /bin/busybox head -c 4096 /workspace/submission.flag >"$tool_file" 2>/dev/null || tool_status=1
             fi
             ;;
+        orchestrator_workspace_digest)
+            test "$#" -eq 0 || tool_status=1
+            if test "$tool_status" -eq 0; then
+                (cd /workspace/notes && find . -type f -maxdepth 2 -print0 | sort -z | xargs -0 sha256sum) 2>/dev/null | sha256sum | cut -d' ' -f1 >"$tool_file" || tool_status=1
+            fi
+            ;;
+        orchestrator_peer_flag_witness)
+            test "$#" -eq 1 || tool_status=1
+            if test "$tool_status" -eq 0; then
+                tool_peer="$(decode_argument "$1")" || tool_status=1
+                case "$tool_peer" in 10.77.0.11|10.77.0.12) ;; *) tool_status=1;; esac
+            fi
+            if test "$tool_status" -eq 0 && /bin/busybox timeout -s KILL 3 /bin/busybox wget -q -T 2 -O - "http://$tool_peer:8080/flag.txt" 2>/dev/null | /bin/busybox grep -q '^SANDBOXER-'; then
+                printf 'reachable\n' >"$tool_file"
+            else
+                printf 'unreachable\n' >"$tool_file"
+            fi
+            ;;
         *) tool_status=1;;
     esac
     if test ! -s "$tool_file"; then printf 'runner tool failed\n' >"$tool_file"; fi
