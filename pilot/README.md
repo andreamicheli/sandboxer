@@ -9,7 +9,10 @@ Inside that VM, two bounded containers begin on distinct private networks.
 Inspect calls Groq from the host orchestrator; model credentials and provider
 network access are never passed into either runner.
 
-The pilot compares two Groq-hosted models under the same Inspect harness.
+The current pilot compares two Groq-hosted models under the same Inspect
+harness. The next provider target is Command Code Go; see
+[`../docs/provider-map.md`](../docs/provider-map.md). Command Code requires a
+headless CLI adapter before it can replace the current Groq path.
 Provider calls are turn-based to respect pilot-tier rate limits; the runners
 remain isolated and cannot observe one another during the blue phase.
 

@@ -25,15 +25,15 @@ L'unità primaria è un Match tra due Competitor dichiarati. Un Competitor inclu
 ### Match protocol
 
 1. L'Orchestrator crea due Runner usa-e-getta su reti private separate.
-2. In Blue Phase ogni Competitor osserva e modifica soltanto il proprio toy service entro un budget dichiarato di turni, token e tempo.
+2. In Blue Phase ogni Competitor osserva e modifica soltanto il proprio toy service entro budget dichiarati e simmetrici di output token, turni e tool; il tempo è soltanto un backstop operativo.
 3. L'Orchestrator inserisce flag sintetiche effimere e abilita una rete interna condivisa senza egress diretto.
 4. In Red Phase ogni Competitor può usare soltanto i tool ammessi per cercare la flag avversaria, inviarla all'Orchestrator e preservare il proprio servizio.
 5. L'Orchestrator verifica submission, salute, limiti, errori e terminazione; produce punteggio e Match Telemetry.
 6. Replay, Result Report e Broadcast Layer derivano dallo stesso artefatto temporale.
 
-### Current scoring sketch
+### Canonical scoring
 
-Il pilot assegna valore alla cattura della flag, alla disponibilità del proprio servizio e alla difesa della propria flag. La formula corrente è utile per lo show ma non è ancora una metodologia definitiva: simultaneità, pareggi, time-to-capture, robustezza su più seed e penalità per errori o comportamenti invalidi restano decisioni aperte nella mappa Wayfinder.
+La v0 usa un ordine lessicografico e produce sempre un solo vincitore: una sola cattura vince; se entrambi catturano, decide prima la salute funzionale finale e poi l'ordine autorevole delle Submission; se nessuno cattura, decide la disponibilità funzionale. Un pareggio esatto genera un nuovo Match seeded e role-swapped. Un confronto è un best-of-3, first-to-two.
 
 ### Evidence to retain
 
@@ -74,7 +74,7 @@ Il pilot assegna valore alla cattura della flag, alla disponibilità del proprio
 
 - **Repository:** `andreamicheli/sandboxer` riparte dal pilot reale. Il vecchio prototipo sintetico `cyberrumble` è deprecato e rimane soltanto nella storia Git; gli identificatori ereditati dal pilot vengono migrati in commit separati e verificabili.
 - **Harness:** Inspect come implementazione iniziale dietro un confine sostituibile.
-- **Provider:** Groq per il pilot; configurazione provider-agnostic per confronti futuri.
+- **Provider:** Groq per il pilot corrente; Command Code Go come provider iniziale della prossima iterazione, con adapter CLI headless ancora da implementare. La configurazione resta provider-agnostic per i confronti futuri.
 - **Runtime:** Orchestrator fidato più due Runner isolati e usa-e-getta.
 - **Telemetry:** JSONL/event schema versionato come fonte primaria; artefatti Inspect mantenuti come evidenza complementare.
 - **Content pipeline:** telemetry → event selection → transcript/commentary draft → timestamp alignment → TTS → overlays → video render.
@@ -98,6 +98,6 @@ Screen recording dei terminali, telecronaca sincronizzata, callout visuali compr
 
 Il prototipo sintetico originariamente pubblicato come `cyberrumble` non è una base architetturale per Sandboxer. La sua implementazione, viewer e scoring deterministico restano consultabili nella storia Git soltanto come traccia del percorso; non devono essere mantenuti, estesi o citati come metodologia corrente.
 
-## Open decision areas
+## Decision blueprint
 
-Le questioni ancora aperte sono mantenute nella mappa Wayfinder su GitHub: claim preciso della v0, protocollo canonico, scoring, fairness, isolamento remoto, adapter Inspect/provider, schema telemetry, pipeline editoriale, paper, sito risultati e release gates.
+Le decisioni consolidate su task, protocollo, scoring, evidenza, Match Auditor, orchestrazione, report, video, paper, release gate e provider sono raccolte in [`docs/wayfinder-blueprint.md`](wayfinder-blueprint.md). La mappa Wayfinder su GitHub mantiene aperte soltanto le scelte che richiedono discussione attiva.

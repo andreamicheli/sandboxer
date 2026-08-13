@@ -10,10 +10,12 @@ This repository is intentionally built from the **real-model pilot**. The earlie
 
 ## Current baseline
 
-- [`pilot/`](pilot/) contains the Inspect-based local pilot, isolated runners, preflight safety checks, tests, and Groq model adapter.
+- [`pilot/`](pilot/) contains the Inspect-based local pilot, isolated runners, preflight safety checks, tests, and provider adapters. The next provider target is documented in [`docs/provider-map.md`](docs/provider-map.md); the current live task remains Groq-backed until the Command Code adapter is complete.
 - [`docs/project-outline.md`](docs/project-outline.md) records the methodology sketch, safety boundary, limitations, technical direction, paper outline, and results-site direction.
 - [`CONTEXT.md`](CONTEXT.md) defines the shared language used by code, documentation, telemetry, and content.
 - GitHub Issues contain the Wayfinder map and the open decisions leading to Sandboxer v0.
+- [`docs/wayfinder-tree.html`](docs/wayfinder-tree.html) is a mobile-first, live GitHub view of the decision and delivery tree; open it from a local web server for free pan and zoom.
+- `wayfinder_server.py` provides the live backend: it polls GitHub with conditional requests and pushes changes to the tree over SSE. Start it with `python3 wayfinder_server.py` and open `http://127.0.0.1:4173/`.
 
 The current goal is a compelling, transparent **showcase evaluation**, not a mature scientific benchmark. Claims must remain proportional to the evidence, and editorial outputs must stay traceable to timestamped match telemetry.
 

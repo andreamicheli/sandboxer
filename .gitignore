@@ -1,4 +1,7 @@
 .DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
 
 # The already-hosted match report currently keeps its own repository.
 /match-report-site/

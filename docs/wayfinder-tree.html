@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07111f">
+  <title>Sandboxer Wayfinder Tree</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #07111f;
+      --panel: rgba(10, 24, 42, .9);
+      --panel-strong: #0c1d33;
+      --line: #28435e;
+      --text: #e9f3ff;
+      --muted: #91a8c0;
+      --cyan: #59d9f7;
+      --green: #63dfa3;
+      --amber: #f4c96b;
+      --red: #ff8d8d;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); }
+    body { color: var(--text); font: 15px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, sans-serif; overflow: hidden; }
+    button, input { font: inherit; }
+    .app { height: 100dvh; display: grid; grid-template-rows: auto 1fr; }
+    header { position: relative; z-index: 5; display: flex; align-items: center; gap: 12px; padding: max(14px, env(safe-area-inset-top)) 16px 14px; border-bottom: 1px solid rgba(145,168,192,.18); background: rgba(7,17,31,.93); backdrop-filter: blur(16px); }
+    .brand { min-width: 0; flex: 1; }
+    .eyebrow { color: var(--cyan); font-size: 11px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+    h1 { margin: 2px 0 0; font-size: clamp(18px, 4vw, 27px); line-height: 1.1; letter-spacing: -.03em; }
+    .actions { display: flex; gap: 7px; }
+    button { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; color: var(--text); background: #102844; cursor: pointer; }
+    button:hover, button:focus-visible { border-color: var(--cyan); outline: none; }
+    .icon-button { width: 38px; height: 38px; padding: 0; font-size: 19px; }
+    #analyze { border-color: rgba(99,223,163,.55); color: var(--green); }
+    main { position: relative; min-height: 0; }
+    #stage { position: absolute; inset: 0; touch-action: none; cursor: grab; background: radial-gradient(circle at 50% 18%, #102944 0, transparent 38%), linear-gradient(135deg, #07111f, #08182a 60%, #07111f); }
+    #stage.dragging { cursor: grabbing; }
+    #scene { width: 100%; height: 100%; user-select: none; }
+    .grid { opacity: .25; }
+    .edge { fill: none; stroke: #47708d; stroke-width: 2; stroke-linecap: round; }
+    .edge.map-edge { stroke: var(--cyan); stroke-width: 2.6; }
+    .node { cursor: pointer; }
+    .node rect { fill: var(--panel-strong); stroke: #38556f; stroke-width: 1.5; filter: drop-shadow(0 8px 12px rgba(0,0,0,.25)); }
+    .node:hover rect, .node.selected rect { stroke: var(--cyan); stroke-width: 2.5; }
+    .node.map rect { fill: #102a40; stroke: var(--cyan); }
+    .node.operation rect { fill: #142a2b; stroke: var(--green); }
+    .node.open rect { stroke: var(--amber); }
+    .node .title { fill: var(--text); font-size: 14px; font-weight: 700; }
+    .node .meta { fill: var(--muted); font-size: 11px; }
+    .node .badge { font-size: 10px; font-weight: 800; letter-spacing: .06em; }
+    .node .badge.open { fill: var(--amber); }
+    .node .badge.closed { fill: var(--green); }
+    .node .badge.map { fill: var(--cyan); }
+    .node .badge.operation { fill: var(--green); }
+    .hud { position: absolute; z-index: 2; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; pointer-events: none; }
+    .top-hud { top: 14px; left: 14px; right: 14px; }
+    .pill { padding: 6px 9px; border: 1px solid rgba(145,168,192,.22); border-radius: 999px; background: rgba(8,22,38,.82); color: var(--muted); font-size: 12px; backdrop-filter: blur(10px); }
+    .pill strong { color: var(--text); }
+    .live { color: var(--green); }
+    .live.stale { color: var(--amber); }
+    .controls { position: absolute; z-index: 3; right: 14px; bottom: 14px; display: flex; gap: 7px; flex-direction: column; }
+    .controls button { width: 42px; height: 42px; padding: 0; font-size: 20px; box-shadow: var(--shadow); }
+    #detail { position: absolute; z-index: 4; left: 14px; right: 14px; bottom: 14px; max-height: min(42dvh, 360px); overflow: auto; padding: 16px; border: 1px solid rgba(89,217,247,.3); border-radius: 14px; background: rgba(8,22,38,.96); box-shadow: var(--shadow); transform: translateY(calc(100% + 20px)); transition: transform .2s ease; }
+    #detail.visible { transform: translateY(0); }
+    #detail h2 { margin: 0 28px 4px 0; font-size: 17px; }
+    #detail p { margin: 8px 0; color: var(--muted); }
+    #detail a { color: var(--cyan); }
+    #analysis { position: absolute; z-index: 4; top: 58px; left: 14px; right: 14px; max-height: min(52dvh, 470px); overflow: auto; padding: 14px; border: 1px solid rgba(99,223,163,.35); border-radius: 14px; background: rgba(8,22,38,.96); box-shadow: var(--shadow); display: none; }
+    #analysis.visible { display: block; }
+    #analysis h2 { margin: 0 0 8px; font-size: 16px; }
+    #analysis-message { color: var(--muted); font-size: 12px; }
+    #analysis-result { margin-top: 12px; white-space: pre-wrap; color: var(--text); }
+    .progress { height: 8px; margin-top: 10px; overflow: hidden; border-radius: 99px; background: #1a3046; }
+    #analysis-progress { height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--cyan), var(--green)); transition: width .25s ease; }
+    #analysis-percent { float: right; color: var(--green); font-size: 12px; }
+    .close { position: absolute; top: 8px; right: 8px; border: 0; background: transparent; font-size: 20px; }
+    .legend { position: absolute; left: 14px; bottom: 14px; display: none; gap: 12px; color: var(--muted); font-size: 11px; }
+    .dot { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 50%; background: var(--green); }
+    .dot.open { background: var(--amber); }
+    .dot.map { background: var(--cyan); }
+    .dot.operation { background: var(--green); }
+    @media (min-width: 700px) {
+      header { padding-left: 24px; padding-right: 24px; }
+      .top-hud { top: 20px; left: 24px; }
+      .controls { right: 24px; bottom: 24px; }
+      #detail { left: 24px; right: auto; bottom: 24px; width: min(390px, calc(100vw - 100px)); }
+      .legend { display: flex; left: 24px; bottom: 28px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="brand">
+        <div class="eyebrow">Sandboxer / Wayfinder</div>
+        <h1>Albero decisionale + operativo</h1>
+      </div>
+      <div class="actions"><button id="analyze" title="Analizza lo stato con Gemini 3.6">✦ <span class="refresh-label">Analizza</span></button><button id="refresh" title="Aggiorna da GitHub">↻ <span class="refresh-label">Aggiorna</span></button></div>
+    </header>
+    <main>
+      <div id="stage" aria-label="Albero Wayfinder: trascina per spostare, usa la rotella o i pulsanti per zoomare">
+        <svg id="scene" role="img" aria-label="Albero decisionale e operativo Sandboxer" xmlns="http://www.w3.org/2000/svg">
+          <defs><pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M 32 0 L 0 0 0 32" fill="none" stroke="#5b7b95" stroke-width=".5"/></pattern></defs>
+          <rect class="grid" width="100%" height="100%" fill="url(#grid)"/>
+          <g id="world"><g id="edges"></g><g id="nodes"></g></g>
+        </svg>
+      </div>
+      <div class="hud top-hud"><span class="pill"><strong id="count">Caricamento…</strong></span><span class="pill live" id="connection">● connessione GitHub</span></div>
+      <section id="analysis" aria-live="polite"><h2>Analisi dello stato <span id="analysis-percent">0%</span></h2><div id="analysis-message">Pronto</div><div class="progress"><div id="analysis-progress"></div></div><div id="analysis-result"></div></section>
+      <div class="controls"><button id="plus" aria-label="Zoom avanti">+</button><button id="minus" aria-label="Zoom indietro">−</button><button id="fit" aria-label="Adatta l'albero">⌗</button></div>
+      <div class="legend"><span><i class="dot map"></i>mappa</span><span><i class="dot operation"></i>operativo</span><span><i class="dot"></i>chiuso</span><span><i class="dot open"></i>aperto</span><span>clicca un nodo per i dettagli</span></div>
+      <aside id="detail"><button class="close" aria-label="Chiudi">×</button><div id="detail-content"></div></aside>
+    </main>
+  </div>
+  <script>
+    const REPO = 'andreamicheli/sandboxer';
+    const FALLBACK = [
+      {number:1,title:'Map Sandboxer v0 from real pilot to publishable showcase',state:'closed',labels:['wayfinder:map'],body:'Mappa decision-complete. Nessuna decisione ancora specificata.',html_url:'https://github.com/andreamicheli/sandboxer/issues/1'},
+      {number:18,title:'Map provider and model selection for the next Sandboxer pilot',state:'closed',labels:['wayfinder:map'],body:'Provider candidate: Command Code Go. Prima coppia prevista: DeepSeek V4 Pro vs Xiaomi MiMo V2.5 Pro.',html_url:'https://github.com/andreamicheli/sandboxer/issues/18'},
+      {number:19,title:'Validate Command Code Go as a Sandboxer provider boundary',state:'closed',labels:['wayfinder:research'],body:'Part of #18 and #1',html_url:'https://github.com/andreamicheli/sandboxer/issues/19'},
+      {number:20,title:'Choose the next pilot model roster and Match pairings',state:'closed',labels:['wayfinder:grilling'],body:'Part of #18 and #1',html_url:'https://github.com/andreamicheli/sandboxer/issues/20'},
+      {number:21,title:'Prototype the Command Code CLI adapter safely',state:'closed',labels:['wayfinder:prototype'],body:'Part of #18 and #1',html_url:'https://github.com/andreamicheli/sandboxer/issues/21'},
+      {number:22,title:'Define catalog, entitlement, and provider preflight',state:'closed',labels:['wayfinder:task'],body:'Part of #18 and #1',html_url:'https://github.com/andreamicheli/sandboxer/issues/22'}
+    ];
+    const stage = document.querySelector('#stage'), scene = document.querySelector('#scene'), world = document.querySelector('#world');
+    const edges = document.querySelector('#edges'), nodes = document.querySelector('#nodes'), detail = document.querySelector('#detail'), detailContent = document.querySelector('#detail-content');
+    let issues = [], view = {x:0,y:0,scale:1}, drag = null, pinch = null, pointers = new Map(), selected = null;
+    const esc = value => String(value || '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+    const labelNames = issue => (issue.labels || []).map(label => typeof label === 'string' ? label : label.name);
+    // Wayfinder links appear both as "Part of #N" and as Markdown links under
+    // a "Parent" heading. Keep the tree relationship live from either form.
+    const parentOf = issue => {
+      if (issue.number === 1) return null;
+      const body = String(issue.body || '');
+      const match = body.match(/(?:Part of|Parent)[\s\S]{0,220}?(?:issues\/|#)(\d+)/i);
+      return match ? Number(match[1]) : 1;
+    };
+    const kindOf = issue => labelNames(issue).includes('wayfinder:map') ? 'map' : issue.number >= 26 ? 'operation' : 'ticket';
+    function normalize(raw) {
+      return raw
+        .filter(item => !item.pull_request && (
+          item.number === 1 ||
+          item.number === 18 ||
+          (item.number >= 2 && item.number <= 25) ||
+          (item.number >= 26 && item.number <= 41) ||
+          labelNames(item).some(x => x.startsWith('wayfinder:'))
+        ))
+        .map(item => ({...item, labels: labelNames(item)}));
+    }
+    function textLines(title, width) { const words = title.split(/\s+/), lines=[]; let line=''; words.forEach(word => { if ((line+' '+word).trim().length > Math.floor(width/8.2) && line) { lines.push(line); line=word; } else line=(line+' '+word).trim(); }); if (line) lines.push(line); return lines.slice(0,3); }
+    function layout() {
+      const byParent = new Map(); issues.forEach(i => { const p = parentOf(i); if (!byParent.has(p)) byParent.set(p, []); byParent.get(p).push(i); });
+      const levels = new Map([[1,0]]), queue=[1]; while(queue.length) { const p=queue.shift(); (byParent.get(p)||[]).forEach(child => { if(!levels.has(child.number)){levels.set(child.number,(levels.get(p)||0)+1);queue.push(child.number);} }); }
+      const maxLevel = Math.max(...levels.values(), 0), gapX = 270, gapY = 122, positions = new Map();
+      for(let level=0; level<=maxLevel; level++){ const list=issues.filter(i=>levels.get(i.number)===level); list.forEach((issue,index)=>positions.set(issue.number,{x: level*gapX, y:(index-(list.length-1)/2)*gapY})); }
+      return {byParent,positions,width:(maxLevel+1)*gapX};
+    }
+    function render() {
+      if(!issues.length)return; const {byParent,positions}=layout(); edges.innerHTML=''; nodes.innerHTML='';
+      issues.forEach(issue=>{ const p=parentOf(issue), a=positions.get(p), b=positions.get(issue.number); if(!a||!b||p===null)return; const curve=`M ${a.x+170} ${a.y} C ${a.x+215} ${a.y}, ${b.x-55} ${b.y}, ${b.x} ${b.y}`; edges.insertAdjacentHTML('beforeend',`<path class="edge ${kindOf(issue)==='map'?'map-edge':''}" d="${curve}"/>`); });
+      issues.forEach(issue=>{ const p=positions.get(issue.number), state=issue.state==='open'?'open':'closed', kind=kindOf(issue), lines=textLines(issue.title,170); const title=lines.map((line,i)=>`<tspan x="16" dy="${i?17:0}">${esc(line)}</tspan>`).join(''); const label=kind==='map'?'MAPPA':kind==='operation'?'OPERATIVO':'DECISIONE'; nodes.insertAdjacentHTML('beforeend',`<g class="node ${state} ${kind}" data-number="${issue.number}" transform="translate(${p.x},${p.y-40})"><rect width="190" height="80" rx="10"/><text class="badge ${kind}" x="16" y="18">${label} · #${issue.number}</text><text class="badge ${state}" x="174" y="18" text-anchor="end">${state==='open'?'APERTO':'CHIUSO'}</text><text class="title" x="16" y="38">${title}</text></g>`); });
+      nodes.querySelectorAll('.node').forEach(node=>node.addEventListener('click',e=>{e.stopPropagation(); showDetail(Number(node.dataset.number));})); fit();
+    }
+    function applyView(){ world.setAttribute('transform',`translate(${view.x} ${view.y}) scale(${view.scale})`); }
+    function fit(){ const box=scene.getBoundingClientRect(), {positions}=layout(); const xs=[...positions.values()].map(p=>p.x), ys=[...positions.values()].map(p=>p.y); const minX=Math.min(...xs)-20,maxX=Math.max(...xs)+210,minY=Math.min(...ys)-60,maxY=Math.max(...ys)+60; const scale=Math.min((box.width-40)/(maxX-minX),(box.height-120)/(maxY-minY),1); view={scale:Math.max(.35,scale),x:(box.width-(maxX+minX)*scale)/2,y:(box.height-(maxY+minY)*scale)/2+20}; applyView(); }
+    function zoom(factor, cx=stage.clientWidth/2, cy=stage.clientHeight/2){ const next=Math.min(2.8,Math.max(.22,view.scale*factor)); view.x=cx-(cx-view.x)*(next/view.scale); view.y=cy-(cy-view.y)*(next/view.scale); view.scale=next; applyView(); }
+    function showDetail(number){ const issue=issues.find(i=>i.number===number); if(!issue)return; selected=number; detailContent.innerHTML=`<h2>#${issue.number} — ${esc(issue.title)}</h2><p>${esc((issue.body||'').replace(/[#*_]/g,'').slice(0,360))}</p><a href="${esc(issue.html_url)}" target="_blank" rel="noreferrer">Apri issue su GitHub ↗</a>`; detail.classList.add('visible'); nodes.querySelectorAll('.node').forEach(n=>n.classList.toggle('selected',Number(n.dataset.number)===number)); }
+    function renderPayload(payload, live=true){ issues=payload.issues?.length ? payload.issues : normalize(FALLBACK); const open=issues.filter(i=>i.state==='open').length, closed=issues.length-open; document.querySelector('#count').textContent=`${issues.length} nodi · ${open} aperti · ${closed} chiusi`; const connection=document.querySelector('#connection'); connection.textContent=live ? '● live · backend GitHub' : '● fallback · backend non raggiungibile'; connection.className=live ? 'pill live' : 'pill live stale'; render(); }
+    async function load(){ try { const response=await fetch('/api/wayfinder',{headers:{Accept:'application/json'}}); if(!response.ok)throw new Error(response.status); renderPayload(await response.json()); } catch(error) { renderPayload({issues:normalize(FALLBACK)},false); } }
+    function updateAnalysis(payload){ const panel=document.querySelector('#analysis'), percent=document.querySelector('#analysis-percent'), bar=document.querySelector('#analysis-progress'); panel.classList.add('visible'); const progress=Math.max(0,Math.min(100,Number(payload.progress)||0)); percent.textContent=`${progress}%`; bar.style.width=`${progress}%`; document.querySelector('#analysis-message').textContent=payload.message||''; document.querySelector('#analysis-result').textContent=payload.result||payload.error||''; }
+    async function pollAnalysis(){ try { const response=await fetch('/api/analyze/status'); const payload=await response.json(); if(payload.status!=='idle')updateAnalysis(payload); if(payload.status==='running'||payload.status==='queued')setTimeout(pollAnalysis,1000); } catch(error) { updateAnalysis({progress:100,message:'Backend non raggiungibile',error:String(error)}); } }
+    document.querySelector('#analyze').onclick=async()=>{ updateAnalysis({progress:2,message:'Invio richiesta a Gemini 3.6…'}); try { const response=await fetch('/api/analyze',{method:'POST'}); updateAnalysis(await response.json()); pollAnalysis(); } catch(error) { updateAnalysis({progress:100,message:'Avvio non riuscito',error:String(error)}); } };
+    function pointerPair(){ return [...pointers.values()].slice(0,2); }
+    function beginPinch(){ const [a,b]=pointerPair(); if(!a||!b)return; const r=stage.getBoundingClientRect(), dx=b.x-a.x, dy=b.y-a.y; pinch={distance:Math.hypot(dx,dy), midpoint:{x:(a.x+b.x)/2-r.left,y:(a.y+b.y)/2-r.top},view:{...view}}; drag=null; }
+    stage.addEventListener('pointerdown',e=>{ if(e.target.closest('.node'))return; pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); stage.setPointerCapture(e.pointerId); if(pointers.size===2)beginPinch(); else if(pointers.size===1)drag={x:e.clientX,y:e.clientY,ox:view.x,oy:view.y}; stage.classList.add('dragging'); });
+    stage.addEventListener('pointermove',e=>{ if(!pointers.has(e.pointerId))return; pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); if(pointers.size>=2&&pinch){ const [a,b]=pointerPair(), r=stage.getBoundingClientRect(), dx=b.x-a.x, dy=b.y-a.y, distance=Math.max(1,Math.hypot(dx,dy)), next=Math.min(2.8,Math.max(.22,pinch.view.scale*distance/pinch.distance)), midpoint={x:(a.x+b.x)/2-r.left,y:(a.y+b.y)/2-r.top}, ratio=next/pinch.view.scale; view.scale=next; view.x=midpoint.x-(pinch.midpoint.x-pinch.view.x)*ratio; view.y=midpoint.y-(pinch.midpoint.y-pinch.view.y)*ratio; applyView(); } else if(drag){ view.x=drag.ox+e.clientX-drag.x;view.y=drag.oy+e.clientY-drag.y;applyView(); } });
+    function endPointer(e){ pointers.delete(e.pointerId); if(pointers.size<2)pinch=null; if(pointers.size===1){ const [p]=pointerPair(); drag={x:p.x,y:p.y,ox:view.x,oy:view.y}; } else if(!pointers.size){drag=null;stage.classList.remove('dragging');} }
+    stage.addEventListener('pointerup',endPointer); stage.addEventListener('pointercancel',endPointer); stage.addEventListener('wheel',e=>{e.preventDefault();const r=stage.getBoundingClientRect();zoom(e.deltaY<0?1.12:.89,e.clientX-r.left,e.clientY-r.top);},{passive:false});
+    stage.addEventListener('click',e=>{if(e.target===stage||e.target===scene)detail.classList.remove('visible');});
+    document.querySelector('#plus').onclick=()=>zoom(1.2); document.querySelector('#minus').onclick=()=>zoom(.83); document.querySelector('#fit').onclick=fit; document.querySelector('#refresh').onclick=load; document.querySelector('.close').onclick=()=>detail.classList.remove('visible'); window.addEventListener('resize',fit);
+    load(); pollAnalysis();
+    if (window.EventSource) {
+      const events = new EventSource('/events');
+      events.onmessage = event => renderPayload(JSON.parse(event.data));
+      events.onerror = () => { document.querySelector('#connection').textContent='● riconnessione…'; document.querySelector('#connection').className='pill live stale'; };
+    }
+  </script>
+</body>
+</html>
