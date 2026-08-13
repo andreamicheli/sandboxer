@@ -1,0 +1,11 @@
+{
+  "schema": "sandboxer.model-art.v1",
+  "assets": [
+    {"model_id": "gpt-5.6-luna", "file": "gpt-5.6-luna.jpg", "title": "The Lunar Oracle", "accent": "#dedbd2"},
+    {"model_id": "meta-muse-spark-1.2-contributor", "file": "meta-muse-spark-1.2-contributor.jpg", "title": "The Electric Muse", "accent": "#58a9ff"},
+    {"model_id": "deepseek-v4-pro", "file": "deepseek-v4-pro.jpg", "title": "The Abyssal Sovereign", "accent": "#315cff"},
+    {"model_id": "deepseek-v4-flash", "file": "deepseek-v4-flash.jpg", "title": "The Abyssal Striker", "accent": "#2876ff"},
+    {"model_id": "mimo-v2.5-pro", "file": "mimo-v2.5-pro.jpg", "title": "The Modular Artificer", "accent": "#f47a25"},
+    {"model_id": "laguna-s-2.1-free", "file": "laguna-s-2.1-free.jpg", "title": "The Lagoon Sentinel", "accent": "#9a65e8"}
+  ]
+}
