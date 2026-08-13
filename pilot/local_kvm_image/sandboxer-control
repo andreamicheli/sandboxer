@@ -149,6 +149,21 @@ runner_tool() {
                 printf 'submission recorded for Orchestrator verification\n' >"$tool_file"
             fi
             ;;
+        orchestrator_place_flag)
+            test "$#" -eq 1 || tool_status=1
+            if test "$tool_status" -eq 0; then
+                decode_argument "$1" > /workspace/notes/flag.txt || tool_status=1
+                chown competitor:competitor /workspace/notes/flag.txt || tool_status=1
+                chmod 0600 /workspace/notes/flag.txt || tool_status=1
+                printf 'flag placed\n' >"$tool_file"
+            fi
+            ;;
+        orchestrator_read_submission)
+            test "$#" -eq 0 || tool_status=1
+            if test "$tool_status" -eq 0; then
+                /bin/busybox head -c 4096 /workspace/submission.flag >"$tool_file" 2>/dev/null || tool_status=1
+            fi
+            ;;
         *) tool_status=1;;
     esac
     if test ! -s "$tool_file"; then printf 'runner tool failed\n' >"$tool_file"; fi

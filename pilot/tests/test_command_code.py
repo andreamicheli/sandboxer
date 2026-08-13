@@ -21,6 +21,15 @@ def test_command_code_process_contract_is_ephemeral_and_fail_closed():
     assert "--no-session" in command and "--no-skills" in command and "dont-ask" in command
     assert not {"--yolo","--trust","--auto-accept"}&set(command)
 
+
+def test_command_code_supports_a_tool_free_interview_boundary():
+    adapter = CommandCodeAdapter((sys.executable, str(FAKE)))
+    result = asyncio.run(adapter.run(
+        prompt="reflect", model="example/model", max_turns=1, timeout_seconds=2,
+        output_token_budget=10, tool_free=True,
+    ))
+    assert result.observed_model == "example/model"
+
 def test_command_code_writes_deny_by_default_runner_bridge_contract(tmp_path):
     root=tmp_path/"ephemeral"; root.mkdir()
     adapter=CommandCodeAdapter()
@@ -59,6 +68,11 @@ def test_multi_turn_continuation_is_counted():
 
 def test_allowlisted_runner_tool_is_preserved_not_rejected():
     assert "tool_running" in run("runner_tool").event_types
+
+
+def test_allowlisted_runner_tool_lifecycle_binds_nameless_frames_to_call_id():
+    result = run("runner_tool_lifecycle")
+    assert {"tool_start", "tool_input_delta", "tool_end"} <= set(result.event_types)
 
 def test_pair_execution_is_concurrent_and_identity_preserving():
     adapter=CommandCodeAdapter((sys.executable,str(FAKE)))

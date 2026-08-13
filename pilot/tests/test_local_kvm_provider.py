@@ -148,7 +148,8 @@ class RecordingKvmHost:
             return f"PHASE_RED_OK nonce={nonce}\n"
         if payload.startswith("TOOL "):
             nonce = payload.split()[1]
-            encoded = __import__("base64").b64encode(b"service-ok").decode()
+            output = b"SANDBOXER-example" if "orchestrator_read_submission" in payload else b"service-ok"
+            encoded = __import__("base64").b64encode(output).decode()
             return f"TOOL_RESULT nonce={nonce} status=0 output={encoded}\n"
         runner_number = len(self.control_requests)
         boot_id = "11111111-1111-1111-1111-111111111111" if runner_number == 1 else "22222222-2222-2222-2222-222222222222"
@@ -291,6 +292,19 @@ def test_local_kvm_provider_executes_tools_only_over_the_runner_control_channel(
     try:
         assert provider.execute_tool(runners[0], "inspect_service", {}) == "service-ok"
         assert any(request.startswith("TOOL ") and "inspect_service" in request for request in host.control_requests)
+    finally:
+        for runner in runners:
+            provider.destroy(runner)
+
+
+def test_local_kvm_provider_owns_flag_injection_and_submission_verification(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    runners = provider.provision("flag-match", ("deepseek", "mimo"))
+    try:
+        provider.place_synthetic_flag(runners[0], "SANDBOXER-example")
+        assert provider.verified_submission(runners[1]) == "SANDBOXER-example"
+        assert any("orchestrator_place_flag" in request for request in host.control_requests)
+        assert any("orchestrator_read_submission" in request for request in host.control_requests)
     finally:
         for runner in runners:
             provider.destroy(runner)

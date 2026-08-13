@@ -14,6 +14,9 @@ def test_bridge_exposes_only_explicit_runner_tools(monkeypatch):
     monkeypatch.setenv("SANDBOXER_RUNNER_TOOLS", "read_note,submit_flag")
     result=asyncio.run(_handle({"jsonrpc":"2.0","id":1,"method":"tools/list"}))
     assert [tool["name"] for tool in result["result"]["tools"]]==["read_note","submit_flag"]
+    submit = result["result"]["tools"][1]
+    assert submit["inputSchema"]["required"] == ["flag"]
+    assert submit["inputSchema"]["additionalProperties"] is False
 
 
 def test_bridge_denies_unlisted_tool_without_touching_runner(monkeypatch):

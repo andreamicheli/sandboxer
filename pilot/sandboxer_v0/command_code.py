@@ -195,22 +195,38 @@ class CommandCodeAdapter:
         budget: CommandCodeBudget | None = None,
         runner_socket: Path | None = None, allowed_tools: Sequence[str] = (),
         runner_bridge: Sequence[str] | None = None,
+        tool_free: bool = False,
     ) -> CommandCodeResult:
         if timeout_seconds <= 0 or output_token_budget < 1:
             raise ValueError("positive timeout and output budget are required")
         with tempfile.TemporaryDirectory(prefix="sandboxer-command-code-") as temporary:
             root = Path(temporary)
-            if runner_socket is None:
+            if runner_socket is None and not tool_free:
                 raise CommandCodeError("COMMAND_CODE_BRIDGE_REQUIRED")
-            self.prepare_workspace(
-                root,
-                runner_bridge=runner_bridge or (sys.executable, "-m", "sandboxer_v0.command_code_bridge"),
-                runner_socket=runner_socket,
-                allowed_tools=allowed_tools,
-            )
+            if tool_free:
+                if runner_socket is not None or allowed_tools:
+                    raise CommandCodeError("COMMAND_CODE_TOOL_FREE_BOUNDARY_INVALID")
+                config = root / ".commandcode"
+                config.mkdir(mode=0o700)
+                (config / "settings.json").write_text(json.dumps({"permissions": {
+                    "defaultMode": "dont-ask", "allow": [],
+                    "deny": ["Shell(*)", "Read(**)", "Write(**)", "Edit(**)", "Grep(*)", "Glob(*)",
+                             "WebFetch(*)", "WebSearch(*)", "NotebookEdit(*)"],
+                }}, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+                (config / "settings.json").chmod(0o600)
+            else:
+                self.prepare_workspace(
+                    root,
+                    runner_bridge=runner_bridge or (sys.executable, "-m", "sandboxer_v0.command_code_bridge"),
+                    runner_socket=runner_socket,
+                    allowed_tools=allowed_tools,
+                )
             if self._workspace_owner is not None:
                 uid, gid = self._workspace_owner
-                for path in (root, root / ".commandcode", root / ".commandcode/settings.json", root / ".mcp.json"):
+                owned = [root, root / ".commandcode", root / ".commandcode/settings.json"]
+                if not tool_free:
+                    owned.append(root / ".mcp.json")
+                for path in owned:
                     os.chown(path, uid, gid)
             process = await asyncio.create_subprocess_exec(
                 *self.command(prompt=prompt, model=model, max_turns=max_turns), cwd=root,
@@ -292,6 +308,7 @@ class CommandCodeAdapter:
         if len(results) != 1 or frames[-1] is not results[0]:
             raise CommandCodeError("COMMAND_CODE_RESULT_INVALID")
         observed: set[str] = set(); events: list[str] = []; reasoning: list[str] = []; turns = 0
+        runner_tool_calls: set[str] = set()
         for frame in frames[:-1]:
             event = frame.get("event")
             if not isinstance(event, dict) or not isinstance(event.get("type"), str):
@@ -299,8 +316,12 @@ class CommandCodeAdapter:
             kind = event["type"]; events.append(kind)
             if kind.startswith("tool_"):
                 tool_name = event.get("toolName")
+                tool_call_id = event.get("toolCallId")
                 prefix = "mcp__runner__"
-                if not isinstance(tool_name, str) or not tool_name.startswith(prefix) or tool_name[len(prefix):] not in allowed_tools:
+                if isinstance(tool_name, str) and tool_name.startswith(prefix) and tool_name[len(prefix):] in allowed_tools:
+                    if isinstance(tool_call_id, str):
+                        runner_tool_calls.add(tool_call_id)
+                elif not isinstance(tool_call_id, str) or tool_call_id not in runner_tool_calls:
                     raise CommandCodeError("COMMAND_CODE_NATIVE_TOOL_REJECTED")
             if kind in {"model_request_start", "model_request_end"} and isinstance(event.get("model"), str): observed.add(event["model"])
             if kind == "thinking_end" and isinstance(event.get("text"), str): reasoning.append(event["text"])

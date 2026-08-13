@@ -612,6 +612,12 @@ class LocalKvmRunnerProvider:
         except (OSError, TimeoutError, socket.timeout) as error:
             raise RuntimeError("RUNNER_TOOL_CONTROL_UNAVAILABLE") from error
 
+    def place_synthetic_flag(self, runner: RunnerHandle, flag: str) -> None:
+        self.execute_tool(runner, "orchestrator_place_flag", {"flag": flag})
+
+    def verified_submission(self, runner: RunnerHandle) -> str:
+        return self.execute_tool(runner, "orchestrator_read_submission", {})
+
     def destroy(self, runner: RunnerHandle) -> TeardownEvidence:
         existing = self._terminal.get(runner.runner_id)
         if existing is not None:

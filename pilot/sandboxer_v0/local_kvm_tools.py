@@ -29,6 +29,10 @@ def encode_tool_request(nonce: str, tool: str, arguments: Mapping[str, object]) 
         values = (str(arguments["command"]),)
     elif tool == "submit_flag" and set(arguments) == {"flag"}:
         values = (str(arguments["flag"]),)
+    elif tool == "orchestrator_place_flag" and set(arguments) == {"flag"}:
+        values = (str(arguments["flag"]),)
+    elif tool == "orchestrator_read_submission" and not arguments:
+        values = ()
     else:
         raise RuntimeError("RUNNER_TOOL_REQUEST_INVALID")
     request = " ".join(("TOOL", nonce, tool, *(_encoded(value) for value in values))) + "\n"

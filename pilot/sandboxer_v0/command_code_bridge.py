@@ -11,6 +11,23 @@ from typing import Any, Mapping, TextIO
 
 MAX_MESSAGE_BYTES = 64 * 1024
 
+_TOOL_SCHEMAS = {
+    "inspect_service": ("Inspect files in your own synthetic service workspace.", {}),
+    "write_service_file": ("Write one relative file in your own synthetic service workspace.", {
+        "path": {"type": "string"}, "content": {"type": "string"},
+    }),
+    "run_service_command": ("Run one bounded command from your own synthetic service workspace.", {
+        "command": {"type": "string"},
+    }),
+    "submit_flag": ("Submit the opponent's Synthetic Flag for Orchestrator verification.", {
+        "flag": {"type": "string"},
+    }),
+    "finish_phase": ("Declare your current phase complete with a concise summary.", {
+        "summary": {"type": "string"},
+    }),
+    "read_note": ("Read the named synthetic note.", {"path": {"type": "string"}}),
+}
+
 
 class BridgeError(RuntimeError):
     pass
@@ -64,11 +81,14 @@ async def _handle(message: Mapping[str, Any]) -> Mapping[str, Any] | None:
             "serverInfo": {"name": "sandboxer-runner", "version": "1"},
         }}
     if method == "tools/list":
-        return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": [
-            {"name": name, "description": f"Execute {name} inside the isolated Sandboxer Runner.",
-             "inputSchema": {"type": "object", "additionalProperties": True}}
-            for name in _tools()
-        ]}}
+        rendered = []
+        for name in _tools():
+            description, properties = _TOOL_SCHEMAS.get(name, (f"Execute {name} inside the isolated Runner.", {}))
+            rendered.append({"name": name, "description": description, "inputSchema": {
+                "type": "object", "properties": properties,
+                "required": list(properties), "additionalProperties": False,
+            }})
+        return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": rendered}}
     if method == "tools/call":
         params = message.get("params")
         name = params.get("name") if isinstance(params, dict) else None
