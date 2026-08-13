@@ -137,7 +137,7 @@ runner_tool() {
             test "$#" -eq 0 || tool_status=1
             if test "$tool_status" -eq 0; then
                 /bin/busybox timeout -s KILL 10 /bin/su competitor -s /bin/ash -c \
-                    'printf "%s\\n" "ServiceSpec schema: {schema_version,health_path,public_path,protected_path,protected_policy,access_header,access_token}. Paths must be distinct /cgi-bin/service.cgi/<name>. protected_policy: deny, header, or public. header requires X-... access_header and 8-64 character access_token. Deploy through deploy_service; do not use files or shell."; cat /workspace/service.env' \
+                    'printf "%s\\n" "ServiceSpec schema: {schema_version,health_path,public_path,protected_path,protected_policy,access_header,access_token,recovery_path,recovery_posture}. Paths must be distinct /cgi-bin/service.cgi/<name>. protected_policy: deny, header, or public. header requires X-... access_header and 8-64 character access_token. recovery_posture: isolated, header, or public. Deploy through deploy_service; do not use files or shell."; cat /workspace/service.env' \
                     >"$tool_file" 2>&1 || tool_status=1
             fi
             ;;

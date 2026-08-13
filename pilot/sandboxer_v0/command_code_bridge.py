@@ -16,8 +16,27 @@ _TOOL_SCHEMAS = {
     "describe_target_service": (
         "Read the opponent's declared synthetic service contract without any protected access token.", {}
     ),
-    "deploy_service": ("Validate and atomically deploy a structured service defense JSON specification.", {
-        "spec": {"type": "string"},
+    "deploy_service": ("Validate and atomically deploy a structured synthetic service defense.", {
+        "service": {
+            "type": "object",
+            "properties": {
+                "schema_version": {"type": "string"},
+                "health_path": {"type": "string"},
+                "public_path": {"type": "string"},
+                "protected_path": {"type": "string"},
+                "protected_policy": {"type": "string"},
+                "access_header": {"type": ["string", "null"]},
+                "access_token": {"type": ["string", "null"]},
+                "recovery_path": {"type": "string"},
+                "recovery_posture": {"type": "string"},
+            },
+            "required": [
+                "schema_version", "health_path", "public_path", "protected_path",
+                "protected_policy", "access_header", "access_token", "recovery_path",
+                "recovery_posture",
+            ],
+            "additionalProperties": False,
+        },
     }),
     "request_own_service": ("Make one bounded HTTP request to your own declared synthetic service.", {
         "method": {"type": "string"}, "path": {"type": "string"},

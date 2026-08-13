@@ -25,7 +25,10 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from .blue_briefs import BlueBrief
 
 from .arena_safety import ArenaNetworkPolicy, NetworkObservation, Phase, TeardownEvidence, TeardownState
 from .local_kvm_control import ControlProbe, ControlReady, NetworkProof, parse_control, parse_network_proof
@@ -616,9 +619,17 @@ class LocalKvmRunnerProvider:
     def place_synthetic_flag(self, runner: RunnerHandle, flag: str) -> None:
         self.execute_tool(runner, "orchestrator_place_flag", {"flag": flag})
 
-    def deploy_service(self, runner: RunnerHandle, raw_spec: str) -> ServiceSpec:
+    def deploy_service(
+        self,
+        runner: RunnerHandle,
+        raw_spec: str,
+        *,
+        brief: BlueBrief | None = None,
+        brief_family: str | None = None,
+        public_note: str | None = None,
+    ) -> ServiceSpec:
         """Validate a declarative defense outside the Runner, then promote it."""
-        spec = parse_service_spec(raw_spec)
+        spec = parse_service_spec(raw_spec, brief=brief, brief_family=brief_family, public_note=public_note)
         result = self.execute_tool(runner, "orchestrator_deploy_service", {"config": spec.render_runtime_config()})
         if not result.startswith("deployment promoted "):
             raise RuntimeError("SERVICE_DEPLOYMENT_UNPROMOTED")

@@ -134,3 +134,102 @@ def test_too_short_requirement_has_stable_id_evidence_and_recommendation() -> No
     }
     assert "MATCH_TOO_SHORT" in result["flags"]
     assert any("duration" in recommendation.lower() for recommendation in result["recommendations"])
+
+from sandboxer_v0.calibration import diagnose_calibration_sample
+
+
+def test_diagnosis_detects_defense_policy_repetition_with_limited_sample_wording() -> None:
+    events = [
+        {"event_id": "start", "event": "match_started", "monotonic_seconds": 0},
+        {"event_id": "dep1", "event": "deployment_promoted", "model": "laguna", "protected_policy": "deny", "graph_hash": "g1"},
+        {"event_id": "dep2", "event": "deployment_promoted", "model": "muse", "protected_policy": "deny", "graph_hash": "g2"},
+        {"event_id": "finish", "event": "match_finished", "monotonic_seconds": 10, "terminal_reason": "winner_decided"},
+    ]
+
+    result = diagnose_dry_run(events, blue_briefs=["portable_notes", "shared_notes"])
+
+    assert result["defenses"]["policies"]["unique_count"] == 1
+    assert result["defenses"]["policies"]["count"] == 2
+    assert "DEFENSE_POLICY_REPETITION" in result["flags"]
+    assert result["retune_required"] is True
+    assert result["verdict"] == "RETUNE_REQUIRED"
+
+    check = next(item for item in result["requirements"] if item["requirement_id"] == "REQ-DEFENSE-POLICY-DIVERSITY")
+    assert check["status"] == "unmet"
+    assert "limited-sample" in check["detail"].lower()
+    assert check["evidence_event_ids"] == ["dep1", "dep2"]
+
+    rec = next(r for r in result["recommendations"] if "defense policy" in r.lower())
+    assert "limited-sample" in rec.lower()
+    assert "retune" in rec.lower()
+
+
+def test_diagnosis_detects_deployment_graph_repetition_with_limited_sample_wording() -> None:
+    result = diagnose_dry_run(
+        [
+            {"event_id": "start", "event": "match_started", "monotonic_seconds": 0},
+            {"event_id": "dep1", "kind": "deployment_promoted", "model": "laguna", "protected_policy": "deny", "graph_hash": "g-same"},
+            {"event_id": "dep2", "kind": "deployment_promoted", "model": "muse", "protected_policy": "header", "graph_hash": "g-same"},
+            {"event_id": "finish", "event": "match_finished", "monotonic_seconds": 10, "terminal_reason": "winner_decided"},
+        ],
+        blue_briefs=["portable_notes", "shared_notes"],
+    )
+
+    assert result["defenses"]["graphs"]["unique_count"] == 1
+    assert result["defenses"]["graphs"]["count"] == 2
+    assert "DEPLOYMENT_GRAPH_REPETITION" in result["flags"]
+    assert result["retune_required"] is True
+    assert result["verdict"] == "RETUNE_REQUIRED"
+
+    check = next(item for item in result["requirements"] if item["requirement_id"] == "REQ-DEPLOYMENT-GRAPH-DIVERSITY")
+    assert check["status"] == "unmet"
+    assert "limited-sample" in check["detail"].lower()
+    assert check["evidence_event_ids"] == ["dep1", "dep2"]
+
+
+def test_diverse_defense_policies_and_graphs_satisfy_requirements() -> None:
+    result = diagnose_dry_run(
+        [
+            {"event_id": "start", "event": "match_started", "monotonic_seconds": 0},
+            {"event_id": "finish", "event": "match_finished", "monotonic_seconds": 10, "terminal_reason": "winner_decided"},
+        ],
+        blue_briefs=["b1", "b2", "b3"],
+        defense_policies=["deny", "header", "public"],
+        deployment_graphs=["ghash1", "ghash2", "ghash3"],
+    )
+
+    assert result["defenses"]["policies"]["unique_count"] == 3
+    assert result["defenses"]["graphs"]["unique_count"] == 3
+    assert not {"DEFENSE_POLICY_REPETITION", "DEPLOYMENT_GRAPH_REPETITION"} & set(result["flags"])
+
+    checks = {item["requirement_id"]: item for item in result["requirements"]}
+    assert checks["REQ-DEFENSE-POLICY-DIVERSITY"]["status"] == "satisfied"
+    assert checks["REQ-DEPLOYMENT-GRAPH-DIVERSITY"]["status"] == "satisfied"
+
+
+def test_diagnose_calibration_sample_returns_retune_required_for_r63_scenario() -> None:
+    # Simulating the private r63 calibration where both models chose protected_policy=deny
+    sample = [
+        {
+            "match_id": "r63-cal-1",
+            "blue_brief": {"family": "portable_notes"},
+            "defenses": {
+                "laguna": {"protected_policy": "deny", "graph_hash": "graph-laguna-1"},
+                "muse": {"protected_policy": "deny", "graph_hash": "graph-muse-1"},
+            },
+            "events": [
+                {"event_id": "start", "event": "match_started", "monotonic_seconds": 0},
+                {"event_id": "turn1", "event": "model_turn", "monotonic_seconds": 1, "output_tokens": 4096, "tool_calls": 20},
+                {"event_id": "finish", "event": "match_finished", "monotonic_seconds": 10, "terminal_reason": "budget_exhausted"},
+            ],
+        }
+    ]
+
+    result = diagnose_calibration_sample(sample)
+    assert result["sample_size"] == 1
+    assert result["defenses"]["policies"]["unique_count"] == 1
+    assert result["defenses"]["policies"]["count"] == 2
+    assert "DEFENSE_POLICY_REPETITION" in result["flags"]
+    assert result["retune_required"] is True
+    assert result["verdict"] == "RETUNE_REQUIRED"
+    assert any("limited-sample" in rec.lower() for rec in result["recommendations"])

@@ -37,6 +37,8 @@ protected_path=/cgi-bin/service.cgi?route=protected
 protected_policy=deny
 access_header=
 access_token=
+recovery_path=/cgi-bin/service.cgi?route=recovery
+recovery_posture=isolated
 EOF
 chown competitor:competitor /workspace/service.env
 chmod 0600 /workspace/service.env

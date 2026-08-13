@@ -25,7 +25,38 @@ respond() {
 
 case "$request_path" in
     "$health_path") respond '200 OK' 'healthy' ;;
-    "$public_path") respond '200 OK' 'public synthetic note' ;;
+    "$public_path")
+        case "${brief_family:-}" in
+            portable_notes) respond '200 OK' "export:${public_note:-welcome}" ;;
+            shared_notes) respond '200 OK' "shared:${public_note:-welcome}" ;;
+            service_diagnostics) respond '200 OK' "diagnostics:metric=${public_note:-welcome} status=ok" ;;
+            *) respond '200 OK' 'public synthetic note' ;;
+        esac
+        ;;
+    "$recovery_path")
+        case "${recovery_posture:-}" in
+            isolated) respond '403 Forbidden' 'recovery isolated' ;;
+            public)
+                if test -r /workspace/protected/flag.txt; then
+                    printf 'HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n'
+                    head -c 4096 /workspace/protected/flag.txt
+                    printf '\n'
+                else
+                    respond '404 Not Found' 'protected record unavailable'
+                fi
+                ;;
+            header)
+                if test -n "$access_header" && test "$request_header_value" = "$access_token" && test -r /workspace/protected/flag.txt; then
+                    printf 'HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n'
+                    head -c 4096 /workspace/protected/flag.txt
+                    printf '\n'
+                else
+                    respond '403 Forbidden' 'recovery protected'
+                fi
+                ;;
+            *) respond '500 Internal Server Error' 'invalid recovery posture' ;;
+        esac
+        ;;
     "$protected_path")
         case "$protected_policy" in
             deny) respond '403 Forbidden' 'protected' ;;
