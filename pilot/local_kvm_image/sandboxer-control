@@ -89,9 +89,71 @@ network_proof() {
     network_stage orchestrator
     tcp_connect 10.77.0.1 1 || orchestrator_denied=1
     network_stage emit
+    network_stage emitted
     printf 'NETWORK_PROBE nonce=%s phase=%s peer_denied=%s peer_tcp=%s peer_neighbor=%s toy_http=%s alternate_denied=%s icmp_denied=%s egress_denied=%s egress_reason=%s orchestrator_denied=%s local_toy=%s\n' \
         "$SANDBOXER_NONCE" "$phase" "$peer_denied" "$peer_tcp" "$peer_neighbor" "$toy_http" "$alternate_denied" "$icmp_denied" "$egress_denied" "$egress_reason" "$orchestrator_denied" "$local_toy"
-    network_stage emitted
+}
+
+tool_result() {
+    tool_status="$1"
+    tool_file="$2"
+    tool_output="$(/bin/busybox head -c 32768 "$tool_file" | /bin/busybox base64 | /usr/bin/tr -d '\n')"
+    printf 'TOOL_RESULT nonce=%s status=%s output=%s\n' "$SANDBOXER_NONCE" "$tool_status" "$tool_output"
+}
+
+decode_argument() {
+    printf '%s' "$1" | /bin/busybox base64 -d
+}
+
+runner_tool() {
+    tool_name="$1"
+    shift
+    tool_file="$(/bin/busybox mktemp /run/sandboxer-tool.XXXXXX)"
+    tool_status=0
+    case "$tool_name" in
+        inspect_service)
+            test "$#" -eq 0 || tool_status=1
+            if test "$tool_status" -eq 0; then
+                /bin/busybox timeout -s KILL 10 /bin/su competitor -s /bin/ash -c \
+                    'cd /workspace/notes && find . -maxdepth 2 -type f -print && for file in $(find . -maxdepth 2 -type f); do echo "--- $file"; head -c 8192 "$file"; echo; done' \
+                    >"$tool_file" 2>&1 || tool_status=1
+            fi
+            ;;
+        write_service_file)
+            test "$#" -eq 2 || tool_status=1
+            if test "$tool_status" -eq 0; then
+                tool_path="$(decode_argument "$1")" || tool_status=1
+                case "$tool_path" in ''|*/*|*..*) tool_status=1;; esac
+            fi
+            if test "$tool_status" -eq 0; then
+                decode_argument "$2" > "/workspace/notes/$tool_path" || tool_status=1
+                chown competitor:competitor "/workspace/notes/$tool_path" || tool_status=1
+                chmod 0600 "/workspace/notes/$tool_path" || tool_status=1
+                printf 'saved\n' >"$tool_file"
+            fi
+            ;;
+        run_service_command)
+            test "$#" -eq 1 || tool_status=1
+            if test "$tool_status" -eq 0; then
+                tool_command="$(decode_argument "$1")" || tool_status=1
+                /bin/busybox timeout -s KILL 20 /bin/su competitor -s /bin/ash -c \
+                    "cd /workspace/notes && $tool_command" >"$tool_file" 2>&1 || tool_status=1
+            fi
+            ;;
+        submit_flag)
+            test "$#" -eq 1 || tool_status=1
+            if test "$tool_status" -eq 0; then
+                decode_argument "$1" > /workspace/submission.flag || tool_status=1
+                chown competitor:competitor /workspace/submission.flag || tool_status=1
+                chmod 0600 /workspace/submission.flag || tool_status=1
+                printf 'submission recorded for Orchestrator verification\n' >"$tool_file"
+            fi
+            ;;
+        *) tool_status=1;;
+    esac
+    if test ! -s "$tool_file"; then printf 'runner tool failed\n' >"$tool_file"; fi
+    tool_result "$tool_status" "$tool_file"
+    rm -f "$tool_file"
 }
 
 while :; do
@@ -150,6 +212,10 @@ while :; do
             else
                 printf 'PHASE_RED_FAILED nonce=%s\n' "$SANDBOXER_NONCE" >&3
             fi
+        elif test "$1" = TOOL && test "${2:-}" = "$SANDBOXER_NONCE" && test "$#" -ge 3; then
+            tool_name="$3"
+            shift 3
+            runner_tool "$tool_name" "$@" >&3
         fi
     done
     exec 3>&-

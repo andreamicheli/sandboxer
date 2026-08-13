@@ -1,8 +1,10 @@
 # Provider map
 
-This map records the first provider target for the next Sandboxer pilot. It is
-planning metadata: the current live task is still wired to Groq until the
-Command Code adapter is implemented and tested.
+This map records the canonical initial provider for Sandboxer. Command Code is
+used for both Competitors until an explicitly recorded provider migration.
+Provider-added prompts or scaffolding are a declared confounder in every
+Result Report; a future migration may use a cleaner API boundary such as
+OpenRouter when budget permits.
 
 ## Initial provider: Command Code Go
 
@@ -22,8 +24,8 @@ isolated-runner boundary.
 | --- | --- | --- | --- |
 | Free smoke test | `poolside/laguna-s-2.1-free` | Validate the adapter without consuming credits | Verified |
 | Fast open model | `deepseek/deepseek-v4-flash` | Cost/latency baseline | Pending adapter |
-| Reasoning open model | `deepseek/deepseek-v4-pro` | Reasoning baseline | Pending adapter |
-| Cheap agentic model | `xiaomi/mimo-v2.5-pro` | Low-cost open-model comparison | Pending adapter |
+| Reasoning open model | `deepseek/deepseek-v4-pro` | First controlled Competitor | Catalog verified |
+| Cheap agentic model | `xiaomi/mimo-v2.5-pro` | First controlled Competitor | Catalog verified |
 | Cheap contributor model | `meta/muse-spark-1.2-contributor` | Low-cost comparison | Pending adapter |
 | Closed benchmark | `gpt-5.6-luna` | Reference benchmark | Pending adapter / plan entitlement |
 
@@ -42,7 +44,8 @@ Code can change its catalog and plan entitlements.
   max-turn errors;
 - add deterministic tests with a fake CLI before enabling live calls.
 
-The first implementation should support read-only/plan mode and the existing
-runner tool contract. Enabling file writes and shell commands requires an
-explicit isolated-runner design; `--yolo` must not be used against the host
-workspace.
+The adapter exposes only phase-scoped MCP tools backed by the non-IP Runner
+control channel. Native Command Code filesystem, shell, web, and edit tools are
+denied. Command Code runs as the authenticated unprivileged host user while the
+privileged Orchestrator owns Runner lifecycle; credentials are never copied to
+a Runner. `--yolo` is prohibited.

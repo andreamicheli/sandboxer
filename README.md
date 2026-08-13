@@ -10,7 +10,7 @@ This repository is intentionally built from the **real-model pilot**. The earlie
 
 ## Current baseline
 
-- [`pilot/`](pilot/) contains the Inspect-based local pilot, isolated runners, preflight safety checks, tests, and provider adapters. The next provider target is documented in [`docs/provider-map.md`](docs/provider-map.md); the current live task remains Groq-backed until the Command Code adapter is complete.
+- [`pilot/`](pilot/) contains the Harness, isolated Runners, preflight safety checks, tests, and provider adapters. Command Code is the canonical initial Model Adapter for both Competitors; see [`docs/provider-map.md`](docs/provider-map.md).
 - [`docs/project-outline.md`](docs/project-outline.md) records the methodology sketch, safety boundary, limitations, technical direction, paper outline, and results-site direction.
 - [`CONTEXT.md`](CONTEXT.md) defines the shared language used by code, documentation, telemetry, and content.
 - GitHub Issues contain the Wayfinder map and the open decisions leading to Sandboxer v0.

@@ -146,6 +146,10 @@ class RecordingKvmHost:
         if payload.startswith("PHASE_RED "):
             nonce = payload.split()[1]
             return f"PHASE_RED_OK nonce={nonce}\n"
+        if payload.startswith("TOOL "):
+            nonce = payload.split()[1]
+            encoded = __import__("base64").b64encode(b"service-ok").decode()
+            return f"TOOL_RESULT nonce={nonce} status=0 output={encoded}\n"
         runner_number = len(self.control_requests)
         boot_id = "11111111-1111-1111-1111-111111111111" if runner_number == 1 else "22222222-2222-2222-2222-222222222222"
         nonce = payload.split()[1]
@@ -279,6 +283,17 @@ def test_local_kvm_rehearsal_uses_distinct_overlays_control_and_a_disposable_net
         metadata == (provider.config.qemu_uid, provider.config.qemu_gid, 0o700)
         for metadata in host.socket_witness_directory_metadata
     )
+
+
+def test_local_kvm_provider_executes_tools_only_over_the_runner_control_channel(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    runners = provider.provision("tool-match", ("deepseek", "mimo"))
+    try:
+        assert provider.execute_tool(runners[0], "inspect_service", {}) == "service-ok"
+        assert any(request.startswith("TOOL ") and "inspect_service" in request for request in host.control_requests)
+    finally:
+        for runner in runners:
+            provider.destroy(runner)
 
 
 def test_local_kvm_match_root_keeps_traversal_permission_under_a_restrictive_umask(tmp_path: Path) -> None:

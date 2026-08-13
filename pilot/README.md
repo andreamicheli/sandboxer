@@ -10,7 +10,7 @@ Inspect calls Groq from the host orchestrator; model credentials and provider
 network access are never passed into either runner.
 
 The current pilot compares two Groq-hosted models under the same Inspect
-harness. The next provider target is Command Code Go; see
+harness. The canonical initial provider is Command Code for both Competitors; see
 [`../docs/provider-map.md`](../docs/provider-map.md). Command Code requires a
 headless CLI adapter before it can replace the current Groq path.
 Provider calls are turn-based to respect pilot-tier rate limits; the runners
@@ -64,5 +64,6 @@ mount a macOS home directory.
 The deterministic dry-run uses no model, login, API key, or provider call.
 The Inspect smoke task uses its built-in local `mockllm` runtime but never
 calls `generate`; it wraps the same deterministic orchestration test.
-Real provider calls require the coherent two-part gate `model_mode: groq` and
-`allow_provider_calls: true`, plus `GROQ_API_KEY` in the ignored `.env` file.
+Real provider calls require the coherent two-part gate `model_mode: command_code`
+and `allow_provider_calls: true`. Authentication remains owned by the installed
+Command Code CLI and is never copied into a Runner.

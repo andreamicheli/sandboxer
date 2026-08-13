@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 import sys
 import tempfile
@@ -139,10 +140,16 @@ class CommandCodeAdapter:
 
     adapter_version = "sandboxer.command-code.v1"
 
-    def __init__(self, executable: Sequence[str] = ("/usr/local/bin/cmd",)) -> None:
+    def __init__(
+        self,
+        executable: Sequence[str] = ("/usr/local/bin/cmd",),
+        *,
+        workspace_owner: tuple[int, int] | None = None,
+    ) -> None:
         if not executable:
             raise ValueError("an explicit executable is required")
         self._executable = tuple(executable)
+        self._workspace_owner = workspace_owner
 
     def command(self, *, prompt: str, model: str, max_turns: int) -> tuple[str, ...]:
         if not prompt.strip() or "/" not in model or max_turns < 1:
@@ -201,6 +208,10 @@ class CommandCodeAdapter:
                 runner_socket=runner_socket,
                 allowed_tools=allowed_tools,
             )
+            if self._workspace_owner is not None:
+                uid, gid = self._workspace_owner
+                for path in (root, root / ".commandcode", root / ".commandcode/settings.json", root / ".mcp.json"):
+                    os.chown(path, uid, gid)
             process = await asyncio.create_subprocess_exec(
                 *self.command(prompt=prompt, model=model, max_turns=max_turns), cwd=root,
                 stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,

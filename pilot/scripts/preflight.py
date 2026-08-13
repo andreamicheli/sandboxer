@@ -106,7 +106,9 @@ def main() -> int:
     config = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
     mode = config.get("model_mode")
     provider_calls = config.get("allow_provider_calls")
-    gate_coherent = (mode == "disabled" and provider_calls is False) or (mode == "groq" and provider_calls is True)
+    gate_coherent = (mode == "disabled" and provider_calls is False) or (
+        mode == "command_code" and provider_calls is True
+    )
     checks.append(("provider gate is coherent", gate_coherent, f"mode={mode!r}, calls={provider_calls!r}"))
 
     context = run("docker", "context", "show")

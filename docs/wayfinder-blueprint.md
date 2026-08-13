@@ -382,7 +382,7 @@ statement.
 
 ## 9. Command Code provider boundary
 
-Command Code `1.15.1` is a conditional provider boundary for the next pilot,
+Command Code `1.15.1` is the canonical initial provider boundary for both Competitors,
 not part of Competitor identity. The first intended series is
 `deepseek/deepseek-v4-pro` versus `xiaomi/mimo-v2.5-pro`; DeepSeek Flash is the
 calibration baseline, Laguna the free smoke model, Muse the fallback, and

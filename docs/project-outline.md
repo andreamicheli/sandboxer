@@ -74,7 +74,7 @@ La v0 usa un ordine lessicografico e produce sempre un solo vincitore: una sola 
 
 - **Repository:** `andreamicheli/sandboxer` riparte dal pilot reale. Il vecchio prototipo sintetico `cyberrumble` è deprecato e rimane soltanto nella storia Git; gli identificatori ereditati dal pilot vengono migrati in commit separati e verificabili.
 - **Harness:** Inspect come implementazione iniziale dietro un confine sostituibile.
-- **Provider:** Groq per il pilot corrente; Command Code Go come provider iniziale della prossima iterazione, con adapter CLI headless ancora da implementare. La configurazione resta provider-agnostic per i confronti futuri.
+- **Provider:** Command Code per entrambi i Competitor nella prima iterazione controllata. Il Model Adapter resta provider-agnostic per una futura migrazione, per esempio verso OpenRouter. I Result Report devono dichiarare che prompt o scaffold aggiunti dal provider possono confondere l'interpretazione del comportamento osservato.
 - **Runtime:** Orchestrator fidato più due Runner isolati e usa-e-getta.
 - **Telemetry:** JSONL/event schema versionato come fonte primaria; artefatti Inspect mantenuti come evidenza complementare.
 - **Content pipeline:** telemetry → event selection → transcript/commentary draft → timestamp alignment → TTS → overlays → video render.

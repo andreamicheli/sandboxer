@@ -29,11 +29,12 @@ from typing import Protocol
 
 from .arena_safety import ArenaNetworkPolicy, NetworkObservation, Phase, TeardownEvidence, TeardownState
 from .local_kvm_control import ControlProbe, ControlReady, NetworkProof, parse_control, parse_network_proof
+from .local_kvm_tools import MAX_TOOL_MESSAGE_BYTES, encode_tool_request, parse_tool_response
 from .runner_backend import PreflightCheck, PreflightWitnessFailed, ProvisioningFailed, RunnerHandle
 
 
 _SAFE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
-_MAX_CONTROL_RESPONSE = 4096
+_MAX_CONTROL_RESPONSE = MAX_TOOL_MESSAGE_BYTES
 _NETWORK_PROBE_TIMEOUT_SECONDS = 24
 _MAX_QEMU_STDERR_BYTES = 1024
 _SOCKET_WITNESS_TIMEOUT_SECONDS = 1.0
@@ -250,7 +251,7 @@ class SubprocessLocalKvmHost:
         return SocketWitnessResult(stage, None if stage is SocketWitnessStage.SUCCESS and numeric_errno == 0 else numeric_errno)
 
     def control_exchange(self, socket_path: Path, payload: str, *, timeout_seconds: float = 5) -> str:
-        single_line_response = payload.startswith(("NETPROBE ", "PHASE_RED "))
+        single_line_response = payload.startswith(("NETPROBE ", "PHASE_RED ", "TOOL "))
         client = self._control_clients.get(socket_path)
         if client is None:
             client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -597,6 +598,19 @@ class LocalKvmRunnerProvider:
                 )
                 raise PreflightWitnessFailed(reason) from error
             raise PreflightWitnessFailed("LOCAL_KVM_BLUE_NETWORK_TRANSITION_UNAVAILABLE") from error
+
+    def execute_tool(self, runner: RunnerHandle, tool: str, arguments: dict[str, object]) -> str:
+        """Execute one validated tool through the non-IP Runner control channel."""
+        record = self._records.get(runner.runner_id)
+        if record is None or record.handle != runner:
+            raise RuntimeError("RUNNER_TOOL_RUNNER_UNKNOWN")
+        self._enforce_ttl([record])
+        request = encode_tool_request(record.nonce, tool, arguments)
+        try:
+            response = self._host.control_exchange(record.control_socket, request, timeout_seconds=25)
+            return parse_tool_response(response, record.nonce)
+        except (OSError, TimeoutError, socket.timeout) as error:
+            raise RuntimeError("RUNNER_TOOL_CONTROL_UNAVAILABLE") from error
 
     def destroy(self, runner: RunnerHandle) -> TeardownEvidence:
         existing = self._terminal.get(runner.runner_id)
