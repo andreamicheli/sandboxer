@@ -133,6 +133,7 @@ class OperationSnapshot:
     artifact_reference: str | None = None
     evidence_version: int | None = None
     spend: dict[str, int | float] | None = None
+    queue_position: int | None = None
 
 
 class _AlwaysAvailable:
@@ -243,6 +244,8 @@ class SeriesOperations:
             if record["series_id"] == series_id
         )
         runners = tuple(resource_id for resource_id, record in self._state["runners"].items() if record["series_id"] == series_id)
+        active_queue = [item for item in self._state["queue"] if self._state["series"][item]["state"] not in _TERMINAL]
+        queue_position = active_queue.index(series_id) + 1 if series_id in active_queue else None
         return OperationSnapshot(
             series_id=series_id,
             mode=OperationMode(series["mode"]),
@@ -266,6 +269,7 @@ class SeriesOperations:
             artifact_reference=self._state.get("artifacts", {}).get(series_id, {}).get("reference"),
             evidence_version=self._state.get("artifacts", {}).get(series_id, {}).get("evidence_version"),
             spend={"wait": series["wait_cost_spent"], "execution": series["execution_cost_spent"]},
+            queue_position=queue_position,
         )
 
     def approve_spend(self, series_id: str, *, expected_revision: int) -> OperationSnapshot:
