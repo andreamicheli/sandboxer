@@ -12,8 +12,10 @@ elif mode in {"auth","credits","rate"}:
     raise SystemExit(3)
 else:
     emit({"type":"event","event":{"type":"model_request_start","model":model}})
-    if mode == "tool": emit({"type":"event","event":{"type":"tool_call"}})
-    emit({"type":"event","event":{"type":"turn_end","turnNumber":1,"hadToolCalls":False}})
+    if mode == "streaming": time.sleep(.15)
+    if mode == "tool": emit({"type":"event","event":{"type":"tool_running","toolName":"shell_command"}})
+    if mode == "runner_tool": emit({"type":"event","event":{"type":"tool_running","toolName":"mcp__runner__read_note"}})
+    emit({"type":"event","event":{"type":"turn_end","turnNumber":1,"hadToolCalls":mode=="runner_tool"}})
     if mode == "multi_turn":
         emit({"type":"event","event":{"type":"turn_start","turnNumber":2}})
         emit({"type":"event","event":{"type":"turn_end","turnNumber":2,"hadToolCalls":False}})

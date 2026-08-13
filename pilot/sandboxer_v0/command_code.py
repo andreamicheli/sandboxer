@@ -6,8 +6,9 @@ import asyncio
 import hashlib
 import json
 import re
+import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -37,6 +38,23 @@ class CommandCodeResult:
     event_types: tuple[str, ...]
 
 
+@dataclass
+class CommandCodeBudget:
+    """Orchestrator-owned cumulative output accounting across CLI continuations."""
+
+    output_tokens: int
+    consumed_output_tokens: int = field(default=0, init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.output_tokens, int) or isinstance(self.output_tokens, bool) or self.output_tokens < 1:
+            raise ValueError("a positive output-token budget is required")
+
+    def charge(self, tokens: int) -> None:
+        if tokens < 0 or self.consumed_output_tokens + tokens > self.output_tokens:
+            raise CommandCodeError("COMMAND_CODE_OUTPUT_BUDGET_EXCEEDED")
+        self.consumed_output_tokens += tokens
+
+
 @dataclass(frozen=True)
 class CommandCodePreflight:
     adapter_version: str
@@ -49,6 +67,9 @@ class CommandCodePreflight:
     concurrency_limit: int
     credit_allowance: float
     policy_compatible: bool
+    entitled_models: tuple[str, ...]
+    session_controls: tuple[str, ...]
+    live_probe_models: tuple[str, ...]
 
     @property
     def snapshot_hash(self) -> str:
@@ -58,6 +79,8 @@ class CommandCodePreflight:
             "catalog_hash": self.catalog_hash, "exact_models": self.exact_models,
             "accounting_categories": self.accounting_categories, "concurrency_limit": self.concurrency_limit,
             "credit_allowance": self.credit_allowance, "policy_compatible": self.policy_compatible,
+            "entitled_models": self.entitled_models, "session_controls": self.session_controls,
+            "live_probe_models": self.live_probe_models,
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -71,8 +94,15 @@ class CommandCodePreflight:
             raise CommandCodeError("COMMAND_CODE_ACCOUNTING_ASYMMETRIC")
         if not self.policy_compatible:
             raise CommandCodeError("COMMAND_CODE_POLICY_INCOMPATIBLE")
+        if not set(self.exact_models).issubset(self.entitled_models):
+            raise CommandCodeError("COMMAND_CODE_ENTITLEMENT_MISSING")
+        required_controls = {"no_session", "no_update", "no_skills", "skip_onboarding", "dont_ask"}
+        if set(self.session_controls) != required_controls:
+            raise CommandCodeError("COMMAND_CODE_SESSION_CONTROLS_UNSUPPORTED")
 
     def require_pair(self, requested_models: tuple[str, str], *, expected_catalog_hash: str) -> None:
+        if tuple(sorted(requested_models)) != tuple(sorted(self.live_probe_models)):
+            raise CommandCodeError("COMMAND_CODE_LIVE_PREFLIGHT_REQUIRED")
         if self.catalog_hash != expected_catalog_hash:
             raise CommandCodeError("COMMAND_CODE_CATALOG_DRIFT")
         if len(set(requested_models)) != 2 or any(model not in self.exact_models for model in requested_models):
@@ -83,6 +113,8 @@ class CommandCodePreflight:
         cls, *, binary: Path, cli_version: str, account_identifier: str,
         catalog: Sequence[str], accounting_categories: Sequence[str], concurrency_limit: int | None,
         credit_allowance: float | None, policy_compatible: bool | None,
+        entitled_models: Sequence[str], session_controls: Sequence[str],
+        live_probe_models: Sequence[str],
     ) -> "CommandCodePreflight":
         if not binary.is_file(): raise CommandCodeError("COMMAND_CODE_BINARY_MISSING")
         if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", cli_version): raise CommandCodeError("COMMAND_CODE_VERSION_UNSUPPORTED")
@@ -96,7 +128,9 @@ class CommandCodePreflight:
         return cls(
             CommandCodeAdapter.adapter_version, CommandCodeAdapter.binary_sha256(binary), cli_version,
             account_fingerprint, catalog_hash, normalized, tuple(accounting_categories),
-            concurrency_limit, credit_allowance, policy_compatible,
+            concurrency_limit, credit_allowance, policy_compatible, tuple(sorted(set(entitled_models))),
+            tuple(sorted(set(session_controls))),
+            tuple(sorted(set(live_probe_models))),
         )
 
 
@@ -115,22 +149,65 @@ class CommandCodeAdapter:
             raise ValueError("prompt, full provider/model id, and positive turns are required")
         return (*self._executable, "-p", prompt, "--model", model, "--max-turns", str(max_turns),
                 "--output-format", "json", "--no-session", "--no-auto-update", "--no-skills",
-                "--skip-onboarding", "--permission-mode", "plan")
+                "--skip-onboarding", "--permission-mode", "dont-ask")
+
+    @staticmethod
+    def prepare_workspace(
+        root: Path, *, runner_bridge: Sequence[str], runner_socket: Path,
+        allowed_tools: Sequence[str],
+    ) -> None:
+        """Install an ephemeral, deny-by-default Command Code control surface."""
+        if not runner_bridge or not runner_socket.is_absolute() or not allowed_tools:
+            raise CommandCodeError("COMMAND_CODE_BRIDGE_CONFIGURATION_INVALID")
+        tools = tuple(dict.fromkeys(allowed_tools))
+        if any(not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", item) for item in tools):
+            raise CommandCodeError("COMMAND_CODE_BRIDGE_ALLOWLIST_INVALID")
+        config = root / ".commandcode"
+        config.mkdir(mode=0o700)
+        settings = {
+            "permissions": {
+                "defaultMode": "dont-ask",
+                "allow": [f"mcp__runner__{item}" for item in tools],
+                "deny": ["Shell(*)", "Read(**)", "Write(**)", "Edit(**)", "Grep(*)", "Glob(*)",
+                         "WebFetch(*)", "WebSearch(*)", "NotebookEdit(*)"],
+            }
+        }
+        mcp = {"mcpServers": {"runner": {
+            "transport": "stdio", "enabled": True, "command": runner_bridge[0],
+            "args": list(runner_bridge[1:]),
+            "env": {"SANDBOXER_RUNNER_SOCKET": str(runner_socket),
+                    "SANDBOXER_RUNNER_TOOLS": ",".join(tools)},
+        }}}
+        for path, value in ((config / "settings.json", settings), (root / ".mcp.json", mcp)):
+            path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+            path.chmod(0o600)
 
     async def run(
         self, *, prompt: str, model: str, max_turns: int, timeout_seconds: float,
         output_token_budget: int, on_frame: Callable[[Mapping[str, Any]], None] | None = None,
+        budget: CommandCodeBudget | None = None,
+        runner_socket: Path | None = None, allowed_tools: Sequence[str] = (),
+        runner_bridge: Sequence[str] | None = None,
     ) -> CommandCodeResult:
         if timeout_seconds <= 0 or output_token_budget < 1:
             raise ValueError("positive timeout and output budget are required")
         with tempfile.TemporaryDirectory(prefix="sandboxer-command-code-") as temporary:
             root = Path(temporary)
+            if runner_socket is None:
+                raise CommandCodeError("COMMAND_CODE_BRIDGE_REQUIRED")
+            self.prepare_workspace(
+                root,
+                runner_bridge=runner_bridge or (sys.executable, "-m", "sandboxer_v0.command_code_bridge"),
+                runner_socket=runner_socket,
+                allowed_tools=allowed_tools,
+            )
             process = await asyncio.create_subprocess_exec(
                 *self.command(prompt=prompt, model=model, max_turns=max_turns), cwd=root,
                 stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
+            stderr_task = asyncio.create_task(process.stderr.read()) if process.stderr is not None else None
             try:
-                stdout, _stderr = await asyncio.wait_for(process.communicate(), timeout_seconds)
+                frames = await asyncio.wait_for(self._read_stream(process, on_frame), timeout_seconds)
             except TimeoutError as error:
                 process.terminate()
                 try:
@@ -145,26 +222,61 @@ class CommandCodeAdapter:
                 except TimeoutError:
                     process.kill(); await process.wait()
                 raise
-            frames = self._parse_lines(stdout)
-            if on_frame:
-                for frame in frames: on_frame(frame)
-            return self._result(frames, process.returncode, model, output_token_budget)
+            except Exception:
+                if process.returncode is None:
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(process.wait(), 2)
+                    except TimeoutError:
+                        process.kill(); await process.wait()
+                raise
+            finally:
+                if stderr_task is not None:
+                    await stderr_task
+            result = self._result(frames, process.returncode, model, output_token_budget, frozenset(allowed_tools))
+            if budget is not None:
+                budget.charge(result.output_tokens)
+            return result
+
+    @classmethod
+    async def _read_stream(
+        cls, process: asyncio.subprocess.Process,
+        on_frame: Callable[[Mapping[str, Any]], None] | None,
+    ) -> list[dict[str, Any]]:
+        assert process.stdout is not None
+        frames: list[dict[str, Any]] = []
+        while raw := await process.stdout.readline():
+            frame = cls._parse_line(raw)
+            frames.append(frame)
+            if on_frame is not None:
+                on_frame(frame)
+        await process.wait()
+        if not frames:
+            raise CommandCodeError("COMMAND_CODE_STREAM_EMPTY")
+        return frames
+
+    @staticmethod
+    def _parse_line(raw: bytes) -> dict[str, Any]:
+        try: frame = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise CommandCodeError("COMMAND_CODE_NDJSON_MALFORMED") from error
+        if not isinstance(frame, dict) or frame.get("type") not in {"event", "result"}:
+            raise CommandCodeError("COMMAND_CODE_FRAME_UNKNOWN")
+        return frame
 
     @staticmethod
     def _parse_lines(stdout: bytes) -> list[dict[str, Any]]:
         frames: list[dict[str, Any]] = []
         for number, raw in enumerate(stdout.splitlines(), 1):
-            try: frame = json.loads(raw)
-            except (json.JSONDecodeError, UnicodeDecodeError) as error:
-                raise CommandCodeError("COMMAND_CODE_NDJSON_MALFORMED") from error
-            if not isinstance(frame, dict) or frame.get("type") not in {"event", "result"}:
-                raise CommandCodeError("COMMAND_CODE_FRAME_UNKNOWN")
-            frames.append(frame)
+            frames.append(CommandCodeAdapter._parse_line(raw))
         if not frames: raise CommandCodeError("COMMAND_CODE_STREAM_EMPTY")
         return frames
 
     @staticmethod
-    def _result(frames: list[dict[str, Any]], exit_code: int, model: str, budget: int) -> CommandCodeResult:
+    def _result(
+        frames: list[dict[str, Any]], exit_code: int, model: str, budget: int,
+        allowed_tools: frozenset[str] = frozenset(),
+    ) -> CommandCodeResult:
         results = [frame for frame in frames if frame.get("type") == "result"]
         if len(results) != 1 or frames[-1] is not results[0]:
             raise CommandCodeError("COMMAND_CODE_RESULT_INVALID")
@@ -174,8 +286,11 @@ class CommandCodeAdapter:
             if not isinstance(event, dict) or not isinstance(event.get("type"), str):
                 raise CommandCodeError("COMMAND_CODE_EVENT_INVALID")
             kind = event["type"]; events.append(kind)
-            if kind.startswith("tool_") or (kind == "turn_end" and event.get("hadToolCalls")):
-                raise CommandCodeError("COMMAND_CODE_NATIVE_TOOL_REJECTED")
+            if kind.startswith("tool_"):
+                tool_name = event.get("toolName")
+                prefix = "mcp__runner__"
+                if not isinstance(tool_name, str) or not tool_name.startswith(prefix) or tool_name[len(prefix):] not in allowed_tools:
+                    raise CommandCodeError("COMMAND_CODE_NATIVE_TOOL_REJECTED")
             if kind in {"model_request_start", "model_request_end"} and isinstance(event.get("model"), str): observed.add(event["model"])
             if kind == "thinking_end" and isinstance(event.get("text"), str): reasoning.append(event["text"])
             if kind == "turn_end": turns = max(turns, _integer(event, "turnNumber"))

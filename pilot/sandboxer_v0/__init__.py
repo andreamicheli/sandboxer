@@ -52,7 +52,7 @@ from .operations import (
     SeriesOperations,
     StaleRevision,
 )
-from .command_code import CommandCodeAdapter, CommandCodeError, CommandCodePreflight, CommandCodeResult
+from .command_code import CommandCodeAdapter, CommandCodeBudget, CommandCodeError, CommandCodePreflight, CommandCodeResult
 
 __all__ = [
     "ControlledCompetitor",
@@ -111,6 +111,7 @@ __all__ = [
     "SeriesOperations",
     "StaleRevision",
     "CommandCodeAdapter",
+    "CommandCodeBudget",
     "CommandCodeError",
     "CommandCodePreflight",
     "CommandCodeResult",
