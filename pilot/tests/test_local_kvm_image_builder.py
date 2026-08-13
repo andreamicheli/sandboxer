@@ -188,19 +188,22 @@ def test_rendered_toy_health_retries_a_bounded_http_request_after_background_sta
 
     document_root = tmp_path / "notes"; document_root.mkdir()
     (document_root / "index.html").write_text("synthetic", encoding="ascii")
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+        reservation.bind(("127.0.0.2", 0))
+        health_port = reservation.getsockname()[1]
     listener = subprocess.Popen(
-        ["/usr/bin/busybox", "sh", "-c", f"sleep 3; exec /usr/bin/busybox httpd -f -p 127.0.0.2:8080 -h {document_root}"],
+        ["/usr/bin/busybox", "sh", "-c", f"sleep 3; exec /usr/bin/busybox httpd -f -p 127.0.0.2:{health_port} -h {document_root}"],
     )
     try:
         # The service contract is an HTTP response, and a single immediate
         # request can race a daemon launched in the background.
         immediate = subprocess.run(
-            ["/usr/bin/busybox", "wget", "-q", "-T", "1", "-O", "/dev/null", "http://127.0.0.2:8080/"],
+            ["/usr/bin/busybox", "wget", "-q", "-T", "1", "-O", "/dev/null", f"http://127.0.0.2:{health_port}/"],
             check=False,
         )
         assert immediate.returncode != 0
         helper = tmp_path / "toy-health"
-        helper.write_text(common.replace("/bin/busybox", "/usr/bin/busybox") + "\nsandboxer_toy_http_ready 127.0.0.2\n", encoding="utf-8")
+        helper.write_text(common.replace("/bin/busybox", "/usr/bin/busybox").replace(":8080/", f":{health_port}/") + "\nsandboxer_toy_http_ready 127.0.0.2\n", encoding="utf-8")
         result = subprocess.run(["/usr/bin/busybox", "ash", str(helper)], check=False, capture_output=True, text=True, timeout=5)
         assert result.returncode == 0, result.stderr
     finally:

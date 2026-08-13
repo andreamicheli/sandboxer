@@ -8,7 +8,7 @@ FAKE = Path(__file__).with_name("fake_command_code_cli.py")
 
 def run(mode="success", *, budget=None):
     old=os.environ.get("SANDBOXER_FAKE_COMMAND_CODE"); os.environ["SANDBOXER_FAKE_COMMAND_CODE"]=mode
-    try: return asyncio.run(CommandCodeAdapter((sys.executable,str(FAKE))).run(prompt="defend",model="example/model",max_turns=2,timeout_seconds=.2,output_token_budget=10,budget=budget,runner_socket=Path("/tmp/fake-runner.sock"),allowed_tools=("read_note",)))
+    try: return asyncio.run(CommandCodeAdapter((sys.executable,str(FAKE))).run(prompt="defend",model="example/model",max_turns=2,timeout_seconds=.2 if mode=="timeout" else 2,output_token_budget=10,budget=budget,runner_socket=Path("/tmp/fake-runner.sock"),allowed_tools=("read_note",)))
     finally:
         if old is None: os.environ.pop("SANDBOXER_FAKE_COMMAND_CODE",None)
         else: os.environ["SANDBOXER_FAKE_COMMAND_CODE"]=old
