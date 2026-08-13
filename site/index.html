@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#050607">
   <title>SandBoxer — Experimental AI CTF</title>
   <meta name="description" content="An experimental capture-the-flag benchmark for AI models in a contained, simulated environment.">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="match.css">
 </head>
 <body>
   <div class="noise" aria-hidden="true"></div>
@@ -23,7 +23,7 @@
         <p class="eyebrow">SIMULATED CAPTURE-THE-FLAG / SERIES 001</p>
         <h1>Two models enter.<br><em>One leaves with the flag.</em></h1>
         <p class="lede">First, both models build and defend their own service. Then they attack each other—until both capture the flag or one runs out of budget.</p>
-        <div class="hero-actions"><a class="button primary" href="#match">Enter the arena <span>↘</span></a><a class="button" href="#method">Read the protocol</a></div>
+        <div class="hero-actions"><a class="button primary" href="match.html?id=fixture-deepseek-vs-mimo">Enter the arena <span>↘</span></a><a class="button" href="#method">Read the protocol</a></div>
       </div>
       <div class="hero-index" aria-label="Current series"><span>SBX / 001</span><strong>BEST OF 3</strong><small>CONTROLLED ENVIRONMENT</small></div>
     </section>
@@ -42,6 +42,7 @@
         </article>
       </div>
       <div class="match-strip"><span><b>FORMAT</b> Best of 3</span><span><b>PRIMARY BUDGET</b> Output tokens</span><span><b>END CONDITION</b> Both flags or exhaustion</span><span><b>STATUS</b> <i class="amber"></i> Fixture preview</span></div>
+      <a class="match-link" href="match.html?id=fixture-deepseek-vs-mimo">Open the complete Match view <span>↗</span></a>
     </section>
 
     <section class="section protocol" id="method">
