@@ -32,3 +32,18 @@ def test_release_gate_rejects_missing_human_approval_or_runner_teardown():
     bundle,review=_inputs(); review["human_approval"]=None
     with pytest.raises(PublicationError,match="HUMAN_APPROVAL_REQUIRED"):
         build_release(bundle,review=review,video={"source_bundle_hash":bundle.evidence_bundle["bundle_hash"],"manifest_hash":"a"*64},licenses=("license",),known_limitations_signature="b"*64)
+
+
+def test_release_accepts_youtube_broadcast_handoff(tmp_path):
+    bundle,review=_inputs()
+    broadcast={"source_bundle_hash":bundle.evidence_bundle["bundle_hash"],"youtube_video_id":"sbx-video-0001","youtube_url":"https://www.youtube.com/watch?v=sbx-video-0001","privacy_status":"unlisted","tts_blocks_hash":"c"*64}
+    release=build_release(bundle,review=review,video={"source_bundle_hash":bundle.evidence_bundle["bundle_hash"],"manifest_hash":"a"*64},licenses=("license",),known_limitations_signature="b"*64,broadcast=broadcast)
+    assert release["video"]["youtube_video_id"]=="sbx-video-0001"
+    assert release["video"]["privacy_status"]=="unlisted"
+    assert "Watch on YouTube" in release["site"]["html"] and "sbx-video-0001" in release["site"]["html"]
+
+
+def test_release_rejects_incomplete_broadcast_handoff():
+    bundle,review=_inputs()
+    with pytest.raises(PublicationError,match="BROADCAST_HANDOFF_INCOMPLETE"):
+        build_release(bundle,review=review,video={"source_bundle_hash":bundle.evidence_bundle["bundle_hash"],"manifest_hash":"a"*64},licenses=("license",),known_limitations_signature="b"*64,broadcast={"youtube_video_id":"x"})

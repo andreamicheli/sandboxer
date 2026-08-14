@@ -142,6 +142,40 @@ changing the episode's sound. Because the selected endpoint is a preview,
 availability and voice stability are hard preflight gates and any fallback must
 be explicitly approved rather than silently substituted.
 
+The implemented TTS adapter (`sandboxer_v0/tts.py`) calls the Gemini API
+`interactions` endpoint with `response_format: audio` and a pinned
+`speech_config` voice per commentary role, converts the returned PCM to WAV at
+a fixed 24 kHz mono rate, and records per-block script/model/voice/style
+configuration plus audio hashes. `FakeTtsAdapter` keeps dry runs deterministic
+and credential-free; `GeminiTtsAdapter` performs a tiny synthesis probe during
+preflight so preview availability and voice stability fail closed before any
+block renders. No fallback is silently substituted.
+
+The Interactions API requires `google-genai >= 2.0.0` (Google retired the
+legacy Interactions schema in May 2026; older SDKs are rejected server-side
+with HTTP 400 regardless of key validity). The pilot pins
+`google-genai>=2.0,<3` and the probe surfaces the underlying API error instead
+of a generic failure.
+
+Publication handoff to YouTube (the map's "YouTube-ready broadcast path") is
+explicitly gated. `sandboxer_v0/youtube.py` uploads the delivery encode through
+the YouTube Data API v3 `videos.insert` resumable endpoint using an OAuth 2.0
+refresh token stored only in the control plane, defaults every upload to
+`unlisted`, and requires a recorded human approval before a real upload.
+
+OAuth credentials are captured by `scripts/setup_credentials.py` (Desktop-app
+client + refresh token, written to the control-plane `.env` only). On
+headless hosts `--flow manual` prints the authorization URL and accepts the
+redirect URL pasted back from any device's browser, avoiding SSH port
+forwarding entirely. It
+derives title, disclaimer, winner, chapter timecodes, tags, and report links
+from the frozen manifest and Result Report, attaches captions as drafts
+(`isDraft: true` with sync) pending review, and optionally sets the thumbnail
+and adds the episode to a series playlist. The recorded handoff
+(`youtube_video_id`, `youtube_url`, `privacy_status`, TTS block hash) becomes
+part of the release bundle so the results site links to the episode. `dry-run`
+and fake modes exercise the full path without credentials or network.
+
 Sanitized terminal replays are the primary Match visual. The brand uses an
 original, restrained retro-futurist hacker system: deep navy-black foundations,
 electric cobalt system accents, bitmap display typography paired with legible

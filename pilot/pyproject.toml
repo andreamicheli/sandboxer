@@ -7,6 +7,9 @@ dependencies = [
   "inspect-ai>=0.3.234,<0.4",
   "inspect-swe>=0.2.60,<0.3",
   "openai>=1.99,<3",
+  "google-genai>=2.0,<3",
+  "google-api-python-client>=2.100,<3",
+  "google-auth-oauthlib>=1.0,<2",
 ]
 
 [dependency-groups]
