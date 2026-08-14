@@ -7,6 +7,11 @@ Gemini TTS API key (from Google AI Studio):
 
     python scripts/setup_credentials.py gemini --key AIza... --probe
 
+Fish Audio API key + voice reference_ids (from https://fish.audio):
+
+    python scripts/setup_credentials.py fish --key <FISH_API_KEY> \\
+        --voice-kore <ref> --voice-charon <ref> --probe
+
 YouTube OAuth 2.0 login (Desktop-app client, captures a refresh token and
 verifies the authorized channel):
 
@@ -44,7 +49,15 @@ from typing import Any, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sandboxer_v0.tts import DEFAULT_SETTINGS_VERSION, DEFAULT_TTS_MODEL, DEFAULT_VOICES, GeminiTtsAdapter, TtsError
+from sandboxer_v0.tts import (
+    DEFAULT_FISH_TTS_MODEL,
+    DEFAULT_SETTINGS_VERSION,
+    DEFAULT_TTS_MODEL,
+    DEFAULT_VOICES,
+    FishAudioTtsAdapter,
+    GeminiTtsAdapter,
+    TtsError,
+)
 from sandboxer_v0.video import TtsPreflight
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
@@ -205,6 +218,40 @@ def _run_oauth_flow_manual(flow: Any, *, port: int) -> Any:
     return flow.credentials
 
 
+def _cmd_fish(args: argparse.Namespace) -> int:
+    path = _env_path(args.env)
+    key = args.key or os.environ.get("FISH_API_KEY")
+    if not key:
+        key = input("Paste your Fish Audio API key (https://fish.audio/developers): ").strip()
+    if not key:
+        print("FISH_KEY_MISSING: no API key provided", file=sys.stderr)
+        return 2
+    kore = args.voice_kore or os.environ.get("FISH_VOICE_KORE")
+    charon = args.voice_charon or os.environ.get("FISH_VOICE_CHARON")
+    if not kore:
+        kore = input("Paste the reference_id of the play-by-play voice (Kore): ").strip()
+    if not charon:
+        charon = input("Paste the reference_id of the analyst voice (Charon): ").strip()
+    if not kore or not charon:
+        print("FISH_VOICES_MISSING: both voice reference_ids are required", file=sys.stderr)
+        return 2
+    voices = f"Kore={kore},Charon={charon}"
+    _write_env(path, {"FISH_API_KEY": key, "FISH_TTS_VOICES": voices})
+    print(f"Wrote FISH_API_KEY ({_mask(key)}) and FISH_TTS_VOICES to {path}")
+    if args.probe:
+        adapter = FishAudioTtsAdapter(api_key=key, reference_ids={"Kore": kore, "Charon": charon})
+        expected = TtsPreflight(DEFAULT_FISH_TTS_MODEL, ("Kore", "Charon"), "fish-audio-v1")
+        try:
+            result = adapter.preflight(expected)
+            result.verify()
+        except (TtsError, ValueError) as error:
+            print(f"FISH_PROBE_FAILED: {error}", file=sys.stderr)
+            return 1
+        print(f"Fish TTS probe ok: model={result.observed.model} "
+              f"probe={result.probe_duration_ms}ms audio_sha256={result.probe_sha256}")
+    return 0
+
+
 def _cmd_youtube(args: argparse.Namespace) -> int:
     path = _env_path(args.env)
     client_config, _kind = _load_oauth_config(args)
@@ -263,6 +310,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     gemini.add_argument("--key", default=None)
     gemini.add_argument("--probe", action="store_true", help="Run one tiny real TTS synthesis to validate the key")
     gemini.add_argument("--env", type=Path, default=None)
+    fish = sub.add_parser("fish", help="Store the Fish Audio API key and voice reference_ids")
+    fish.add_argument("--key", default=None)
+    fish.add_argument("--voice-kore", default=None, help="reference_id of the play-by-play voice (Kore)")
+    fish.add_argument("--voice-charon", default=None, help="reference_id of the analyst voice (Charon)")
+    fish.add_argument("--probe", action="store_true", help="Run one tiny real TTS synthesis to validate the key and voices")
+    fish.add_argument("--env", type=Path, default=None)
     youtube = sub.add_parser("youtube", help="OAuth login to YouTube and store a refresh token")
     youtube.add_argument("--client-id", default=None)
     youtube.add_argument("--client-secret", default=None)
@@ -277,9 +330,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("Missing command. Run one of:")
         print("  python scripts/setup_credentials.py gemini --key <AIza...> --probe")
         print("  python scripts/setup_credentials.py youtube --client-id <id> --client-secret <secret>")
+        print("  python scripts/setup_credentials.py fish --key <key> --voice-kore <ref> --voice-charon <ref> --probe")
         return 2
     if args.command == "gemini":
         return _cmd_gemini(args)
+    if args.command == "fish":
+        return _cmd_fish(args)
     return _cmd_youtube(args)
 
 

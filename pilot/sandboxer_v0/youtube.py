@@ -326,7 +326,7 @@ class YoutubeUploader:
             request = youtube.thumbnails().set(videoId=video_id, media_body=MediaFileUpload(str(thumbnail), mimetype="image/png"))
             response = request.execute()
         except Exception as error:
-            raise YoutubeError("YOUTUBE_THUMBNAIL_FAILED") from error
+            raise YoutubeError(f"YOUTUBE_THUMBNAIL_FAILED: {error}") from error
         items = response.get("items") or []
         url = (items[0].get("url") if items else None) or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
         self.calls.append({"method": "thumbnails.set", "video_id": video_id})
@@ -344,7 +344,9 @@ class YoutubeUploader:
         captions = self._require_file(caption_path, "CAPTIONS")
         if not video_id:
             raise YoutubeError("YOUTUBE_VIDEO_ID_MISSING")
-        body = {"snippet": {"videoId": video_id, "language": language, "isDraft": is_draft}}
+        # ``name`` is required by the captions.insert endpoint (empty string is
+        # valid); omitting it returns a 400 invalidMetadata.
+        body = {"snippet": {"videoId": video_id, "language": language, "name": "", "isDraft": is_draft}}
         if self.dry_run:
             self.calls.append({"method": "captions.insert", "video_id": video_id, "language": language, "is_draft": is_draft})
             return {"video_id": video_id, "caption_id": f"sbx-caption-{video_id}", "is_draft": is_draft, "dry_run": True}
@@ -360,7 +362,7 @@ class YoutubeUploader:
             )
             response = request.execute()
         except Exception as error:
-            raise YoutubeError("YOUTUBE_CAPTIONS_FAILED") from error
+            raise YoutubeError(f"YOUTUBE_CAPTIONS_FAILED: {error}") from error
         self.calls.append({"method": "captions.insert", "video_id": video_id, "language": language, "is_draft": is_draft})
         return {"video_id": video_id, "caption_id": response.get("id"), "is_draft": is_draft, "dry_run": False}
 

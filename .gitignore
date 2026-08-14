@@ -3,5 +3,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
+# Generated broadcast outputs (video/audio/provenance) — reproducible from the
+# scripts; keep the repo free of multi-MB binaries.
+/artifacts/
+
 # The already-hosted match report currently keeps its own repository.
 /match-report-site/

@@ -91,3 +91,15 @@ def test_thumbnail_captions_and_playlist_are_recorded(tmp_path):
     methods = [call["method"] for call in service.calls]
     assert methods == ["videos.insert", "thumbnails.set", "captions.insert", "playlistItems.insert"]
     assert caption["is_draft"] is True
+
+
+def test_captions_body_includes_required_name_field(tmp_path):
+    service = FakeYoutubeService()
+    uploader = YoutubeUploader(service=service, dry_run=False)
+    video = _video(tmp_path)
+    captions = tmp_path / "captions.vtt"
+    captions.write_text("WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello\n")
+    uploaded = uploader.upload(video, title="t", description="d", approved=True)
+    uploader.upload_captions(uploaded["video_id"], captions)
+    body = service.calls[-1]["args"]["body"]["snippet"]
+    assert body["name"] == "" and body["videoId"] == uploaded["video_id"] and body["language"] == "en"

@@ -151,6 +151,17 @@ and credential-free; `GeminiTtsAdapter` performs a tiny synthesis probe during
 preflight so preview availability and voice stability fail closed before any
 block renders. No fallback is silently substituted.
 
+Free-tier quota is enforced per model, so the adapter walks an approved
+fallback chain (primary `gemini-3.1-flash-tts-preview`, then Gemini 2.5 Flash
+TTS preview by default) when a model's quota window is exhausted; the model
+actually used is recorded per block (`models_used`) and in the broadcast
+record, never silent.  Retries honor Google's suggested wait from the 429
+body, permanent errors (blocked prompts, `limit: 0` models) are never retried
+or masked, and rendering is resumable — completed blocks are reused so an
+interrupted render does not re-spend quota.  The canonical render entry point
+is `scripts/render_commentary_audio.py`, which also assembles the full-length
+audio track for muxing with the Remotion video.
+
 The Interactions API requires `google-genai >= 2.0.0` (Google retired the
 legacy Interactions schema in May 2026; older SDKs are rejected server-side
 with HTTP 400 regardless of key validity). The pilot pins
