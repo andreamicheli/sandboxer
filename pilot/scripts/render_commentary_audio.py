@@ -45,6 +45,7 @@ from sandboxer_v0.tts import (
     parse_voice_spec,
     render_commentary_audio,
 )
+from sandboxer_v0.video import _digest
 
 ROOT = Path(__file__).resolve().parent.parent.parent / "artifacts"
 RATE = 24_000
@@ -144,6 +145,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     print(f"rendered {section['block_count']} blocks (hash {section['blocks_hash'][:12]}, "
           f"models_used={section['models_used']})")
+
+    # Persist the actual-duration-packed schedule back into the manifest so
+    # captions and the Remotion caption bar stay in sync with the audio.
+    for line, block in zip(manifest["commentary"], section["blocks"]):
+        line["start_frame"] = block["start_frame"]
+        line["end_frame"] = block["end_frame"]
+    manifest["manifest_hash"] = _digest(manifest)
+    args.manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    print(f"updated {args.manifest} with packed commentary schedule")
 
     # Assemble the full-length track with each block at its start_frame.
     track = bytearray(total_ms * RATE // 1000 * 2)

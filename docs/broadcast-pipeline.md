@@ -65,11 +65,17 @@ narrative. `pilot/sandboxer_v0/commentary.py` owns that step:
   lines must carry a hedge marker (`appears`, `seems`, …).
 
 `build_video_manifest(..., commentary=<lines>)` schedules a validated draft
-into a flowing dialogue (lines packed back-to-back with a ~0.4s pause) and
-raises `COMMENTARY_OVERFLOW` if it would run past the Match into the recap.
-Without a draft it falls back to reading the terminal events verbatim (a
-rehearsal placeholder only). Human review of the draft is mandatory before
-publication.
+with a word-based reading-time budget and raises `COMMENTARY_OVERFLOW` if the
+plan would run past the Match into the recap. Without a draft it falls back to
+reading the terminal events verbatim (a rehearsal placeholder only). Human
+review of the draft is mandatory before publication.
+
+Overlap is prevented at render time, not just planned for: after TTS renders
+the blocks, `render_commentary_audio()` re-packs them by their *actual*
+audio durations (400ms turn gap) and writes that final schedule back into the
+manifest, so the assembled track, captions, and on-screen caption bar stay in
+sync and can never overlap. Resume also verifies each block's script hash
+sidecar, so a changed line re-renders instead of silently reusing stale audio.
 
 ## Adding a new TTS provider
 
@@ -108,16 +114,20 @@ uv run python scripts/setup_credentials.py youtube --flow manual --client-id <id
 
 # 2. (Rehearsal) rebuild replay/report/manifest incl. drafted commentary
 uv run python scripts/build_synthetic_artifacts.py
+
+# 3. TTS commentary -> artifacts/commentary-full.wav (resumable).  Packs the
+#    blocks by their actual rendered durations (no overlap, natural turn gaps)
+#    and writes that final schedule back into video-manifest.json.
+uv run python scripts/render_commentary_audio.py --provider fish --no-resume
+
+# 4. Regenerate renderer props + captions from the packed schedule
 python3 -c "import json; json.dump({'manifest': json.load(open('artifacts/video-manifest.json'))}, open('artifacts/remotion-props.json','w'), indent=2)"
 uv run python scripts/build_captions.py
 
-# 3. TTS commentary -> artifacts/commentary-full.wav (resumable)
-uv run python scripts/render_commentary_audio.py --provider fish --no-resume
-
-# 4. Video -> artifacts/video-only.mp4 (Remotion)
+# 5. Video -> artifacts/video-only.mp4 (Remotion)
 cd ../video && npx remotion render src/index.tsx SandboxerSeries ../artifacts/video-only.mp4 --props=../artifacts/remotion-props.json && cd ../pilot
 
-# 5. Mux -> artifacts/delivery.mp4 (probe -> loudnorm -> mux -> delivery)
+# 6. Mux -> artifacts/delivery.mp4 (probe -> loudnorm -> mux -> delivery)
 ffmpeg -y -nostdin -i artifacts/commentary-full.wav -af "loudnorm=I=-16:LRA=7:TP=-1.5" -c:a pcm_s24le artifacts/commentary-full.normalized.wav
 ffmpeg -y -nostdin -i artifacts/video-only.mp4 -i artifacts/commentary-full.normalized.wav -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 320k artifacts/master.mov
 ffmpeg -y -nostdin -i artifacts/master.mov -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -movflags +faststart artifacts/delivery.mp4

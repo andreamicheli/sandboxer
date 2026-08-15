@@ -52,6 +52,8 @@ DEFAULT_TTS_FALLBACK_MODELS = ("gemini-2.5-flash-preview-tts",)
 DEFAULT_VOICES = ("Kore", "Charon")
 DEFAULT_SETTINGS_VERSION = "settings-v1"
 VOICE_BY_ROLE = {"play_by_play": "Kore", "analyst": "Charon"}
+# Natural turn-taking pause between packed commentary blocks (milliseconds).
+_PACK_GAP_MS = 400
 
 # Fish Audio (https://fish.audio) free developer tier: the `s2.1-pro-free`
 # model has no hard usage cap under Fair Use.  Voices are explicit
@@ -604,6 +606,18 @@ def _write_block_model(out_dir: Path, index: int, model: str) -> None:
     (out_dir / f"block-{index:04d}.model").write_text(model, encoding="utf-8")
 
 
+def _block_script_hash(out_dir: Path, index: int) -> str | None:
+    sidecar = out_dir / f"block-{index:04d}.hash"
+    if not sidecar.is_file():
+        return None
+    value = sidecar.read_text(encoding="utf-8").strip()
+    return value or None
+
+
+def _write_block_script_hash(out_dir: Path, index: int, script_hash: str) -> None:
+    (out_dir / f"block-{index:04d}.hash").write_text(script_hash, encoding="utf-8")
+
+
 def render_commentary_audio(
     manifest: Mapping[str, Any],
     adapter: TtsAdapter,
@@ -640,17 +654,19 @@ def render_commentary_audio(
         filename = f"block-{index:04d}.wav"
         path = out_dir / filename
         script_text = str(line.get("text", ""))
-        if resume and path.is_file() and path.stat().st_size > 0:
+        # The model is not re-verifiable offline, so reuse the last recorded
+        # model from a sidecar if present, else the pinned expected model.
+        model = _block_model(out_dir, index) or expected.model
+        expected_script_hash = _digest(
+            {"script": script_text, "model": model, "voice": voice, "style": style}
+        )
+        if resume and path.is_file() and path.stat().st_size > 0 and _block_script_hash(out_dir, index) == expected_script_hash:
             with wave.open(str(path), "rb") as reader:
                 audio = reader.readframes(reader.getnframes())
                 frame_bytes = reader.getnchannels() * reader.getsampwidth()
                 # Compute duration from the bytes actually present, not the
                 # header frame count (streaming WAVs declare a placeholder).
                 duration_ms = round((len(audio) // frame_bytes) / reader.getframerate() * 1000)
-            # Rebuild the record from the frozen manifest + audio; the model is
-            # not re-verifiable offline, so reuse the last recorded model from
-            # a sidecar if present, else the pinned expected model.
-            model = _block_model(out_dir, index) or expected.model
             record = tts_block(
                 script=script_text, model=model, voice=voice, style=style,
                 audio=audio, duration_ms=duration_ms,
@@ -661,12 +677,27 @@ def render_commentary_audio(
         result = adapter.synthesize(script=script_text, voice=voice, style=style)
         path.write_bytes(result.audio)
         _write_block_model(out_dir, index, result.model)
+        _write_block_script_hash(out_dir, index, result.record["script_hash"])
         blocks.append({**result.record, "file": filename, "start_frame": line.get("start_frame"), "end_frame": line.get("end_frame")})
         models_used.add(result.model)
         # Free-tier quota windows are narrow: pace fresh renders (never after
         # a resumed block) so bursts stay under the per-model ceiling.
         if pacing_seconds > 0 and index < len(lines) - 1:
             time.sleep(pacing_seconds)
+    # Pack the blocks by their *actual* rendered durations so the assembled
+    # track flows like a conversation and can never overlap.  The manifest
+    # start/end frames are the plan; the rendered duration is authoritative
+    # here (streaming-WAV headers lie, so use the measured byte length).
+    fps=int(manifest["fps"])
+    if blocks:
+        at_ms=blocks[0]["start_frame"]*1000//fps
+        for block in blocks:
+            duration_ms=int(block["duration_ms"])
+            block["start_frame"]=round(at_ms*fps/1000)
+            block["end_frame"]=round((at_ms+duration_ms)*fps/1000)
+            at_ms+=duration_ms+_PACK_GAP_MS
+        recap_start=sum(scene["duration_frames"] for scene in manifest["scenes"][:-1])
+        if blocks[-1]["end_frame"]>recap_start: raise TtsError("COMMENTARY_OVERFLOW_AFTER_RENDER")
     blocks_hash = _digest([block["script_hash"] for block in blocks])
     return {
         "expected": asdict(expected),

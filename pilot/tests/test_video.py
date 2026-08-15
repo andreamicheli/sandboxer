@@ -93,4 +93,4 @@ def test_video_manifest_packs_drafted_commentary_into_a_flowing_dialogue():
 
 def test_video_manifest_rejects_drafted_commentary_that_overflows_the_match():
     with pytest.raises(VideoError,match="COMMENTARY_OVERFLOW"):
-        build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},commentary=[{"voice_role":"play_by_play","line_type":"observed","event_ids":["e1"],"text":"x"*200}])
+        build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},commentary=[{"voice_role":"play_by_play","line_type":"observed","event_ids":["e1"],"text":" ".join(["word"]*100)}])

@@ -205,6 +205,18 @@ def test_preflight_verify_allows_approved_fallback_drift():
         result.verify(allow_fallback=False)
 
 
+def test_render_commentary_resume_rerenders_when_script_changes(tmp_path):
+    def manifest_for(text: str):
+        drafted = [{"voice_role": "play_by_play", "line_type": "observed", "event_ids": ["e1"], "text": text}]
+        return build_video_manifest(_replay(), report={"report_url": "r", "outcome": {}}, model_metadata={}, benchmark_snapshot={}, commentary=drafted)
+
+    render_commentary_audio(manifest_for("First line."), FakeTtsAdapter(), out_dir=tmp_path)
+    second = FakeTtsAdapter()
+    render_commentary_audio(manifest_for("Changed line."), second, out_dir=tmp_path)
+    # The script changed, so the stale block must be re-rendered, not reused.
+    assert [call["script"] for call in second.calls] == ["Changed line."]
+
+
 def test_render_commentary_resumes_existing_blocks(tmp_path):
     manifest = _manifest()
     first = render_commentary_audio(manifest, FakeTtsAdapter(), out_dir=tmp_path)
@@ -348,6 +360,30 @@ def test_render_commentary_resumes_streaming_wav_blocks(tmp_path):
     # Streaming-WAV blocks are reused; the second pass must not re-synthesize.
     assert second_client.calls == []
     assert second["blocks_hash"] == first["blocks_hash"]
+
+
+def test_render_commentary_packs_blocks_by_actual_duration_no_overlap(tmp_path):
+    drafted = [
+        {"voice_role": "play_by_play", "line_type": "observed", "event_ids": ["e1"], "text": "A defends."},
+        {"voice_role": "analyst", "line_type": "interpreted", "event_ids": ["e2"], "text": "It seems B probes."},
+    ]
+    manifest = build_video_manifest(
+        _replay(), report={"report_url": "r", "outcome": {}}, model_metadata={},
+        benchmark_snapshot={}, commentary=drafted,
+    )
+    refs = {"Kore": "ref-k", "Charon": "ref-c"}
+    adapter = FishAudioTtsAdapter(
+        client=_FishClient(_fish_wav(1500)), reference_ids=refs, probe=False
+    )
+    rendered = render_commentary_audio(manifest, adapter, out_dir=tmp_path)
+    blocks = rendered["blocks"]
+    fps = manifest["fps"]
+    # Packed back-to-back by the 1.5s actual duration plus the 400ms turn gap,
+    # not by the (shorter or longer) estimated window.
+    expected_step = 1500 * fps // 1000 + 400 * fps // 1000
+    assert blocks[1]["start_frame"] - blocks[0]["start_frame"] == expected_step
+    assert blocks[0]["end_frame"] - blocks[0]["start_frame"] == 1500 * fps // 1000
+    assert blocks[1]["start_frame"] >= blocks[0]["end_frame"]
 
 
 def test_adapters_speak_script_verbatim_without_style_instruction():

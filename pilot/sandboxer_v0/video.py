@@ -71,9 +71,21 @@ def _benchmarks(snapshot:Mapping[str,Any],identities:tuple[str,str])->list[dict[
     return rows
 
 
+_WORDS_PER_SECOND = 2.6   # measured speaking rate for the pinned voices
+_LEAD_TAIL_SECONDS = 0.3  # per-block lead-in/tail margin
+
+
 def _line_length(text:str,fps:int)->int:
-    """Frames a commentary line needs at a rough ~15 chars/second speaking rate."""
-    return min(8*fps,max(int(1.5*fps),len(text)//15*fps))
+    """Frames a commentary line needs at a conservative speaking rate.
+
+    Word-based rather than character-based: reading time tracks the word count
+    (the voices speak ~2.5-3 words/second), plus a fixed lead-in/tail margin.
+    This is the *planning* budget and overflow guard; the final audio schedule
+    is packed from actual rendered durations after TTS.
+    """
+    words=max(1,len(text.split()))
+    seconds=words/_WORDS_PER_SECOND+_LEAD_TAIL_SECONDS
+    return min(10*fps,max(int(1.5*fps),round(seconds*fps)))
 
 
 def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model_metadata:Mapping[str,Any],benchmark_snapshot:Mapping[str,Any],fps:int=30,commentary:Sequence[Mapping[str,Any]]|None=None)->dict[str,Any]:
