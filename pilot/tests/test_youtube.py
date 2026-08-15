@@ -76,6 +76,20 @@ def test_metadata_builder_has_disclaimer_winner_chapters_and_safe_status():
     assert status["privacyStatus"] == "unlisted" and status["madeForKids"] is False and status["selfDeclaredMadeForKids"] is False
 
 
+def test_metadata_builder_includes_scheduled_publish_and_report_url_override():
+    manifest = _manifest()
+    report = {"title": "A vs B", "report_url": "sandboxer://internal/old", "outcome": {"winner": "A"}}
+    metadata = youtube_metadata(
+        manifest, report,
+        report_url="https://sandboxer.example/reports/series-001/match-1",
+        publish_at="2026-08-17",
+    )
+    description = metadata["snippet"]["description"]
+    assert "https://sandboxer.example/reports/series-001/match-1" in description
+    assert "sandboxer://internal/old" not in description
+    assert "featured, indexed Match on the Sandboxer site on 2026-08-17" in description
+
+
 def test_thumbnail_captions_and_playlist_are_recorded(tmp_path):
     service = FakeYoutubeService()
     uploader = YoutubeUploader(service=service, dry_run=False)

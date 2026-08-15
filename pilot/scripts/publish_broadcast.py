@@ -19,6 +19,19 @@ YOUTUBE_* refresh-token env vars), an explicit human approval
         --thumb ../artifacts/thumbnail.png \\
         --tts real --youtube real --privacy unlisted \\
         --approved-by editor --yes
+
+Temporary unattended publishing (human gates off): ``--auto-approve`` skips
+both the reviewer requirement and the interactive confirmation, and
+``--publish-at`` (default: the next odd day) schedules when the site indexes
+the result as featured while the upload stays unlisted for preview:
+
+    uv run python scripts/publish_broadcast.py \\
+        --manifest ../artifacts/video-manifest.json \\
+        --report ../artifacts/report.json \\
+        --video ../artifacts/delivery.mp4 \\
+        --tts fish --youtube real --privacy unlisted \\
+        --report-url https://sandboxer.example/reports/series-001/match-1 \\
+        --auto-approve
 """
 
 from __future__ import annotations
@@ -27,11 +40,13 @@ import argparse
 import json
 import os
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from sandboxer_v0.schedule import first_publication_date, parse_iso_date
 from sandboxer_v0.tts import (
     DEFAULT_FISH_TTS_MODEL,
     DEFAULT_TTS_FALLBACK_MODELS,
@@ -119,6 +134,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--playlist", default=None)
     parser.add_argument("--approved-by", default=None)
     parser.add_argument("--yes", action="store_true")
+    parser.add_argument("--auto-approve", action="store_true",
+                        help="temporarily bypass the human approval gate and interactive confirmation")
+    parser.add_argument("--report-url", default=None,
+                        help="canonical report URL on the site, linked from the video description")
+    parser.add_argument("--publish-at", default=None,
+                        help="ISO date (YYYY-MM-DD) the site indexes this result as featured; default: next odd day")
     args = parser.parse_args(argv)
 
     manifest = _load(args.manifest, "manifest")
@@ -129,6 +150,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("VIDEO_MISSING")
     audio_dir = args.audio_dir or args.out.with_suffix(".audio")
 
+    # Schedule: default to the next odd day; an explicit date must be valid.
+    publish_at: str | None = None
+    if args.publish_at:
+        publish_at = parse_iso_date(args.publish_at).isoformat()
+    elif args.auto_approve:
+        publish_at = first_publication_date(date.today()).isoformat()
+
     # 1. TTS commentary blocks (bounded, hashed; drift fails preflight).
     try:
         adapter = _tts_adapter(args.tts, manifest)
@@ -138,16 +166,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # 2. YouTube handoff (metadata, resumable upload, captions, thumbnail).
     try:
-        metadata = youtube_metadata(manifest, report)
+        metadata = youtube_metadata(
+            manifest, report,
+            report_url=args.report_url,
+            publish_at=publish_at,
+        )
         rehearsal = args.youtube in ("fake", "dry-run")
         if args.youtube == "fake":
             uploader = YoutubeUploader(service=FakeYoutubeService(), dry_run=False)
         elif args.youtube == "dry-run":
             uploader = YoutubeUploader(dry_run=True)
         else:
-            if not args.approved_by:
-                raise SystemExit("APPROVAL_REQUIRED: pass --approved-by <reviewer> for a real upload")
-            _confirm(f"YouTube upload ({args.privacy})", args.yes)
+            if args.auto_approve:
+                args.approved_by = args.approved_by or "auto"
+            elif not args.approved_by:
+                raise SystemExit("APPROVAL_REQUIRED: pass --approved-by <reviewer> (or --auto-approve) for a real upload")
+            if not args.auto_approve:
+                _confirm(f"YouTube upload ({args.privacy})", args.yes)
             uploader = YoutubeUploader(dry_run=False)
         preflight = uploader.preflight(video_path=args.video)
         uploaded = uploader.upload(
@@ -184,6 +219,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "dry_run": uploaded["dry_run"],
             "approved_by": args.approved_by,
             "channel": preflight.get("channel"),
+        },
+        "publication": {
+            "report_url": args.report_url,
+            "publish_at": publish_at,
         },
         "thumbnail": thumbnail,
         "captions": captions,

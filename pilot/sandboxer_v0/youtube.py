@@ -72,14 +72,22 @@ def youtube_metadata(
     report: Mapping[str, Any] | None = None,
     *,
     video_url: str | None = None,
+    report_url: str | None = None,
+    publish_at: str | None = None,
     category_id: str = DEFAULT_CATEGORY_ID,
 ) -> dict[str, Any]:
-    """Derive upload metadata (title, description, tags, status) from the frozen manifest."""
+    """Derive upload metadata (title, description, tags, status) from the frozen manifest.
+
+    ``report_url`` is the canonical report location on the site (linked from the
+    description); it overrides ``report["report_url"]``.  ``publish_at``, when
+    given, is an ISO date announcing when the episode becomes the indexed,
+    featured result on the site — the upload itself stays unlisted for preview.
+    """
     fps = int(manifest.get("fps", 30))
     identities = tuple(str(item) for item in manifest.get("identities", ()))
     report = report or {}
     winner = report.get("outcome", {}).get("winner") if isinstance(report.get("outcome"), Mapping) else None
-    report_url = report.get("report_url")
+    report_url = report_url or report.get("report_url")
     title = str(report.get("title") or f"Sandboxer simulated CTF: {' vs '.join(identities)}")
     title = " ".join(title.split())[:100]
     lines = [
@@ -105,6 +113,8 @@ def youtube_metadata(
     lines.append("Commentary lines and visual beats are traceable to timestamped Match Telemetry event IDs.")
     if report_url:
         lines.append(f"Canonical Series Result Report: {report_url}")
+    if publish_at:
+        lines.append(f"This result becomes the featured, indexed Match on the Sandboxer site on {publish_at}.")
     if video_url:
         lines.append(f"Source bundle and evidence: {video_url}")
     description = "\n".join(lines)[:5000]
