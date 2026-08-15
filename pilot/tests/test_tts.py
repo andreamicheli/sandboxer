@@ -348,3 +348,31 @@ def test_render_commentary_resumes_streaming_wav_blocks(tmp_path):
     # Streaming-WAV blocks are reused; the second pass must not re-synthesize.
     assert second_client.calls == []
     assert second["blocks_hash"] == first["blocks_hash"]
+
+
+def test_adapters_speak_script_verbatim_without_style_instruction():
+    # ``style`` is editorial metadata, not spoken direction: the model must
+    # read the commentary verbatim (regression for the spoken "Narrate with...").
+    style = {"voice_role": "play_by_play", "pace": "medium"}
+
+    fish_client = _FishClient(_fish_wav())
+    FishAudioTtsAdapter(client=fish_client, reference_ids={"Kore": "ref-k"}, probe=False).synthesize(
+        script="service up", voice="Kore", style=style
+    )
+    assert fish_client.calls[0]["text"] == "service up"
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.inputs: list[str] = []
+
+        @property
+        def interactions(self) -> "_Recorder":
+            return self
+
+        def create(self, **kwargs: object) -> object:
+            self.inputs.append(str(kwargs["input"]))
+            return _interaction()
+
+    recorder = _Recorder()
+    GeminiTtsAdapter(client=recorder, probe=False).synthesize(script="service up", voice="Kore", style=style)
+    assert recorder.inputs == ["service up"]

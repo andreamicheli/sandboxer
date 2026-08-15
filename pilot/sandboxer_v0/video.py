@@ -79,6 +79,10 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
     if not frames: raise VideoError("VIDEO_TIMELINE_EMPTY")
     start=int(frames[0]["at_monotonic_ns"])
     timeline=[{"at_frame":round((int(frame["at_monotonic_ns"])-start)/1_000_000_000*fps),"event_ids":[frame["event_id"]],"visual":"terminal_event","caption":frame.get("text","")} for frame in frames]
+    # Per-pane terminal feed for the Remotion composition: the timeline carries
+    # editorial captions, the terminal carries raw per-runner events (pane,
+    # phase, text) so each split terminal shows its own live activity.
+    terminal=[{"at_frame":round((int(frame["at_monotonic_ns"])-start)/1_000_000_000*fps),"event_id":frame["event_id"],"event_type":frame.get("event_type",""),"phase":frame.get("phase",""),"pane":int(frame.get("pane",0) or 0),"text":frame.get("text","")} for frame in frames]
     rule=f"Sandboxer is a simulated capture-the-flag. First, {identities[0]} and {identities[1]} defend their own service. Then they attack until both capture the flag or one exhausts its declared budget."
     scenes=[
         {"type":"cold_open","duration_frames":8*fps,"event_ids":[frames[-1]["event_id"]]},
@@ -105,5 +109,5 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
         commentary.append({"voice_role":"analyst" if index and index%5==0 else "play_by_play","model":identities[frame.get("pane",0) or 0],"start_frame":at,"end_frame":at+length,"text":str(frame["text"]),"event_ids":[frame["event_id"]],"line_type":"observed"})
     commentary.sort(key=lambda item:item["start_frame"])
     for previous,current in zip(commentary,commentary[1:]): current["start_frame"]=max(current["start_frame"],previous["end_frame"]+round(.35*fps)); current["end_frame"]=max(current["end_frame"],current["start_frame"]+fps)
-    manifest={"schema":"sandboxer.video-manifest.v1","fps":fps,"identities":identities,"source_bundle_hash":replay.get("source_bundle_hash"),"layout":{"split":{"left":.5,"right":.5,"permanent":True}},"timeline":timeline,"scenes":scenes,"commentary":commentary,"silence_allowed":True,"tts":{"expected":asdict(TtsPreflight("gemini-3.1-flash-tts-preview",("Kore","Charon"),"settings-v1")),"blocks":"bounded-and-hashed"},"qa":{"required":["alignment","clipping","noise","speaker_swaps","silence","pronunciation","factual_traceability","accessibility","licensing","decisive_cue_audibility"]},"composition":{"engine":"remotion","ffmpeg":["probe","loudness-normalize","mux","delivery-encode"]}}
+    manifest={"schema":"sandboxer.video-manifest.v1","fps":fps,"identities":identities,"source_bundle_hash":replay.get("source_bundle_hash"),"layout":{"split":{"left":.5,"right":.5,"permanent":True}},"timeline":timeline,"terminal":terminal,"scenes":scenes,"commentary":commentary,"silence_allowed":True,"tts":{"expected":asdict(TtsPreflight("gemini-3.1-flash-tts-preview",("Kore","Charon"),"settings-v1")),"blocks":"bounded-and-hashed"},"qa":{"required":["alignment","clipping","noise","speaker_swaps","silence","pronunciation","factual_traceability","accessibility","licensing","decisive_cue_audibility"]},"composition":{"engine":"remotion","ffmpeg":["probe","loudness-normalize","mux","delivery-encode"]}}
     manifest["manifest_hash"]=_digest(manifest);return manifest

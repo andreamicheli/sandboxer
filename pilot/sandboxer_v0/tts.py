@@ -167,17 +167,6 @@ class TtsAdapter(Protocol):
     def synthesize(self, *, script: str, voice: str, style: Mapping[str, Any]) -> TtsBlockResult: ...
 
 
-def _style_instruction(style: Mapping[str, Any]) -> str:
-    """Deterministic natural-language direction from a style mapping."""
-    if not style:
-        return ""
-    parts: list[str] = []
-    for key in sorted(style):
-        value = style[key]
-        parts.append(f"{key}: {value}")
-    return "Narrate with the following direction: " + "; ".join(parts) + ". "
-
-
 def _audio_data(interaction: Any) -> bytes:
     """Extract base64 audio from an interactions response, SDK-version tolerant."""
     audio = getattr(interaction, "output_audio", None)
@@ -344,7 +333,9 @@ class GeminiTtsAdapter:
         if voice not in SUPPORTED_VOICES:
             raise TtsError("TTS_VOICE_UNSUPPORTED")
         client = self._genai_client()
-        prompt = _style_instruction(style) + script
+        # ``style`` is editorial metadata (hashed into the block record), not
+        # spoken direction: the model reads the commentary text verbatim.
+        prompt = script
         # Walk the model chain: on retryable/missing-model failures the next
         # approved fallback is tried; permanent failures (e.g. prompt blocked)
         # are never masked by a fallback.  Once a model works, prefer it for
@@ -515,7 +506,9 @@ class FishAudioTtsAdapter:
         reference_id = self.reference_ids.get(voice)
         if reference_id is None:
             raise TtsError(f"TTS_VOICE_UNMAPPED: {voice}")
-        prompt = _style_instruction(style) + script
+        # ``style`` is editorial metadata (hashed into the block record), not
+        # spoken direction: the model reads the commentary text verbatim.
+        prompt = script
         wav = self._synthesize_audio(prompt, reference_id)
         duration_ms = _duration_ms(wav)
         record = tts_block(

@@ -23,6 +23,15 @@ def test_video_manifest_has_traceable_scenes_permanent_split_uncut_match_and_fac
     assert "Alpha" not in str(manifest) and "Beta" not in str(manifest)
 
 
+def test_video_manifest_exposes_per_pane_terminal_feed():
+    manifest=build_video_manifest(_replay(),report={"report_url":"r","outcome":{"winner":"DeepSeek V4 Pro"}},model_metadata={},benchmark_snapshot={})
+    terminal=manifest["terminal"]
+    assert len(terminal)==3
+    assert terminal[0]["pane"]==0 and terminal[1]["pane"]==1
+    assert terminal[0]["text"]=="defend" and terminal[0]["event_id"]=="e1" and terminal[1]["phase"]=="blue"
+    assert terminal[0]["at_frame"]==0 and terminal[1]["at_frame"]==60
+
+
 def test_commentary_is_nonoverlapping_balanced_and_allows_silence():
     manifest=build_video_manifest(_replay(),report={"report_url":"r","outcome":{"winner":"DeepSeek V4 Pro"}},model_metadata={},benchmark_snapshot={})
     lines=manifest["commentary"]
