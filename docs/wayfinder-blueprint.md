@@ -141,6 +141,16 @@ commentary=<lines>)` schedules a validated draft into a flowing dialogue
 `COMMENTARY_OVERFLOW` if it would run past the Match into the recap; without
 a draft it falls back to verbatim terminal reading as a rehearsal placeholder.
 
+Private reasoning (chain-of-thought) is never shown raw in terminals or
+commentary: it can leak credentials, internal paths, Synthetic Flags, or
+concrete attack detail. `sandboxer_v0/reasoning.py` provides a
+`ReasoningSanitizer` that (1) deterministically redacts secrets *before* any
+model sees them, (2) optionally has a text model rewrite the remainder into a
+short neutral "thinking" line, (3) validates the result for surviving leaks,
+and (4) requires human approval. It is **off by default** — reasoning stays
+out of public artifacts until an operator opts in and the sanitized output is
+reviewed, mirroring the existing redaction policy.
+
 Speech synthesis uses Google's `gemini-3.1-flash-tts-preview` through a replaceable TTS
 adapter and a control-plane-only API key. Two pinned prebuilt voices are mapped
 to the commentary roles and rendered in bounded scene blocks; the deterministic
