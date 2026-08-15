@@ -9,15 +9,21 @@ speech backend.
 ## Stages
 
 1. **Replay** — the frozen evidence bundle (`sandboxer.replay.v1`).
-2. **Manifest** — `build_video_manifest()` in `pilot/sandboxer_v0/video.py`
+2. **Commentary draft** — a two-voice dialogue drafted by a `CommentaryDrafter`
+   (or authored directly for a rehearsal), validated for grounding and typing,
+   then human-reviewed. See "Commentary drafting" below.
+3. **Manifest** — `build_video_manifest()` in `pilot/sandboxer_v0/video.py`
    freezes the editorial contract: the TTS expectation (`TtsPreflight`: model,
-   voices, settings version) and the deterministic commentary schedule.
-3. **TTS render** — `pilot/scripts/render_commentary_audio.py` synthesizes each
+   voices, settings version) and the scheduled two-voice commentary, packed
+   into a flowing dialogue with short natural pauses.
+4. **TTS render** — `pilot/scripts/render_commentary_audio.py` synthesizes each
    commentary line through a provider adapter into bounded, hashed blocks and
    assembles a full-length `commentary-full.wav`.
-4. **Mux** — `ffmpeg_delivery_commands()` in `video.py` (probe → loudness
+5. **Video render** — Remotion (`video/src/index.tsx`) renders `video-only.mp4`
+   from `remotion-props.json` (`{"manifest": <video-manifest.json>}`).
+6. **Mux** — `ffmpeg_delivery_commands()` in `video.py` (probe → loudness
    normalize → mux → delivery encode) produces `delivery.mp4`.
-5. **Publish** — `pilot/scripts/publish_broadcast.py` uploads to YouTube
+7. **Publish** — `pilot/scripts/publish_broadcast.py` uploads to YouTube
    (`unlisted` by default), sets captions + thumbnail, and writes
    `broadcast.json` (the provenance record).
 
@@ -43,6 +49,27 @@ Reference implementations (both live in `tts.py`):
 - `FishAudioTtsAdapter` — stdlib `urllib` only, single model, the simplest to
   copy for a new REST-only provider.
 - `FakeTtsAdapter` — deterministic, credential-free (tests + dry runs).
+
+## Commentary drafting
+
+Commentary is never terminal text read aloud: it is a drafted, two-voice
+narrative. `pilot/sandboxer_v0/commentary.py` owns that step:
+
+- `CommentaryDrafter` protocol — `draft(replay, report) -> list[lines]`.
+- `GeminiCommentaryDrafter` — the production mechanism: builds a grounded
+  prompt from the replay frames + report outcome and calls a Gemini text model
+  (injectable `client`; control-plane `GEMINI_API_KEY` otherwise).
+- `validate_commentary(lines, frames)` — every line must be grounded to real
+  `event_ids`, use a known `voice_role` (`play_by_play` | `analyst`), carry a
+  known `line_type` (`observed` | `interpreted` | `editorial`), and interpreted
+  lines must carry a hedge marker (`appears`, `seems`, …).
+
+`build_video_manifest(..., commentary=<lines>)` schedules a validated draft
+into a flowing dialogue (lines packed back-to-back with a ~0.4s pause) and
+raises `COMMENTARY_OVERFLOW` if it would run past the Match into the recap.
+Without a draft it falls back to reading the terminal events verbatim (a
+rehearsal placeholder only). Human review of the draft is mandatory before
+publication.
 
 ## Adding a new TTS provider
 
@@ -79,10 +106,18 @@ cd pilot && set -a && . ./.env && set +a
 uv run python scripts/setup_credentials.py fish --probe       # or: gemini --key AIza... --probe
 uv run python scripts/setup_credentials.py youtube --flow manual --client-id <id> --client-secret <secret>
 
-# 2. TTS commentary -> artifacts/commentary-full.wav (resumable)
-uv run python scripts/render_commentary_audio.py --provider fish
+# 2. (Rehearsal) rebuild replay/report/manifest incl. drafted commentary
+uv run python scripts/build_synthetic_artifacts.py
+python3 -c "import json; json.dump({'manifest': json.load(open('artifacts/video-manifest.json'))}, open('artifacts/remotion-props.json','w'), indent=2)"
+uv run python scripts/build_captions.py
 
-# 3. Mux -> artifacts/delivery.mp4 (probe -> loudnorm -> mux -> delivery)
+# 3. TTS commentary -> artifacts/commentary-full.wav (resumable)
+uv run python scripts/render_commentary_audio.py --provider fish --no-resume
+
+# 4. Video -> artifacts/video-only.mp4 (Remotion)
+cd ../video && npx remotion render src/index.tsx SandboxerSeries ../artifacts/video-only.mp4 --props=../artifacts/remotion-props.json && cd ../pilot
+
+# 5. Mux -> artifacts/delivery.mp4 (probe -> loudnorm -> mux -> delivery)
 ffmpeg -y -nostdin -i artifacts/commentary-full.wav -af "loudnorm=I=-16:LRA=7:TP=-1.5" -c:a pcm_s24le artifacts/commentary-full.normalized.wav
 ffmpeg -y -nostdin -i artifacts/video-only.mp4 -i artifacts/commentary-full.normalized.wav -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 320k artifacts/master.mov
 ffmpeg -y -nostdin -i artifacts/master.mov -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -movflags +faststart artifacts/delivery.mp4

@@ -130,6 +130,17 @@ pauses. Silence is an intentional option rather than a gap to fill. Commentary
 may never obscure decisive terminal cues or pretend that simultaneous actions
 occurred sequentially.
 
+Commentary is implemented as a drafted two-voice narrative, never terminal
+text read aloud. `sandboxer_v0/commentary.py` owns the draft: a
+`CommentaryDrafter` (production: `GeminiCommentaryDrafter`) produces lines
+that are validated for grounding (`event_ids`), voice role, and line type
+(`observed`/`interpreted`/`editorial`, with interpreted lines hedged via
+"appears"/"seems"), then human-reviewed. `build_video_manifest(...,
+commentary=<lines>)` schedules a validated draft into a flowing dialogue
+(packed back-to-back with a short natural pause) and raises
+`COMMENTARY_OVERFLOW` if it would run past the Match into the recap; without
+a draft it falls back to verbatim terminal reading as a rehearsal placeholder.
+
 Speech synthesis uses Google's `gemini-3.1-flash-tts-preview` through a replaceable TTS
 adapter and a control-plane-only API key. Two pinned prebuilt voices are mapped
 to the commentary roles and rendered in bounded scene blocks; the deterministic

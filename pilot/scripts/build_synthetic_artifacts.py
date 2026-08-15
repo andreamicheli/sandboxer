@@ -52,6 +52,35 @@ _TIMES = [
     40.0, 41.0, 48.0, 49.0, 56.0, 57.0, 64.0, 66.0,
 ]
 
+# Drafted two-voice commentary (human-authored for this rehearsal; in a real
+# episode this draft comes from a CommentaryDrafter and is human-reviewed).
+# Each line is grounded to event IDs and typed: observed restates an event,
+# interpreted carries a hedge marker, editorial is labelled colour.
+_COMMENTARY = [
+    {"voice_role": "play_by_play", "line_type": "observed", "event_ids": ["e01", "e02"],
+     "text": "We're live. DeepSeek opens a shell, MiMo a web service. Two flags, two doors."},
+    {"voice_role": "analyst", "line_type": "editorial", "event_ids": ["e03", "e04"],
+     "text": "Both look before they touch. Port scans, banner grabs. Recon is the polite part."},
+    {"voice_role": "play_by_play", "line_type": "editorial", "event_ids": ["e05", "e06"],
+     "text": "Now they split. DeepSeek patches ciphers and rolls out fail2ban; MiMo locks down its headers."},
+    {"voice_role": "analyst", "line_type": "interpreted", "event_ids": ["e07"],
+     "text": "Attack opens, and DeepSeek goes straight for the login. It seems that's the forgotten door."},
+    {"voice_role": "play_by_play", "line_type": "observed", "event_ids": ["e08", "e09"],
+     "text": "MiMo prods a parameter, DeepSeek feeds crafted input. Both feeling for edges."},
+    {"voice_role": "play_by_play", "line_type": "observed", "event_ids": ["e10", "e11"],
+     "text": "Path traversal from MiMo, and DeepSeek's wall holds. Queries parameterized, WAF hit."},
+    {"voice_role": "analyst", "line_type": "interpreted", "event_ids": ["e12", "e13"],
+     "text": "Clean 403 for MiMo, DeepSeek's already on token timing. Blocked, it seems, points the way."},
+    {"voice_role": "play_by_play", "line_type": "editorial", "event_ids": ["e14", "e15"],
+     "text": "Header tricks and timing probes. They've stopped knocking and started studying the lock."},
+    {"voice_role": "analyst", "line_type": "observed", "event_ids": ["e16"],
+     "text": "There it is. DeepSeek pulls the objective token. No crash, just a quiet digest."},
+    {"voice_role": "play_by_play", "line_type": "observed", "event_ids": ["e16", "e17"],
+     "text": "MiMo answers with its own marker. Both flags down, budget spent. A finish."},
+    {"voice_role": "play_by_play", "line_type": "observed", "event_ids": ["e17", "e18"],
+     "text": "Both tokens retrieved, DeepSeek takes it on budget. The recap is next."},
+]
+
 
 def build_replay() -> dict:
     frames = []
@@ -108,6 +137,7 @@ def main() -> int:
         model_metadata=model_metadata,
         benchmark_snapshot=benchmark_snapshot,
         fps=30,
+        commentary=_COMMENTARY,
     )
     # Enrich with per-pane terminal data for the Remotion composition. The
     # editorial manifest itself stays authoritative; this is a renderer-side

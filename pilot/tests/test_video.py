@@ -57,3 +57,40 @@ def test_ffmpeg_pipeline_is_argv_only_and_covers_probe_normalize_mux_delivery():
     assert [command[0] for command in commands]==["ffprobe","ffmpeg","ffmpeg","ffmpeg"]
     assert "loudnorm=I=-16:LRA=7:TP=-1.5" in commands[1] and "+faststart" in commands[3]
     assert all("sh" not in command[:1] for command in commands)
+
+
+def test_video_manifest_schedules_drafted_commentary():
+    drafted=[
+        {"voice_role":"play_by_play","line_type":"observed","event_ids":["e1"],"text":"DeepSeek defends."},
+        {"voice_role":"analyst","line_type":"interpreted","event_ids":["e2"],"text":"It seems MiMo probes."},
+    ]
+    manifest=build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},commentary=drafted)
+    lines=manifest["commentary"]
+    assert [line["text"] for line in lines]==["DeepSeek defends.","It seems MiMo probes."]
+    assert {line["line_type"] for line in lines}=={"observed","interpreted"}
+    assert all(line["event_ids"] for line in lines)
+    assert all(left["end_frame"]<=right["start_frame"] for left,right in zip(lines,lines[1:]))
+
+
+def test_video_manifest_rejects_ungrounded_draft():
+    with pytest.raises(VideoError,match="COMMENTARY_INVALID"):
+        build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},commentary=[{"voice_role":"play_by_play","line_type":"observed","event_ids":["ghost"],"text":"hi"}])
+
+
+def test_video_manifest_packs_drafted_commentary_into_a_flowing_dialogue():
+    drafted=[
+        {"voice_role":"play_by_play","line_type":"observed","event_ids":["e1"],"text":"Defends."},
+        {"voice_role":"analyst","line_type":"interpreted","event_ids":["e2"],"text":"It seems probes."},
+    ]
+    manifest=build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},commentary=drafted)
+    lines=manifest["commentary"]
+    # Packed back-to-back: a short natural pause, not the ~2s event spacing.
+    gap=lines[1]["start_frame"]-lines[0]["end_frame"]
+    assert 0 < gap <= 15
+    # Durations preserved (not squeezed to a 1s minimum).
+    assert all(line["end_frame"]-line["start_frame"]>=45 for line in lines)
+
+
+def test_video_manifest_rejects_drafted_commentary_that_overflows_the_match():
+    with pytest.raises(VideoError,match="COMMENTARY_OVERFLOW"):
+        build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},commentary=[{"voice_role":"play_by_play","line_type":"observed","event_ids":["e1"],"text":"x"*200}])
