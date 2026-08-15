@@ -145,6 +145,23 @@ Synthetic artifacts (replay/report/manifest) for a rehearsal come from
 `pilot/scripts/build_synthetic_artifacts.py`; captions from
 `pilot/scripts/build_captions.py`.
 
+## Downloadable LaTeX report
+
+Every Series Result Report also ships a self-contained LaTeX document with the
+detailed per-Match analysis (per-competitor, per-phase token / turn / tool
+accounting) and matplotlib data charts (output tokens, tool calls, turns, and a
+phase timeline) — compiled to `report-detailed.pdf`, with `report-detailed.tex`
+as the source. It is produced by `pilot/sandboxer_v0/report_latex.py` and
+`pilot/scripts/build_report_pdf.py`, and `build_release()` embeds the LaTeX
+source plus the compiled-PDF hash (`compile_latex=True` to compile) and links
+both from the published site.
+
+```sh
+# From a frozen evidence bundle JSON (or omit --bundle for a demo fixture):
+uv run python scripts/build_report_pdf.py --bundle evidence.json \
+  --out-dir artifacts/report-pdf
+```
+
 ## Gotchas (each is encoded in a test)
 
 - **Streaming WAV** (Fish Audio) — the RIFF/data sizes are placeholders; read

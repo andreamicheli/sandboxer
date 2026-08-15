@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 
 import pytest
 
@@ -19,6 +20,17 @@ def test_release_derives_site_and_methodology_from_same_frozen_bundle(tmp_path):
     assert all(release[name]["source_bundle_hash"]==release["source_bundle_hash"] for name in ("site","paper","report","replay","video"))
     assert all(section in release["paper"]["markdown"] for section in ("Claim","Threat model","Protocol","Equivalence","Telemetry","Auditor","Scoring","Limitations","Reproducibility","Ethics","Future validation","Evidence table"))
     assert "global ranking" not in release["site"]["html"].lower()
+
+
+def test_release_embeds_downloadable_latex_report_and_site_links():
+    bundle, review = _inputs()
+    release = build_release(bundle, review=review, video={"source_bundle_hash": bundle.evidence_bundle["bundle_hash"], "manifest_hash": "a" * 64}, licenses=("license",), known_limitations_signature="b" * 64)
+    report = release["report"]
+    assert report["latex_tex"].startswith(r"\documentclass")
+    assert report["latex_tex_sha256"] == __import__("hashlib").sha256(report["latex_tex"].encode()).hexdigest()
+    assert set(report["latex_charts"]) == {"output_tokens.png", "tool_calls.png", "turns.png", "phase_timeline.png"}
+    assert report["latex_pdf_sha256"] is None  # compile_latex defaults to False
+    assert "report-detailed.pdf" in release["site"]["html"] and "report-detailed.tex" in release["site"]["html"]
 
 
 def test_publication_pointer_is_atomic_reversible_and_preserves_versions(tmp_path):
@@ -41,6 +53,13 @@ def test_release_accepts_youtube_broadcast_handoff(tmp_path):
     assert release["video"]["youtube_video_id"]=="sbx-video-0001"
     assert release["video"]["privacy_status"]=="unlisted"
     assert "Watch on YouTube" in release["site"]["html"] and "sbx-video-0001" in release["site"]["html"]
+
+
+@pytest.mark.skipif(shutil.which("pdflatex") is None, reason="pdflatex not available")
+def test_release_compiles_latex_pdf_when_requested():
+    bundle, review = _inputs()
+    release = build_release(bundle, review=review, video={"source_bundle_hash": bundle.evidence_bundle["bundle_hash"], "manifest_hash": "a" * 64}, licenses=("license",), known_limitations_signature="b" * 64, compile_latex=True)
+    assert release["report"]["latex_pdf_sha256"] is not None
 
 
 def test_release_rejects_incomplete_broadcast_handoff():
