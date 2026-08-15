@@ -17,8 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sandboxer_v0.video import _digest, build_video_manifest
 
 ROOT = Path(__file__).resolve().parent.parent.parent / "artifacts"
-IDENTITY_A = "DeepSeek V4 Pro"
-IDENTITY_B = "MiMo V2.5 Pro"
+IDENTITY_A = "Laguna S 2.1"
+IDENTITY_B = "Muse Spark 1.2"
 
 # Synthetic match frames: a simulated CTF exchange, both panes interleaved.
 # at_monotonic_ns is nanoseconds from match start.
@@ -58,27 +58,27 @@ _TIMES = [
 # interpreted carries a hedge marker, editorial is labelled colour.
 _COMMENTARY = [
     {"voice_role": "play_by_play", "line_type": "observed", "event_ids": ["e01", "e02"],
-     "text": "We're live. DeepSeek opens a shell, MiMo a web service. Two flags, two doors."},
+     "text": "We're live. Laguna opens a shell, Muse a web service. Two flags, two doors."},
     {"voice_role": "analyst", "line_type": "editorial", "event_ids": ["e03", "e04"],
      "text": "Both look before they touch. Port scans, banner grabs. Recon is the polite part."},
     {"voice_role": "play_by_play", "line_type": "editorial", "event_ids": ["e05", "e06"],
-     "text": "Now they split. DeepSeek patches ciphers; MiMo locks down its headers."},
+     "text": "Now they split. Laguna patches ciphers; Muse locks down its headers."},
     {"voice_role": "analyst", "line_type": "interpreted", "event_ids": ["e07"],
-     "text": "Attack opens, DeepSeek goes for the login. It seems that's the forgotten door."},
+     "text": "Attack opens, Laguna goes for the login. It seems that's the forgotten door."},
     {"voice_role": "play_by_play", "line_type": "observed", "event_ids": ["e08", "e09"],
-     "text": "MiMo prods a parameter, DeepSeek feeds crafted input. Feeling for edges."},
+     "text": "Muse prods a parameter, Laguna feeds crafted input. Feeling for edges."},
     {"voice_role": "play_by_play", "line_type": "observed", "event_ids": ["e10", "e11"],
-     "text": "Path traversal from MiMo, and DeepSeek's wall holds. Queries parameterized, WAF hit."},
+     "text": "Path traversal from Muse, and Laguna's wall holds. Queries parameterized, WAF hit."},
     {"voice_role": "analyst", "line_type": "interpreted", "event_ids": ["e12", "e13"],
-     "text": "Clean 403 for MiMo, DeepSeek's on token timing. Blocked, it seems, points the way."},
+     "text": "Clean 403 for Muse, Laguna's on token timing. Blocked, it seems, points the way."},
     {"voice_role": "play_by_play", "line_type": "editorial", "event_ids": ["e14", "e15"],
      "text": "Header tricks and timing probes. They're studying the lock now."},
     {"voice_role": "analyst", "line_type": "observed", "event_ids": ["e16"],
-     "text": "There it is. DeepSeek pulls the objective token. A quiet digest."},
+     "text": "There it is. Laguna pulls the objective token. A quiet digest."},
     {"voice_role": "play_by_play", "line_type": "observed", "event_ids": ["e16", "e17"],
-     "text": "MiMo answers with its own marker. Both flags down, budget spent."},
+     "text": "Muse answers with its own marker. Both flags down, budget spent."},
     {"voice_role": "play_by_play", "line_type": "observed", "event_ids": ["e17", "e18"],
-     "text": "Both tokens retrieved, DeepSeek takes it on budget. The recap is next."},
+     "text": "Both tokens retrieved, Laguna takes it on budget. The recap is next."},
 ]
 
 
@@ -110,7 +110,7 @@ def build_report() -> dict:
     return {
         "schema": "sandboxer.result-report.v1",
         "report_url": "https://sandboxer.example/reports/series-001/match-1",
-        "outcome": {"winner": IDENTITY_A, "basis": "both objectives retrieved; DeepSeek V4 Pro exhausted budget first"},
+        "outcome": {"winner": IDENTITY_A, "basis": "both objectives retrieved; Laguna S 2.1 exhausted budget first"},
         "technical_chapters": [
             {"match_number": 1, "title": "Match 1 — capture race"},
         ],
@@ -124,8 +124,8 @@ def main() -> int:
     replay = build_replay()
     report = build_report()
     model_metadata = {
-        IDENTITY_A: {"producer": "DeepSeek", "architecture": "Mixture-of-Experts", "context_length": 128_000},
-        IDENTITY_B: {"producer": "Xiaomi", "architecture": "Mixture-of-Experts", "context_length": 128_000},
+        IDENTITY_A: {"producer": "Poolside", "architecture": "Mixture-of-Experts", "context_length": 128_000},
+        IDENTITY_B: {"producer": "Meta", "architecture": "Mixture-of-Experts", "context_length": 128_000},
     }
     benchmark_snapshot = {
         "CTF-Bench": {IDENTITY_A: 0.71, IDENTITY_B: 0.68},

@@ -20,14 +20,16 @@ const NAVY_2 = '#050b18';
 const PANEL = '#071b35';
 const COBALT = '#4d9cff';
 const AMBER = '#f1782c';
+const VIOLET = '#9a65e8';
+const MUSE_BLUE = '#58a9ff';
 const INK = '#f0eee7';
 const DIM = '#8a97ad';
 const RED = '#ff4d5e';
 const CYAN = '#38e1c8';
 
 const ACCENTS: Record<string, string> = {
-  'DeepSeek V4 Pro': COBALT,
-  'MiMo V2.5 Pro': AMBER,
+  'Laguna S 2.1': VIOLET,
+  'Muse Spark 1.2': MUSE_BLUE,
 };
 
 const MONO =
@@ -582,11 +584,11 @@ export const SeriesVideo: React.FC<{ manifest: Manifest }> = ({ manifest }) => {
 const fallbackManifest: Manifest = {
   schema: 'sandboxer.video-manifest.v1',
   fps: 30,
-  identities: ['DeepSeek V4 Pro', 'MiMo V2.5 Pro'],
+  identities: ['Laguna S 2.1', 'Muse Spark 1.2'],
   source_bundle_hash: 'runtime-required',
   scenes: [
     { type: 'cold_open', duration_frames: 240, event_ids: ['runtime'] },
-    { type: 'model_cards_and_rules', duration_frames: 600, identities: ['DeepSeek V4 Pro', 'MiMo V2.5 Pro'], event_ids: ['runtime'] },
+    { type: 'model_cards_and_rules', duration_frames: 600, identities: ['Laguna S 2.1', 'Muse Spark 1.2'], event_ids: ['runtime'] },
     { type: 'match', duration_frames: 300, match_number: 1, event_ids: ['runtime'] },
     { type: 'factual_recap', duration_frames: 360, event_ids: ['runtime'] },
   ],
