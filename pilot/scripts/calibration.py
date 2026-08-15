@@ -302,6 +302,8 @@ def diagnose_dry_run(
         "protocol_change_authorized": False,
         "retune_required": retune_required,
         "verdict": "RETUNE_REQUIRED" if retune_required else "PASS",
+        "is_calibration": True,
+        "publication_eligible": False,
     }
 
 
