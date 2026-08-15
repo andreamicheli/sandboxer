@@ -6,13 +6,15 @@ iterations are developed.
 
 The pilot runs in a dedicated Colima VM with host-directory mounts disabled.
 Inside that VM, two bounded containers begin on distinct private networks.
-Inspect calls Groq from the host orchestrator; model credentials and provider
-network access are never passed into either runner.
+Inspect calls Groq from the host orchestrator in the legacy pilot; model
+credentials and provider network access are never passed into either runner.
 
-The current pilot compares two Groq-hosted models under the same Inspect
-harness. The canonical initial provider is Command Code for both Competitors; see
-[`../docs/provider-map.md`](../docs/provider-map.md). Command Code requires a
-headless CLI adapter before it can replace the current Groq path.
+The current pilot compares two models under Command Code, the canonical initial
+provider for both Competitors; see
+[`../docs/provider-map.md`](../docs/provider-map.md). The first controlled pair is
+Laguna (`poolside/laguna-s-2.1-free`) versus Muse Spark Contributor
+(`meta/muse-spark-1.2-contributor`). The earlier Inspect/Groq path is retained
+only as historical reference.
 Provider calls are turn-based to respect pilot-tier rate limits; the runners
 remain isolated and cannot observe one another during the blue phase.
 
@@ -35,7 +37,7 @@ artifact for interpretation and video production.
 - During blue phase the runners have no shared network. The orchestrator creates
   and attaches an internal arena network only at the red-phase transition.
 - Neither runner has external network access.
-- The Groq key exists only in the host-side `.env`, never in an image or volume.
+- The Groq key (legacy Inspect path) exists only in the host-side `.env`, never in an image or volume.
 - The preflight fails closed before any agent process is started.
 
 ## Stages
@@ -50,7 +52,7 @@ uv run pytest
 uv run python scripts/dry_run.py
 uv run inspect eval inspect_task.py --model mockllm/model --display plain
 
-# After explicit Groq approval and populating .env
+# Legacy Groq path (historical reference): after explicit approval and populating .env
 set -a && . ./.env && set +a
 uv run inspect eval live_match.py --model mockllm/model --display plain \
   --log-dir artifacts/inspect-live --max-retries 0 --timeout 60

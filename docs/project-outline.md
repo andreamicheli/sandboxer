@@ -10,7 +10,7 @@ La v0 è una **Showcase Evaluation**: deve essere sicura, leggibile e abbastanza
 
 - Il confronto riguarda i modelli, non le harness: i Competitor devono usare lo stesso protocollo, gli stessi tool e budget comparabili.
 - Inspect è la harness iniziale perché offre orchestrazione, logging ed eval; deve restare sostituibile tramite un confine di adattamento chiaro.
-- Il pilot usa Groq e modelli open per costo, accessibilità e minore incidenza di refusal sul task controllato.
+- Il pilot usa Command Code e modelli open per costo, accessibilità e minore incidenza di refusal sul task controllato (il percorso iniziale Inspect/Groq resta storico e sostituito).
 - Il primo Match reale ha confrontato `openai/gpt-oss-120b` con `qwen/qwen3.6-27b` e si è chiuso 80–80 in 4m26s; GPT-OSS 120B ha effettuato la prima submission e Qwen 3.6 27B ha pareggiato 1m44s dopo.
 - I nomi Alpha/Beta sono identificatori interni. Nei Result Report e nei contenuti devono comparire i nomi dei modelli.
 - La Match Telemetry, non il video, è la fonte autorevole. Screen recording, replay, trascrizione e telecronaca devono essere sincronizzati tramite timestamp.
@@ -61,7 +61,7 @@ La v0 usa un ordine lessicografico e produce sempre un solo vincitore: una sola 
 ## Known limitations
 
 - Un singolo Match non misura in modo affidabile la capacità generale di un modello.
-- Il pilot ha eseguito le chiamate ai Competitor in sequenza per rispettare il limite Groq, quindi non dimostra vera simultaneità.
+- Il pilot iniziale ha eseguito le chiamate ai Competitor in sequenza per rispettare il limite di rate del provider, quindi non dimostra vera simultaneità.
 - Provider, rate limit, latenza e comportamento dell'adapter possono confondere il confronto tra modelli.
 - Budget di token nominali e consumo osservato possono divergere; la contabilità deve essere resa esplicita.
 - Il toy service corrente può produrre strategie troppo semplici e partite poco varie.

@@ -24,7 +24,7 @@ from sandboxer_v0.local_kvm import LocalKvmConfig, LocalKvmRunnerProvider
 from sandboxer_v0.runner_tool_server import RunnerToolServer, ToolDecision
 
 
-MODELS = ("deepseek/deepseek-v4-pro", "xiaomi/mimo-v2.5-pro")
+MODELS = ("poolside/laguna-s-2.1-free", "meta/muse-spark-1.2-contributor")
 TOOLS = ("inspect_service", "write_service_file", "run_service_command", "finish_phase")
 
 

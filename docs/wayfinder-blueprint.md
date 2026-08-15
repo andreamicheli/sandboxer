@@ -216,8 +216,8 @@ texture, restrained glow, and generous editorial spacing. It borrows no Hermes
 Agent assets or layouts and avoids neon-heavy cyberpunk and dense HUD noise.
 
 Each terminal uses a subtle model-colored dark gradient while normal text stays
-neutral: for the initial pair, a very dark navy/blue DeepSeek surface and very
-dark brown/orange MiMo surface. Accent colors mark the frame, prompt, cursor,
+neutral: for the first private pair, a very dark violet Laguna surface and a
+very dark blue Muse Spark surface. Accent colors mark the frame, prompt, cursor,
 budget and callouts without recoloring all code. A persistent dual-terminal
 split and a small Wayfinder route marking phase/flag movement form the distinct
 Sandboxer motif. All foreground/background pairs are contrast-tested; names,
@@ -450,9 +450,10 @@ statement.
 
 Command Code `1.15.1` is the canonical initial provider boundary for both Competitors,
 not part of Competitor identity. The first intended series is
-`deepseek/deepseek-v4-pro` versus `xiaomi/mimo-v2.5-pro`; DeepSeek Flash is the
-calibration baseline, Laguna the free smoke model, Muse the fallback, and
-GPT-5.6 Luna a later closed-model reference.
+`poolside/laguna-s-2.1-free` versus `meta/muse-spark-1.2-contributor` (Laguna and
+Muse Spark Contributor); DeepSeek Flash is the calibration baseline, DeepSeek V4
+Pro versus MiMo V2.5 Pro the later headline pair, and GPT-5.6 Luna a later
+closed-model reference.
 
 The adapter runs the globally resolved executable in an Orchestrator-owned
 disposable directory with NDJSON, no persistent session, no auto-update, no
@@ -487,4 +488,5 @@ Before a valid Match, the remaining operational gates are a multi-turn
 continuation test, controlled Runner-tool mediation, cancellation/failure
 fixtures, pair concurrency observation, and written confirmation that repeated
 synthetic CTF evaluation complies with provider and upstream-model policies.
-Until then, Groq remains the live pilot path.
+Command Code is the live pilot path once preflight passes; the legacy
+Inspect/Groq pilot is retained only as historical reference.

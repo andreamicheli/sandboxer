@@ -19,8 +19,8 @@
   "model_mode": "command_code",
   "model_provider": "command_code",
   "competitor_models": [
-    "deepseek/deepseek-v4-pro",
-    "xiaomi/mimo-v2.5-pro"
+    "poolside/laguna-s-2.1-free",
+    "meta/muse-spark-1.2-contributor"
   ],
   "allow_provider_calls": true,
   "publication_enabled": false

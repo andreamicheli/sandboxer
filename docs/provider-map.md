@@ -22,11 +22,11 @@ isolated-runner boundary.
 
 | Role | Model ID | Purpose | Status |
 | --- | --- | --- | --- |
-| Free smoke test | `poolside/laguna-s-2.1-free` | Validate the adapter without consuming credits | Verified |
-| Fast open model | `deepseek/deepseek-v4-flash` | Cost/latency baseline | Pending adapter |
-| Reasoning open model | `deepseek/deepseek-v4-pro` | First controlled Competitor | Catalog verified |
-| Cheap agentic model | `xiaomi/mimo-v2.5-pro` | First controlled Competitor | Catalog verified |
-| Cheap contributor model | `meta/muse-spark-1.2-contributor` | Low-cost comparison | Pending adapter |
+| Primary Competitor | `poolside/laguna-s-2.1-free` | First controlled pair (Laguna) | Verified |
+| Primary Competitor | `meta/muse-spark-1.2-contributor` | First controlled pair (Muse Spark Contributor) | Pending adapter |
+| Calibration baseline | `deepseek/deepseek-v4-flash` | Cost/latency baseline | Pending adapter |
+| Headline pair | `deepseek/deepseek-v4-pro` | Later scaling Competitor | Catalog verified |
+| Headline pair | `xiaomi/mimo-v2.5-pro` | Later scaling Competitor | Catalog verified |
 | Closed benchmark | `gpt-5.6-luna` | Reference benchmark | Pending adapter / plan entitlement |
 
 Model IDs must be confirmed against `cmd --list-models` at run time; Command

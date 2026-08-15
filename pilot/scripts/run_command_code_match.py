@@ -26,7 +26,7 @@ from sandboxer_v0.local_kvm import LocalKvmConfig, LocalKvmRunnerProvider
 from sandboxer_v0.runner_tool_server import RunnerToolServer, ToolDecision
 from sandboxer_v0.service_spec import SERVICE_SPEC_VERSION, ServiceSpec, parse_service_spec
 
-DEFAULT_MODELS = ("deepseek/deepseek-v4-pro", "xiaomi/mimo-v2.5-pro")
+DEFAULT_MODELS = ("poolside/laguna-s-2.1-free", "meta/muse-spark-1.2-contributor")
 PHASE_TOOLS = {
     "blue": ("inspect_service", "deploy_service", "request_own_service", "finish_phase"),
     "red": ("inspect_service", "describe_target_service", "http_request", "submit_flag", "finish_phase"),
