@@ -95,6 +95,8 @@ def _frozen_valid(bundle: object) -> dict[str, Any]:
     verdict = verified["public"].get("auditor_verdict")
     if not isinstance(verdict, Mapping) or not verdict.get("valid") or not verdict.get("signed"):
         raise ResultReportError("VALID_FROZEN_EVIDENCE_REQUIRED")
+    if verdict.get("action") != "pass":
+        raise ResultReportError("VALID_FROZEN_EVIDENCE_REQUIRED")
     return _json_value(verified)
 
 
@@ -211,6 +213,8 @@ def build_result_report(evidence_bundle: object, *, correction_index: Mapping[st
     bundle = _frozen_valid(evidence_bundle)
     public = bundle["public"]
     specification = public["specification"]
+    if specification.get("is_calibration") is True or specification.get("publication_enabled") is False:
+        raise ResultReportError("CALIBRATION_SERIES_NOT_PUBLISHABLE")
     events = [event for event in public["normalized_telemetry"] if isinstance(event, Mapping)]
     if not events:
         raise ResultReportError("VALID_FROZEN_EVIDENCE_REQUIRED")
@@ -261,7 +265,21 @@ def build_result_report(evidence_bundle: object, *, correction_index: Mapping[st
         match_events = _match_events(events, number)
         match_id = _label(match.get("event_id"), fallback)
         score_item = score_by_number.get(number, {})
-        valid = match.get("reason_code") in {"SOLE_CAPTURE", "DUAL_CAPTURE_HEALTH", "DUAL_CAPTURE_SUBMISSION_ORDER", "NO_CAPTURE_AVAILABILITY", "EXACT_TIE"}
+        teardown_events = [e for e in match_events if e.get("event_type") == "RUNNER_TEARDOWN"]
+        teardown_destroyed = (
+            len(teardown_events) >= 1
+            and all(e.get("status") == "destroyed" for e in teardown_events)
+        )
+        valid_reasons = {
+            "SOLE_CAPTURE",
+            "DUAL_CAPTURE_HEALTH",
+            "DUAL_CAPTURE_SUBMISSION_ORDER",
+            "NO_CAPTURE_AVAILABILITY",
+            "EXACT_TIE",
+        }
+        outcome = match.get("outcome") or score_item.get("outcome")
+        valid_outcome = (outcome in {"VALID_CAPTURE", "VALID_NO_CAPTURE", "BUDGET_EXHAUSTED"}) if outcome else (match.get("reason_code") in valid_reasons)
+        valid = valid_outcome and teardown_destroyed and match.get("reason_code") in valid_reasons and outcome != "INVALID"
         if not valid:
             incidents.append({
                 "match_number": number,
@@ -341,6 +359,9 @@ def build_result_report(evidence_bundle: object, *, correction_index: Mapping[st
             "match_number": chapter["match_number"],
             "winner": chapter["outcome"]["winner"] if chapter["outcome"]["winner"] != "no winner" else None,
             "reason_code": chapter["outcome"]["decisive_rule"],
+            "outcome": score_by_number.get(chapter["match_number"], {}).get("outcome") or (
+                "VALID_CAPTURE" if chapter["outcome"]["winner"] != "no winner" else "VALID_NO_CAPTURE"
+            ),
             "verified_submission_event_ids": list(score_by_number.get(chapter["match_number"], {}).get("verified_submission_event_ids", [])),
             "final_health_event_ids": list(score_by_number.get(chapter["match_number"], {}).get("final_health_event_ids", [])),
         }

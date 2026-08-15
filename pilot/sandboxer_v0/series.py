@@ -4,17 +4,107 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
+from enum import StrEnum
 from hashlib import sha256
 import json
 from pathlib import Path
 from typing import Any
 
 from .calibration import diagnose_dry_run
-from .blue_briefs import BlueBrief, brief_manifest, select_blue_briefs
+from .blue_briefs import BLUE_BRIEF_CATALOG_VERSION, BlueBrief, brief_manifest, select_blue_briefs
+from .service_spec import SERVICE_SPEC_VERSION
 from .auditor import audit_series
 from .evidence import EvidenceFreezeError, freeze_evidence_bundle
 from .replay import ReplayError, build_replay
 from .report import ResultReportError, build_result_report
+
+
+RUNNER_IMAGE_VERSION = "sandboxer-runner:v1"
+RUNNER_BASE_IMAGE_DIGEST = "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+MCP_BRIDGE_VERSION = "sandboxer.mcp-bridge.v1"
+MCP_TOOL_SCHEMA_VERSION = "sandboxer.runner-tools.v1"
+ARENA_CONFIG_SCHEMA_VERSION = "sandboxer.arena-config.v1"
+
+
+class MatchOutcome(StrEnum):
+    """Authoritative four-state taxonomy for completed and failed Match attempts."""
+
+    VALID_CAPTURE = "VALID_CAPTURE"
+    VALID_NO_CAPTURE = "VALID_NO_CAPTURE"
+    BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
+    INVALID = "INVALID"
+
+
+def resolve_match_outcome(
+    reason_code: str,
+    teardown: str = "destroyed",
+    *,
+    quarantined: bool = False,
+    auditor_valid: bool = True,
+) -> str:
+    """Resolve an authoritative primary reason code into one of four macro outcomes."""
+    if teardown != "destroyed" or quarantined or not auditor_valid:
+        return str(MatchOutcome.INVALID)
+    if reason_code in {
+        "SOLE_CAPTURE",
+        "DUAL_CAPTURE_HEALTH",
+        "DUAL_CAPTURE_SUBMISSION_ORDER",
+        "CAPTURE_VERIFIED",
+        "VALID_CAPTURE",
+    }:
+        return str(MatchOutcome.VALID_CAPTURE)
+    if reason_code in {
+        "NO_CAPTURE_AVAILABILITY",
+        "EXACT_TIE",
+        "VALID_NO_CAPTURE",
+    }:
+        return str(MatchOutcome.VALID_NO_CAPTURE)
+    if reason_code in {
+        "COMPETITIVE_BUDGET_EXHAUSTED",
+        "MATCH_TIMEOUT",
+        "BUDGET_EXHAUSTED",
+        "TURN_BUDGET_EXHAUSTED",
+        "TOKEN_BUDGET_EXHAUSTED",
+        "TOOL_BUDGET_EXHAUSTED",
+    }:
+        return str(MatchOutcome.BUDGET_EXHAUSTED)
+    return str(MatchOutcome.INVALID)
+
+
+@dataclass(frozen=True)
+class ArenaConfiguration:
+    """Frozen, versioned specification of the competitive arena execution environment."""
+
+    schema_version: str = ARENA_CONFIG_SCHEMA_VERSION
+    runner_image: str = RUNNER_IMAGE_VERSION
+    runner_base_image_digest: str = RUNNER_BASE_IMAGE_DIGEST
+    mcp_bridge_version: str = MCP_BRIDGE_VERSION
+    mcp_tool_schema_version: str = MCP_TOOL_SCHEMA_VERSION
+    service_spec_schema: str = SERVICE_SPEC_VERSION
+    blue_brief_catalog_version: str = BLUE_BRIEF_CATALOG_VERSION
+    tool_ceiling: int = 10
+    turn_budget: int = 4
+    token_budget: int = 2048
+    publication_enabled: bool = False
+
+    def normalized(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "runner_image": self.runner_image,
+            "runner_base_image_digest": self.runner_base_image_digest,
+            "mcp_bridge_version": self.mcp_bridge_version,
+            "mcp_tool_schema_version": self.mcp_tool_schema_version,
+            "service_spec_schema": self.service_spec_schema,
+            "blue_brief_catalog_version": self.blue_brief_catalog_version,
+            "tool_ceiling": self.tool_ceiling,
+            "turn_budget": self.turn_budget,
+            "token_budget": self.token_budget,
+            "publication_enabled": self.publication_enabled,
+        }
+
+    @property
+    def config_digest(self) -> str:
+        return _digest(self.normalized())
 
 
 def _digest(value: object) -> str:
@@ -114,6 +204,12 @@ class SeriesSpec:
     clock: ControlledClock = field(default_factory=ControlledClock)
     command_code_credit_allowance: int | float | None = None
     minimum_simulated_duration_seconds: int | float | None = None
+    runner_image: str = RUNNER_IMAGE_VERSION
+    runner_base_image_digest: str = RUNNER_BASE_IMAGE_DIGEST
+    mcp_bridge_version: str = MCP_BRIDGE_VERSION
+    arena_config_digest: str | None = None
+    is_calibration: bool = False
+    publication_enabled: bool = True
 
     def __post_init__(self) -> None:
         if self.schema_version != "sandboxer.series-spec.v1":
@@ -126,6 +222,22 @@ class SeriesSpec:
             raise ValueError("declared provider credit allowance must be positive")
         if self.minimum_simulated_duration_seconds is not None and self.minimum_simulated_duration_seconds < 0:
             raise ValueError("declared minimum simulated duration cannot be negative")
+
+    def arena_configuration(self) -> ArenaConfiguration:
+        return ArenaConfiguration(
+            runner_image=self.runner_image,
+            runner_base_image_digest=self.runner_base_image_digest,
+            mcp_bridge_version=self.mcp_bridge_version,
+            service_spec_schema=SERVICE_SPEC_VERSION,
+            blue_brief_catalog_version=BLUE_BRIEF_CATALOG_VERSION,
+            tool_ceiling=self.match_policy.tool_budget,
+            turn_budget=self.match_policy.turn_budget,
+            token_budget=self.match_policy.output_token_budget,
+            publication_enabled=self.publication_enabled and not self.is_calibration,
+        )
+
+    def resolved_arena_config_digest(self) -> str:
+        return self.arena_config_digest or self.arena_configuration().config_digest
 
 
 @dataclass(frozen=True)
@@ -320,7 +432,12 @@ def _bundle(
         provider_credit_allowance=spec.command_code_credit_allowance,
         minimum_simulated_duration_seconds=spec.minimum_simulated_duration_seconds,
     )
-    eligible = terminal_code == "SERIES_COMPLETED" and verdict.get("valid", False)
+    eligible = (
+        terminal_code == "SERIES_COMPLETED"
+        and verdict.get("valid", False)
+        and (not spec.is_calibration)
+        and spec.publication_enabled
+    )
     score_wins = {competitor.public_name: sum(result["winner"] == competitor.public_name for result in results) for competitor in spec.competitors}
     score_proof = {
         "schema": "sandboxer.score-proof.v1",
@@ -330,6 +447,7 @@ def _bundle(
                 "match_number": result["match_number"],
                 "winner": result["winner"],
                 "reason_code": result["reason_code"],
+                "outcome": result.get("outcome", resolve_match_outcome(result["reason_code"], result.get("teardown", "destroyed"))),
                 "verified_submission_event_ids": result.get("verified_submission_event_ids", ()),
                 "final_health_event_ids": result.get("final_health_event_ids", ()),
             }
@@ -429,6 +547,7 @@ def execute_series(spec: SeriesSpec, *, state_path: Path | None = None) -> Relea
 
 def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseBundle:
     telemetry = _Telemetry(spec)
+    arena_digest = spec.resolved_arena_config_digest()
     def transition(state: str) -> None:
         event = telemetry.emit(
             "LIFECYCLE_TRANSITION",
@@ -440,7 +559,15 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
             store.transition(state, event["event_id"])
 
     transition("DRAFT")
-    telemetry.emit("SERIES_CREATED", "ORCHESTRATOR_VERIFIED", spec_hash=_digest(asdict(spec)))
+    telemetry.emit(
+        "SERIES_CREATED",
+        "ORCHESTRATOR_VERIFIED",
+        spec_hash=_digest(asdict(spec)),
+        arena_config_digest=arena_digest,
+        runner_base_image_digest=spec.runner_base_image_digest,
+        is_calibration=spec.is_calibration,
+        publication_enabled=spec.publication_enabled and not spec.is_calibration,
+    )
     transition("APPROVED")
     transition("PROVISIONING")
     transition("PREFLIGHT")
@@ -557,6 +684,14 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
             blue_brief=brief.family,
             blue_brief_manifest=brief_manifest(brief),
             blue_brief_selection="deterministic-without-replacement",
+            arena_config_digest=arena_digest,
+            runner_base_image_digest=spec.runner_base_image_digest,
+            service_spec_schema=SERVICE_SPEC_VERSION,
+            blue_brief_catalog_version=brief.version,
+            mcp_bridge_version=spec.mcp_bridge_version,
+            tool_ceiling=spec.match_policy.tool_budget,
+            turn_limit=spec.match_policy.turn_budget,
+            is_calibration=spec.is_calibration,
         )
         telemetry.emit(
             "RUNNERS_PROVISIONED",
@@ -629,12 +764,14 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
         if budget_failure is not None:
             failure_payload = {key: value for key, value in budget_failure.items() if key not in {"reason_code", "phase"}}
             code = budget_failure.get("reason_code", "COMPETITIVE_BUDGET_EXHAUSTED")
+            outcome = str(MatchOutcome.BUDGET_EXHAUSTED)
             telemetry.emit(
                 "MATCH_TIMEOUT" if code == "MATCH_TIMEOUT" else "BUDGET_EXHAUSTED",
                 "ORCHESTRATOR_VERIFIED",
                 match_number=number,
                 phase=budget_failure.get("phase", "red"),
                 reason_code=code,
+                outcome=outcome,
                 **failure_payload,
             )
             telemetry.emit(
@@ -647,8 +784,19 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
                 runners=runner_names,
                 source_adapter="fake-runner-backend/v1",
             )
-            results.append({"match_number": number, "blue_brief": brief.family, "blue_brief_version": brief.version, "blue_brief_parameters": dict(brief.parameters), "roles": tuple(competitor.public_name for competitor in roles), "winner": None, "captures": None, "teardown": "destroyed", "reason_code": code})
-            telemetry.emit("MATCH_FINISHED", "ORCHESTRATOR_VERIFIED", match_number=number, phase="finalizing", reason_code=code)
+            results.append({
+                "match_number": number,
+                "blue_brief": brief.family,
+                "blue_brief_version": brief.version,
+                "blue_brief_parameters": dict(brief.parameters),
+                "roles": tuple(competitor.public_name for competitor in roles),
+                "winner": None,
+                "captures": None,
+                "teardown": "destroyed",
+                "reason_code": code,
+                "outcome": outcome,
+            })
+            telemetry.emit("MATCH_FINISHED", "ORCHESTRATOR_VERIFIED", match_number=number, phase="finalizing", reason_code=code, outcome=outcome)
             return terminal(code)
         verified_submission_events = []
         for submission_order, (competitor, claim_id) in enumerate(submissions, start=1):
@@ -662,17 +810,25 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
         health = {event["competitor"]: event["healthy"] for event in final_health_events}
         if len(captured) == 1:
             winner, reason_code = captured[0], "SOLE_CAPTURE"
+            outcome = str(MatchOutcome.VALID_CAPTURE)
         elif len(captured) == 2 and health[captured[0]] != health[captured[1]]:
             winner = next(name for name in captured if health[name])
             reason_code = "DUAL_CAPTURE_HEALTH"
+            outcome = str(MatchOutcome.VALID_CAPTURE)
         elif len(captured) == 2:
             winner, reason_code = captured[0], "DUAL_CAPTURE_SUBMISSION_ORDER"
+            outcome = str(MatchOutcome.VALID_CAPTURE)
         elif health[roles[0].public_name] != health[roles[1].public_name]:
             winner = next(competitor.public_name for competitor in roles if health[competitor.public_name])
             reason_code = "NO_CAPTURE_AVAILABILITY"
+            outcome = str(MatchOutcome.VALID_NO_CAPTURE)
         else:
             winner, reason_code = None, "EXACT_TIE"
+            outcome = str(MatchOutcome.VALID_NO_CAPTURE)
         teardown = "destroyed" if spec.runner_backend.teardown == "destroy" else "quarantined"
+        if teardown != "destroyed":
+            outcome = str(MatchOutcome.INVALID)
+            reason_code = "TEARDOWN_UNCERTAIN" if spec.runner_backend.teardown == "uncertain" else "RUNNERS_QUARANTINED"
         telemetry.emit(
             "RUNNER_TEARDOWN",
             "ORCHESTRATOR_VERIFIED",
@@ -683,7 +839,23 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
             runners=runner_names,
             source_adapter="fake-runner-backend/v1",
         )
-        results.append({"match_number": number, "blue_brief": brief.family, "blue_brief_version": brief.version, "blue_brief_parameters": dict(brief.parameters), "roles": tuple(competitor.public_name for competitor in roles), "winner": winner, "captures": captures, "final_health": health, "submission_order": tuple(captured), "verified_submission_event_ids": tuple(event["event_id"] for event in verified_submission_events), "final_health_event_ids": tuple(event["event_id"] for event in final_health_events), "teardown": teardown, "reason_code": reason_code, "finished": tuple(sorted(finished))})
+        results.append({
+            "match_number": number,
+            "blue_brief": brief.family,
+            "blue_brief_version": brief.version,
+            "blue_brief_parameters": dict(brief.parameters),
+            "roles": tuple(competitor.public_name for competitor in roles),
+            "winner": winner,
+            "captures": captures,
+            "final_health": health,
+            "submission_order": tuple(captured),
+            "verified_submission_event_ids": tuple(event["event_id"] for event in verified_submission_events),
+            "final_health_event_ids": tuple(event["event_id"] for event in final_health_events),
+            "teardown": teardown,
+            "reason_code": reason_code,
+            "outcome": outcome,
+            "finished": tuple(sorted(finished)),
+        })
         telemetry.emit(
             "MATCH_FINISHED",
             "ORCHESTRATOR_VERIFIED",
@@ -691,6 +863,7 @@ def _execute_series(spec: SeriesSpec, store: _LifecycleStore | None) -> ReleaseB
             phase="finalizing",
             winner=winner,
             reason_code=reason_code,
+            outcome=outcome,
         )
         if spec.runner_backend.teardown != "destroy":
             code = "TEARDOWN_UNCERTAIN" if spec.runner_backend.teardown == "uncertain" else "RUNNERS_QUARANTINED"

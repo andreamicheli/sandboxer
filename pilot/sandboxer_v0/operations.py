@@ -639,4 +639,10 @@ def _decode_spec(data: dict[str, object]) -> SeriesSpec:
         clock=ControlledClock(**data["clock"]),
         command_code_credit_allowance=data.get("command_code_credit_allowance"),
         minimum_simulated_duration_seconds=data.get("minimum_simulated_duration_seconds"),
+        runner_image=str(data.get("runner_image", "sandboxer-runner:v1")),
+        runner_base_image_digest=str(data.get("runner_base_image_digest", "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069")),
+        mcp_bridge_version=str(data.get("mcp_bridge_version", "sandboxer.mcp-bridge.v1")),
+        arena_config_digest=str(data["arena_config_digest"]) if data.get("arena_config_digest") is not None else None,
+        is_calibration=bool(data.get("is_calibration", False)),
+        publication_enabled=bool(data.get("publication_enabled", True)),
     )

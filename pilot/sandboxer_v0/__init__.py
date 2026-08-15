@@ -6,14 +6,22 @@ connected.
 """
 
 from .series import (
+    ArenaConfiguration,
     ControlledCompetitor,
     ControlledClock,
     FakeModelAdapter,
     FakeRunnerBackend,
+    MatchOutcome,
     MatchPolicy,
     ReleaseBundle,
     SeriesSpec,
     execute_series,
+    resolve_match_outcome,
+    ARENA_CONFIG_SCHEMA_VERSION,
+    MCP_BRIDGE_VERSION,
+    MCP_TOOL_SCHEMA_VERSION,
+    RUNNER_BASE_IMAGE_DIGEST,
+    RUNNER_IMAGE_VERSION,
 )
 from .arena_safety import (
     ArenaNetworkPolicy,
@@ -55,12 +63,20 @@ from .operations import (
 from .command_code import CommandCodeAdapter, CommandCodeBudget, CommandCodeError, CommandCodePreflight, CommandCodeResult
 
 __all__ = [
+    "ArenaConfiguration",
+    "ARENA_CONFIG_SCHEMA_VERSION",
     "ControlledCompetitor",
     "ControlledClock",
     "FakeModelAdapter",
     "FakeRunnerBackend",
+    "MatchOutcome",
     "MatchPolicy",
+    "MCP_BRIDGE_VERSION",
+    "MCP_TOOL_SCHEMA_VERSION",
     "ReleaseBundle",
+    "resolve_match_outcome",
+    "RUNNER_BASE_IMAGE_DIGEST",
+    "RUNNER_IMAGE_VERSION",
     "SeriesSpec",
     "execute_series",
     "ArenaNetworkPolicy",

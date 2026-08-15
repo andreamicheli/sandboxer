@@ -76,7 +76,15 @@ def verify_evidence_bundle(bundle: Any | Mapping[str, Any]) -> dict[str, Any]:
         raise EvidenceFreezeError("EVIDENCE_SIGNATURE_INVALID")
     finished = {event["match_number"]: event for event in telemetry if event.get("event_type") == "MATCH_FINISHED" and isinstance(event.get("match_number"), int)}
     score = public.get("score_proof")
-    if not isinstance(score, (tuple, list)) or len(score) != len(finished) or any(not isinstance(item, dict) or item.get("match_number") not in finished or item.get("winner") != finished[item["match_number"]].get("winner") or item.get("reason_code") != finished[item["match_number"]].get("reason_code") for item in score):
+    valid_outcomes = {"VALID_CAPTURE", "VALID_NO_CAPTURE", "BUDGET_EXHAUSTED", "INVALID"}
+    if not isinstance(score, (tuple, list)) or len(score) != len(finished) or any(
+        not isinstance(item, dict)
+        or item.get("match_number") not in finished
+        or item.get("winner") != finished[item["match_number"]].get("winner")
+        or item.get("reason_code") != finished[item["match_number"]].get("reason_code")
+        or (item.get("outcome") is not None and item.get("outcome") not in valid_outcomes)
+        for item in score
+    ):
         raise EvidenceFreezeError("EVIDENCE_SCORE_PROOF_INVALID")
     terminal = next((event for event in reversed(telemetry) if event.get("event_type") == "SERIES_COMPLETED"), None)
     if not isinstance(terminal, dict) or terminal.get("winner") not in {item.get("winner") for item in score}:
@@ -200,7 +208,15 @@ def freeze_evidence_bundle(
         "redaction_irreversible": True,
     }
     health = tuple(event["event_id"] for event in telemetry if event["event_type"] == "RUNNER_HEALTH")
-    score = tuple({"match_number": item["match_number"], "winner": item.get("winner"), "reason_code": item["reason_code"]} for item in results)
+    score = tuple(
+        {
+            "match_number": item["match_number"],
+            "winner": item.get("winner"),
+            "reason_code": item["reason_code"],
+            "outcome": item.get("outcome") or ("VALID_CAPTURE" if item.get("winner") else "VALID_NO_CAPTURE"),
+        }
+        for item in results
+    )
     public = {
         "schema_version": "sandboxer.evidence-bundle.v1",
         "specification": asdict(spec),
