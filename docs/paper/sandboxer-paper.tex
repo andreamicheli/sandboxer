@@ -1,0 +1,477 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+
+\newcommand{\sandboxer}{\textsc{Sandboxer}}
+\newcommand{\bluephase}{Blue Phase}
+\newcommand{\redphase}{Red Phase}
+
+\title{\Large \textbf{Sandboxer: An Experimental Model-versus-Model Benchmark for\\ Offensive and Defensive Cyber Capability in a Simulated Capture-the-Flag Arena}}
+
+\author{The Sandboxer Team\\ \small \texttt{https://github.com/andreamicheli/sandboxer}}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\noindent
+\sandboxer{} is an experimental benchmark that evaluates the offensive and defensive
+cyber capabilities of frontier AI models in a simulated, controlled, and fully
+observable capture-the-flag (CTF) arena. Where most existing benchmarks measure
+whether a single model can solve a pre-authored security challenge, \sandboxer{}
+instead pits two models directly against one another: each model first builds and
+defends its own synthetic network service (\bluephase), and then attacks the
+service built by its opponent (\redphase), under symmetric, audited budgets.
+Vulnerabilities are never planted by the benchmark; they must emerge from the
+models' own defensive choices, which is precisely what the arena is designed to
+reveal. A trusted Orchestrator and a hybrid deterministic-and-LLM Match Auditor
+enforce isolation, symmetry, and validity, while an append-only, hash-chained
+telemetry stream acts as the authoritative record from which results, replays,
+reports, and broadcast videos are derived. This paper introduces the benchmark,
+describes its design, protocol, scoring, evidence, and auditing machinery, and
+states the limitations that bound the claims it can support. It is the
+introductory announcement of \sandboxer{} ahead of its first public best-of-three
+series between two open-weight models, and it is deliberately a design document,
+not yet a report of results.
+\end{abstract}
+
+\section{Introduction}
+
+Frontier language models are increasingly deployed as autonomous agents that plan,
+call tools, and act on external systems over long horizons. As their autonomy
+grows, so does the practical importance of understanding what they can do in
+security-relevant settings---not only how well they can answer quiz-style
+questions about vulnerabilities, but how they behave when they must build a
+defense and, symmetrically, when they must break one under time, token, and tool
+constraints. Measuring these capabilities rigorously is hard: real systems cannot
+be attacked for evaluation purposes, and historical challenge datasets, however
+carefully curated, exercise only one side of the coin.
+
+The evaluation community has responded with a family of cybersecurity benchmarks
+that score a model's ability to solve curated challenges, among them Cybench
+\cite{cybench}, NYU CTF Bench \cite{nyuctf}, CyberGym \cite{cybergym}, and the
+EnIGMA agent \cite{enigma}. These are valuable and complementary efforts, but they
+share a common structure: a single agent attacks a fixed, pre-authored target,
+and the evaluation produces a success rate against that static corpus. They do
+not measure how a model defends a system it built itself, nor do they measure how
+two models interact adversarially under controlled, symmetric conditions.
+
+\sandboxer{} is designed to fill this gap. Its core unit is a \emph{Match}: two
+models are placed in separate, disposable, isolated virtual machines. In the
+\bluephase, each model receives the same minimal synthetic service and the same
+seeded ``Blue Brief''---a small functional requirement, not an exploit---and is
+free to modify and defend its own service. In the \redphase, the two arenas are
+connected along narrow, declared paths, and each model attempts to capture a
+synthetic flag from the opponent's service while preserving its own. The
+vulnerabilities that matter are therefore \emph{emergent}: they arise from the
+models' independent defensive choices, rather than being selected by the seed or
+pre-baked into the challenge. This makes the benchmark a test of integrated
+offensive and defensive behavior rather than a test of challenge-solving.
+
+Three commitments distinguish \sandboxer{} from a demonstration. First,
+\emph{observability}: every state transition, tool call, budget observation, and
+submission is recorded in an append-only, hash-chained telemetry stream that is
+the authoritative source of truth; the video, the report, and the website are all
+derived views of that stream. Second, \emph{symmetry}: the two competitors face
+identical prompts, tools, budgets, and provider treatment, and any material
+asymmetry invalidates the comparison rather than being papered over. Third,
+\emph{bounded claims}: \sandboxer{} is an experimental benchmark, and its public
+claim is deliberately narrow---the result describes these specific models, in this
+specific configuration, and does not measure general cyber capability or safety
+against real-world systems.
+
+This paper is the introductory announcement of the benchmark. We first situate it
+against related work (Section~\ref{sec:background}), then describe the arena,
+the match protocol, scoring, telemetry, and auditing in detail
+(Section~\ref{sec:methodology}), and close with the limitations and threats to
+validity that bound what the benchmark can claim (Section~\ref{sec:limitations}).
+
+\section{Background and Related Work}
+\label{sec:background}
+
+\subsection{The broader evaluation landscape}
+
+The evaluation of frontier models has matured from static question-answering
+benchmarks toward \emph{capability} evaluations that ask how much useful work an
+agent can complete over an extended horizon. METR proposes measuring AI
+performance by the length of tasks an agent can complete, arguing that
+task-completion time horizon is a stable and interpretable metric for progress
+\cite{metr}. Epoch AI's FrontierMath demonstrates the value of expert-crafted,
+unseen, and independently vetted problems for probing capability at the frontier
+\cite{frontiermath}. The UK AI Safety Institute's Inspect framework provides an
+open, extensible harness for running and logging such evaluations reproducibly
+\cite{inspect}. In the software-engineering domain, SWE-bench \cite{swebench} and
+InterCode \cite{intercode} established the standard of scoring an agent by
+whether its actions, executed against a real environment, actually achieve the
+stated objective.
+
+\sandboxer{} inherits from this tradition the discipline of execution-based
+scoring, frozen configurations, and versioned evidence, but applies it to an
+adversarial, two-sided task rather than a single-agent completion task.
+
+\subsection{Cybersecurity benchmarks}
+
+A distinct line of work evaluates language-model agents on security tasks.
+Cybench provides a framework for specifying cybersecurity tasks and scoring
+agents on 40 professional-level CTF challenges \cite{cybench}. NYU CTF Bench
+curates 200 CTF challenges across six categories and evaluates both black-box and
+open-source models \cite{nyuctf}. CyberGym scales real-world evaluation to 1{,}507
+historical vulnerabilities across 188 software projects \cite{cybergym}. EnIGMA
+shows that interactive agent-computer interfaces substantially improve a model's
+ability to solve CTF challenges \cite{enigma}. Together these efforts establish
+that (i) language-model agents possess non-trivial offensive capability on
+curated challenges, and (ii) the choice of interface, scaffolding, and budget
+materially changes measured performance.
+
+What these benchmarks share is a one-sided structure: a single agent attacks a
+pre-authored target, and the result is a per-challenge success rate. Three
+dimensions are therefore under-explored. First, \emph{defense}: there is no
+symmetrically rigorous measure of how well a model constructs and maintains a
+defense. Second, \emph{interaction}: real security is a contest, and a model's
+behavior against an adaptive opponent is a different quantity from its behavior
+against a static target. Third, \emph{emergence}: when vulnerabilities are
+pre-authored, the benchmark cannot distinguish the model's skill from the
+difficulty of the planted flaw.
+
+\sandboxer{} is positioned at the intersection of these two lines of work. It uses
+the disciplined evaluation machinery of the capability-evaluation tradition
+(frozen configuration, execution-based scoring, versioned telemetry, an
+independent auditor) applied to the two-sided, emergent task structure that
+single-agent CTF benchmarks cannot express. It is closer in spirit to a
+controlled ``model duel'' than to a challenge corpus, and it is explicitly a
+\emph{showcase evaluation}---a first, carefully bounded answer to the question of
+how two models compare when they both defend and attack---rather than a claim of
+mature scientific-benchmark status comparable to the established institutions
+cited above.
+
+\section{Methodology}
+\label{sec:methodology}
+
+\subsection{Design principles}
+
+Four principles govern every design decision in \sandboxer{}.
+
+\begin{itemize}
+  \item \textbf{Safety first.} The arena is synthetic and self-contained. Targets
+        are toy services and ephemeral flags; there is no path to real systems,
+        real credentials, or the control plane. Isolation is deny-by-default and
+        enforced by deterministic controls that fail closed.
+  \item \textbf{Symmetry.} Both competitors receive identical prompts, tools,
+        budgets, provider treatment, and opportunity. Any material asymmetry in a
+        measured category invalidates the comparison unless a predeclared
+        symmetric fallback removes that category from both sides.
+  \item \textbf{Observability.} A single, authoritative, hash-chained telemetry
+        stream records everything that matters. Nothing is inferred from screen
+        recordings; the replay, the report, and the video are all derived from
+        the same validated events.
+  \item \textbf{Emergent vulnerability.} No exploit is planted. Both models start
+        from the same pristine service and the same seeded functional brief; the
+        attack surface that matters is whatever each model's own choices open up.
+\end{itemize}
+
+\subsection{Arena and containment}
+
+Each Match runs two disposable Runner virtual machines under a trusted
+Orchestrator. Runners are non-privileged, capability-free, and read-only at the
+root filesystem, with bounded CPU, memory, and process limits. During the
+\bluephase{} their networks are fully separated; a shared, deny-by-default arena
+network is attached only at the transition to the \redphase, and even then only
+the declared opponent service paths are reachable. There is no egress to the
+public internet, no host filesystem mounts, and the Orchestrator---which is never
+a valid target---cannot be addressed, terminated, or administered from the arena.
+Flags, services, and targets are synthetic; nothing outside the arena is a
+permitted objective. Every terminal state ends in verified teardown, and any
+teardown that cannot be confirmed destroys the validity of the Match.
+
+\subsection{Task family and the Blue Brief}
+
+The task is deliberately minimal so that the interesting variation comes from the
+models, not from an elaborate scenario. Both competitors begin from the same
+small, pristine, synthetic notes service with deterministic health,
+functional-integrity, and flag-capture tests. The service contains no planted
+exploit.
+
+At the start of a Match, both competitors receive the same seed-selected
+\textbf{Blue Brief}: a minor functional requirement---such as constrained public
+export, controlled sharing, or sanitized diagnostics---stated as an outcome, not
+an implementation. Each model independently changes and defends its own service
+to satisfy the brief. The briefs are versioned, frozen for a series, and
+calibrated to be symmetric and of comparable difficulty. Because the brief
+specifies \emph{what} to add and not \emph{how} to secure it, the defensive
+choices---and therefore the attack surface---emerge from the model. A best-of-three
+series uses three distinct briefs selected without replacement from the frozen
+catalog.
+
+\subsection{Match protocol}
+
+A Match is a validated state machine controlled by the Orchestrator:
+
+\begin{center}
+\begin{minipage}{0.92\textwidth}
+\begin{quote}
+\small
+\texttt{specified $\rightarrow$ provisioned $\rightarrow$ preflight\_passed
+$\rightarrow$ blue\_active $\rightarrow$ blue\_validation
+$\rightarrow$ intermission\_interview $\rightarrow$ flags\_injected
+$\rightarrow$ red\_preflight $\rightarrow$ red\_active $\rightarrow$ finalizing
+$\rightarrow$ valid\_result $|$ invalid $|$ aborted $\rightarrow$ teardown\_verified}
+\end{quote}
+\end{minipage}
+\end{center}
+
+Every transition is an authoritative telemetry event with a monotonic timestamp,
+a reason, and a responsible component, and a failed prerequisite cannot be
+bypassed by advancing the state manually.
+
+\paragraph{Blue Phase.} Both competitors build and defend their own service in
+independent concurrent loops. Allowed tools are limited to inspecting, editing,
+restarting, and testing the model's \emph{own} service, plus an irreversible
+\texttt{finish\_phase}. The phase ends when both competitors finish or exhaust
+their Blue budgets. The Auditor then verifies that both services pass the same
+minimum health contract; if either fails, the Red Phase does not start and the
+Match is invalid rather than an automatic competitive loss.
+
+\paragraph{Intermission Interview.} Between phases, each model receives the same
+separate, tool-free interview asking how its defensive phase went, which
+weaknesses it perceives, and what attack it expects. The interview uses a small
+equal budget, cannot change Runner state, reveals no opponent data, and is
+recorded and labeled as model self-report rather than verified Match fact. It
+cannot affect scoring except through ordinary provider failures.
+
+\paragraph{Red Phase.} The Orchestrator injects unique ephemeral flags, verifies
+their placement, and enables only the declared opponent service paths. Both
+competitors then run simultaneously under symmetric Red budgets. Each model may
+continue to defend its own service while attacking the opponent's, and may submit
+a captured flag to the Orchestrator for verification. A valid submission requires
+the correct opponent flag \emph{and} the submitter's own service to pass the
+minimum health contract at submission time.
+
+\paragraph{Budgets.} The primary competitive resource is generation consumption,
+not elapsed time. Both competitors receive a comparable output-token allowance,
+equal maximum turns, equal tool availability, and equal retry and pacing policy;
+reasoning tokens are included symmetrically when the provider exposes them.
+Wall-clock limits exist only as loose operational backstops. Provider latency is
+observed evidence but is not itself a competitive budget, and a transient
+provider failure that produces no generation does not consume competitive tokens.
+
+\subsection{Scoring and the best-of-three}
+
+\sandboxer{} uses an outcome-first, lexicographic result rather than an additive
+point total. The Orchestrator is the sole authority for flag validity, submission
+receipt and verification, service availability, and functional integrity. For a
+valid Match, the winner is determined as follows.
+
+\begin{enumerate}
+  \item \textbf{Exactly one competitor captures:} that competitor wins, even if
+        its own service is no longer healthy at finalization; capture is the
+        primary objective and the degraded defense is reported as part of the
+        result.
+  \item \textbf{Both capture:} if exactly one service is functionally healthy at
+        finalization, that competitor wins; if both are healthy, the earlier
+        verified submission wins; if neither is healthy, higher measured
+        functional availability wins.
+  \item \textbf{Neither captures:} higher measured functional availability and
+        integrity wins.
+  \item \textbf{Unresolved tie:} a fresh, role-swapped tie-break Match is run
+        under the same frozen protocol, rather than a coin flip.
+\end{enumerate}
+
+Time-to-capture is therefore an explicit ordering criterion only when both
+competitors complete equivalent healthy outcomes; it is never converted into an
+arbitrary point bonus. Safety and validity outcomes are applied first: an
+attributable disqualification awards the Match to the opponent, while an
+infrastructure, isolation, or authoritative-telemetry failure invalidates the
+Match with no winner.
+
+A public comparison is a \textbf{best-of-three} series, first to two valid Match
+wins. Match~1 assigns the internal side randomly from a recorded source, Match~2
+swaps it, and Match~3 (only at 1--1) assigns it to the loser of Match~2. A single
+Match may be published as an experimental showcase, but the best-of-three is the
+minimum unit called a v0 model comparison.
+
+\subsection{Telemetry, evidence, and the Auditor}
+
+\paragraph{Telemetry.} Match Telemetry is an append-only JSONL stream with a
+versioned envelope. Every event carries a schema version, match and series
+identifiers, an event identifier, UTC wall-clock time plus Orchestrator monotonic
+nanoseconds, the emitting component, phase and turn, causal and idempotency
+identifiers, a redaction classification, the source adapter and exact software
+versions, and a hash chain linking each event to its predecessor. The Orchestrator
+is authoritative for phase transitions, budgets, network state, health,
+submissions, termination, validity, and score; Runner observations are untrusted
+until normalized and validated.
+
+\paragraph{Evidence.} Each evidence bundle contains the immutable Match
+specification, prompt and tool contracts, the seed commitment and post-Match
+reveal, full competitor and provider manifests, environment and image digests,
+raw and normalized telemetry, service diffs, health evidence, score proof, and
+the Auditor verdict. Secrets and raw flags are encrypted in restricted evidence
+or replaced by proofs; public artifacts contain only irreversible redactions. A
+correction creates a new artifact version and never silently rewrites history.
+
+\paragraph{The Match Auditor.} A trusted, independent Auditor supervises every
+Match. Deterministic controls are authoritative for identity, symmetry, budget
+categories, allowlisted tools and network destinations, telemetry continuity,
+submission verification, forbidden targets, credential access, privilege or
+sandbox-escape indicators, and control-plane reachability. An independent LLM
+reviewer may assess task sensibility, ambiguous novel risk, and whether
+interpretations are supported, but it cannot weaken a rule, fabricate a missing
+measurement, edit evidence, or permit a blocked action. High-confidence safety
+violations block and abort immediately; uncertain signals fail closed when they
+could expose systems outside the synthetic arena. Actions---warn, pause, abort,
+invalidate, disqualify, quarantine, escalate---each carry a versioned reason code
+and evidence references.
+
+\subsection{Competitors, provider, and preflight}
+
+The Competitor is identified by producer and exact model, and the provider is a
+declared boundary rather than part of Competitor identity. The first controlled
+series runs \texttt{poolside/laguna-s-2.1-free} (Laguna) against
+\texttt{meta/muse-spark-1.2-contributor} (Muse Spark Contributor), both served
+through the Command Code provider via a headless CLI adapter. The adapter runs the
+CLI non-interactively, parses its NDJSON event stream, denies all native CLI tools,
+and exposes only phase-scoped tools backed by the Runner bridge.
+
+Before any Match, a \textbf{deterministic provider preflight} records the CLI
+binary hash and version, a redacted account fingerprint, a live catalog snapshot,
+exact model presence, and the accounting categories actually reported by the
+provider, and it live-probes the requested pair to confirm that both models
+resolve and are entitled. Catalog drift, a missing or aliased model, asymmetric
+usage categories, insufficient entitlement, or an unsupported session control
+fails the preflight and blocks the Match. Fields the provider does not expose
+(such as a credit balance or a concurrency limit) are recorded as
+not-observable rather than guessed, and comparability is asserted only over what
+is actually measured symmetrically.
+
+\subsection{Publication pipeline}
+
+All public artifacts are derived views of a frozen, validated evidence bundle,
+and every publication step is gated by a human approval. A Result Report
+separates \emph{observed} facts, \emph{derived} measurements, \emph{interpreted}
+behavior, and \emph{hypotheses}, and states the typing of every analytical claim.
+A deterministic compositor renders a split-terminal replay from sanitized
+telemetry, with a two-voice commentary track that is drafted, grounded to event
+identifiers, and reviewed; private model reasoning is redacted by construction.
+The report, the video, and the results website are produced from the same
+artifacts, and rollback never deletes evidence or silently replaces history.
+Maps, raw traces, flags, and credentials are never exposed publicly.
+
+\section{Limitations}
+\label{sec:limitations}
+
+\sandboxer{} is deliberately narrow, and its claims must be read with the
+following limitations in mind.
+
+\begin{itemize}
+  \item \textbf{Scope of the claim.} The result of a Match or series describes
+        these specific models, in this specific configuration, on this synthetic
+        task. It does not measure general cyber capability, safety, or
+        performance against real-world systems, and it must not be generalized
+        beyond the configuration actually run.
+  \item \textbf{Synthetic task.} The toy service and the seeded briefs are a
+        deliberate simplification. Strategies that transfer to real systems,
+        and the full complexity of real defense, are not exercised here. The
+        benchmark measures a controlled slice of behavior, not the whole of
+        cybersecurity competence.
+  \item \textbf{Small samples and variance.} A best-of-three is the minimum unit
+        of comparison, but it remains a small sample. The methodology is not yet
+        validated over many seeds, replications, execution orders, or model
+        families, and no statistical significance beyond the runs performed is
+        claimed. The v0 catalog of three to five briefs can also produce
+        monotony; broader or more generative brief construction is a deferred,
+        measured extension.
+  \item \textbf{Provider and scaffold confounders.} Provider-added prompts,
+        scaffolding, caching, rate limits, latency, and adapter behavior can all
+        influence observed behavior and are disclosed as confounders rather than
+        model differences. Input-token accounting is treated as evidence only,
+        because fixed CLI context and caching are not comparable across the two
+        competitors.
+  \item \textbf{Token-budget divergence.} Nominal token budgets and observed
+        consumption can diverge, and a model's refusal, voluntary finish, or
+        ineffective action is recorded as behavior, not as an infrastructure
+        fault. The comparison is therefore about behavior under a declared
+        budget, not a perfect measurement of capability.
+  \item \textbf{Policy drift.} Provider safety and refusal policies change over
+        time and can affect comparability; a material asymmetry or policy
+        incompatibility is treated as a validity event rather than a result.
+  \item \textbf{Interpretation versus observation.} Commentary, metaphor, and
+        strategic interpretation are editorial derivatives and can misread an
+        event. They never substitute for telemetry, and public material marks
+        interpretation explicitly (``appears to'', ``seems to'').
+  \item \textbf{Status of the benchmark.} \sandboxer{} is an experimental
+        showcase evaluation. It does not claim mature scientific-benchmark status
+        comparable to established evaluation institutions such as METR or Epoch
+        AI, and EnIGMA and NYU CTF Bench are retained as methodological and
+        editorial references, not as evidence that \sandboxer{} measures the same
+        construct.
+\end{itemize}
+
+These limitations are not defects to be hidden; they are the boundary of what the
+benchmark can responsibly claim. The first public series is a first step toward
+closing the two-sided gap in cyber evaluation, and its value is as much in the
+transparency of its evidence and the honesty of its claims as in any particular
+result it produces.
+
+\newpage
+\begin{thebibliography}{9}
+\setlength{\itemsep}{2pt}
+
+\bibitem{metr}
+T.~Kwa, B.~West, J.~Becker, \emph{et al.},
+``Measuring AI ability to complete long tasks,''
+arXiv preprint arXiv:2503.14499, 2025.
+
+\bibitem{frontiermath}
+E.~Glazer, E.~Erdil, T.~Besiroglu, \emph{et al.},
+``FrontierMath: A benchmark for evaluating advanced mathematical reasoning in AI,''
+arXiv preprint arXiv:2411.04872, 2024.
+
+\bibitem{inspect}
+UK AI Safety Institute,
+``Inspect: A framework for large language model evaluations,''
+software framework, \url{https://inspect.aisi.org.uk/}.
+
+\bibitem{swebench}
+C.~E.~Jimenez, J.~Yang, A.~Wettig, \emph{et al.},
+``SWE-bench: Can language models resolve real-world GitHub issues?,''
+arXiv preprint arXiv:2310.06770, 2024.
+
+\bibitem{intercode}
+J.~Yang, A.~Prabhakar, K.~Narasimhan, and S.~Yao,
+``InterCode: Standardizing and benchmarking interactive coding with execution feedback,''
+arXiv preprint arXiv:2306.14898, 2023.
+
+\bibitem{cybench}
+A.~K.~Zhang, N.~Perry, R.~Dulepet, \emph{et al.},
+``Cybench: A framework for evaluating cybersecurity capabilities and risk of language models,''
+arXiv preprint arXiv:2408.08926, 2024.
+
+\bibitem{nyuctf}
+M.~Shao, S.~Jancheska, M.~Udeshi, \emph{et al.},
+``NYU CTF Bench: A scalable open-source benchmark dataset for evaluating LLMs in offensive security,''
+arXiv preprint arXiv:2406.05590, 2024.
+
+\bibitem{cybergym}
+Z.~Wang, \emph{et al.},
+``CyberGym: Evaluating AI agents' real-world cybersecurity capabilities at scale,''
+arXiv preprint arXiv:2506.02548, 2025.
+
+\bibitem{enigma}
+T.~Abramovich, M.~Udeshi, M.~Shao, \emph{et al.},
+``EnIGMA: Interactive tools substantially assist LM agents in finding security vulnerabilities,''
+arXiv preprint arXiv:2409.16165, 2024.
+
+\end{thebibliography}
+
+\end{document}
