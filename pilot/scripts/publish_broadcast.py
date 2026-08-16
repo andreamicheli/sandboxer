@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -46,6 +47,9 @@ from typing import Any, Mapping, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from sandboxer_v0.publication_index import PublicationIndexError, upsert_publication
+from sandboxer_v0.report import ResultReportError, build_result_report
+from sandboxer_v0.report_latex import build_report_latex
 from sandboxer_v0.schedule import first_publication_date, parse_iso_date
 from sandboxer_v0.tts import (
     DEFAULT_FISH_TTS_MODEL,
@@ -119,6 +123,77 @@ def _tts_adapter(mode: str, manifest: Mapping[str, Any]) -> Any:
     return GeminiTtsAdapter(model=model, fallback_models=fallback_models, allow_fallback=allow_fallback)
 
 
+def _slugify(value: str) -> str:
+    """Normalize a series id into a site-safe slug (lowercase, alnum + dash)."""
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:80]
+
+
+def _series_slug(bundle: Mapping[str, Any]) -> str:
+    """A stable, safe report slug for a bundle, derived from its series id."""
+    specification = bundle.get("public") if isinstance(bundle.get("public"), Mapping) else None
+    specification = specification.get("specification") if isinstance(specification, Mapping) else None
+    series_id = specification.get("series_id") if isinstance(specification, Mapping) else None
+    slug = _slugify(str(series_id)) if series_id else ""
+    return slug or f"series-{str(bundle.get('bundle_hash', ''))[:12]}"
+
+
+def _build_site_report(
+    args: argparse.Namespace,
+    manifest: Mapping[str, Any],
+    publish_at: str | None,
+) -> dict[str, Any]:
+    """Generate and stage the canonical + detailed reports into the static site.
+
+    Returns the canonical ``report_url``, the ``slug``, a ``publication`` entry
+    for ``publications.json`` (its ``video_url`` is filled after the upload),
+    and a ``broadcast_report`` used for the YouTube title/winner metadata.
+    With no ``--bundle`` this is a no-op preserving the legacy ``--report-url``
+    behaviour (the site report is then expected to be published elsewhere).
+    """
+    if args.bundle is None:
+        return {"report_url": args.report_url, "slug": None, "publication": None, "broadcast_report": None}
+    bundle = json.loads(args.bundle.read_text(encoding="utf-8"))
+    try:
+        report = build_result_report(bundle)
+        latex = build_report_latex(bundle, compile_pdf=True)
+    except (ResultReportError, RuntimeError) as error:
+        raise SystemExit(f"REPORT_FAILED: {error}") from error
+    model = report.model.to_dict()
+    winner = str(model["outcome"]["winner"])
+    competitors = [str(item["public_name"]) for item in model["competitor_manifests"]]
+    title = f"Sandboxer Series: {winner} wins ({' vs '.join(competitors)})"
+    slug = args.report_slug or _series_slug(bundle)
+    if not slug:
+        raise SystemExit("REPORT_SLUG_MISSING")
+    base_url = (args.site_base_url or "").rstrip("/")
+    if not base_url:
+        raise SystemExit("SITE_BASE_URL_REQUIRED: pass --site-base-url (or set SANDBOXER_SITE_BASE_URL) with --bundle")
+    reports_dir = args.site_root / "assets" / "reports" / slug
+    charts_dir = reports_dir / "charts"
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "report.html").write_text(report.html, encoding="utf-8")
+    (reports_dir / "report.json").write_text(report.json, encoding="utf-8")
+    (reports_dir / "report.pdf").write_bytes(report.pdf)
+    (reports_dir / "report-detailed.tex").write_text(latex.tex, encoding="utf-8")
+    (reports_dir / "report-detailed.pdf").write_bytes(latex.pdf)
+    for name, content in latex.charts.items():
+        (charts_dir / name).write_bytes(content)
+    (reports_dir / "evidence.json").write_bytes(args.bundle.read_bytes())
+    report_url = f"{base_url}/assets/reports/{slug}/report.html"
+    publication = {
+        "id": slug,
+        "title": title,
+        "models": [f"{item['public_name']} ({item['model_id']})" for item in model["competitor_manifests"]],
+        "winner": winner,
+        "report_url": report_url,
+        "video_url": None,
+        "publish_at": publish_at,
+        "banner": f"New Match result published: {title}.",
+    }
+    broadcast_report = {"title": title, "outcome": {"winner": winner}, "report_url": report_url}
+    return {"report_url": report_url, "slug": slug, "publication": publication, "broadcast_report": broadcast_report}
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
@@ -140,6 +215,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="canonical report URL on the site, linked from the video description")
     parser.add_argument("--publish-at", default=None,
                         help="ISO date (YYYY-MM-DD) the site indexes this result as featured; default: next odd day")
+    parser.add_argument("--bundle", type=Path, default=None,
+                        help="frozen evidence bundle JSON; generates and stages the canonical + detailed report on the site")
+    parser.add_argument("--site-root", type=Path, default=Path(__file__).resolve().parents[2] / "site",
+                        help="static site directory receiving assets/reports/ and data/publications.json")
+    parser.add_argument("--site-base-url", default=os.environ.get("SANDBOXER_SITE_BASE_URL"),
+                        help="deployed site base URL (e.g. https://site-two-beta-34.vercel.app); required with --bundle")
+    parser.add_argument("--report-slug", default=None,
+                        help="report slug on the site (default: derived from the bundle series_id)")
     args = parser.parse_args(argv)
 
     manifest = _load(args.manifest, "manifest")
@@ -164,11 +247,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (TtsError, ValueError) as error:
         raise SystemExit(f"TTS_FAILED: {error}") from error
 
-    # 2. YouTube handoff (metadata, resumable upload, captions, thumbnail).
+    # 2. Site report (canonical + detailed LaTeX) staged from the frozen bundle.
+    site_report = _build_site_report(args, manifest, publish_at)
+    if site_report["slug"]:
+        print(f"staged site report: {site_report['report_url']}", file=sys.stderr)
+
+    # 3. YouTube handoff (metadata, resumable upload, captions, thumbnail).
     try:
         metadata = youtube_metadata(
-            manifest, report,
-            report_url=args.report_url,
+            manifest,
+            site_report["broadcast_report"] or report,
+            report_url=site_report["report_url"],
             publish_at=publish_at,
         )
         rehearsal = args.youtube in ("fake", "dry-run")
@@ -200,6 +289,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     except YoutubeError as error:
         raise SystemExit(f"YOUTUBE_FAILED: {error}") from error
 
+    # 4. Index the result on the site (revealed only once publish_at arrives).
+    publication_entry = site_report["publication"]
+    if publication_entry is not None:
+        publication_entry = dict(publication_entry)
+        publication_entry["video_url"] = uploaded["url"]
+        try:
+            upsert_publication(args.site_root / "data" / "publications.json", publication_entry)
+        except PublicationIndexError as error:
+            raise SystemExit(f"PUBLICATION_INDEX_FAILED: {error}") from error
+        print(f"indexed site publication: {publication_entry['id']} (publish_at={publication_entry.get('publish_at')})", file=sys.stderr)
+
     record = {
         "schema": "sandboxer.broadcast.v1",
         "manifest_hash": manifest.get("manifest_hash"),
@@ -221,8 +321,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "channel": preflight.get("channel"),
         },
         "publication": {
-            "report_url": args.report_url,
+            "report_url": site_report["report_url"],
             "publish_at": publish_at,
+            "slug": site_report["slug"],
+            "indexed": publication_entry is not None,
         },
         "thumbnail": thumbnail,
         "captions": captions,
