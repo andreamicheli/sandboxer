@@ -307,6 +307,93 @@ def render_report_latex(
     return "\n".join(blocks) + "\n"
 
 
+def render_narrative_latex(
+    model: Mapping[str, Any],
+    narrative: Mapping[str, Any],
+    charts: Sequence[str],
+) -> str:
+    """Render an LLM-drafted narrative into a standalone LaTeX document.
+
+    The drafted prose (summary, per-Match narratives, analysis, limitations) is
+    the editorial layer; the deterministic outcome, accounting tables, charts
+    and bundle hash remain authoritative and are rendered from ``model``.
+    """
+    competitors = [str(item["public_name"]) for item in model["competitor_manifests"]]
+    analytics = compute_analytics(model)
+    by_number = {match["match_number"]: match for match in analytics["matches"]}
+    winner = _tex_escape(model["outcome"]["winner"])
+    decisive = _tex_escape(model["outcome"]["decisive_rule"])
+    scope = _tex_escape(model["scope"]["repeated_scope_language"])
+
+    blocks: list[str] = [
+        r"\documentclass[11pt]{article}",
+        r"\usepackage[a4paper,margin=1in]{geometry}",
+        r"\usepackage[T1]{fontenc}",
+        r"\usepackage[utf8]{inputenc}",
+        r"\usepackage{lmodern}",
+        r"\usepackage{microtype}",
+        r"\usepackage{booktabs}",
+        r"\usepackage{graphicx}",
+        r"\usepackage[hidelinks]{hyperref}",
+        r"\begin{document}",
+        r"\begin{center}",
+        r"{\LARGE \textbf{" + _tex_escape(model["title"]) + r"}}\\[0.4em]",
+        r"{\large Narrative analysis}",
+        r"\end{center}",
+        r"\noindent\textit{" + scope + r"}",
+        r"\section{Summary}",
+        _tex_escape(str(narrative["summary"])),
+        r"\section{Outcome}",
+        r"\textbf{Winner:} " + winner + r"\\",
+        r"\textbf{Decisive rule:} " + decisive,
+        r"\section{Match narratives}",
+    ]
+
+    for item in narrative["per_match"]:
+        number = int(item["match_number"])
+        match = by_number[number]
+        chapter = next(ch for ch in model["technical_chapters"] if ch["match_number"] == number)
+        blocks.append(r"\subsection{Match " + str(number) + r"}")
+        blocks.append(
+            r"\textbf{Result:} "
+            + _tex_escape(chapter["outcome"]["winner"])
+            + r" ("
+            + _tex_escape(chapter["outcome"]["decisive_rule"])
+            + r")\\[0.3em]"
+        )
+        blocks.append(_tex_escape(str(item["narrative"])))
+        blocks.append(r"\paragraph{Accounting}")
+        blocks.append(_accounting_table(match, competitors))
+
+    blocks.append(r"\section{Analysis}")
+    blocks.append(_tex_escape(str(narrative["analysis"])))
+    blocks.append(r"\section{Limitations}")
+    blocks.append(_tex_escape(str(narrative["limitations"])))
+
+    blocks.append(r"\section{Data appendix}")
+    for chart, caption in (
+        ("output_tokens.png", "Output tokens by competitor and match."),
+        ("tool_calls.png", "Tool calls by competitor and match."),
+        ("turns.png", "Turns by competitor and match."),
+        ("phase_timeline.png", "Phase activity per match."),
+    ):
+        if chart in charts:
+            blocks.append(r"\begin{figure}[h!]")
+            blocks.append(r"\centering")
+            blocks.append(r"\includegraphics[width=\textwidth]{" + chart + r"}")
+            blocks.append(r"\caption{" + caption + r"}")
+            blocks.append(r"\end{figure}")
+
+    blocks.append(
+        r"\section{Reproducibility}\label{sec:repro}"
+        + r"\noindent Evidence bundle hash: \texttt{"
+        + _tex_escape(model["hashes"]["bundle_hash"])
+        + r"}."
+    )
+    blocks.append(r"\end{document}")
+    return "\n".join(blocks) + "\n"
+
+
 @dataclass(frozen=True)
 class LatexReport:
     """The LaTeX source, its embedded charts, and the optional compiled PDF."""
@@ -363,5 +450,6 @@ __all__ = [
     "compute_analytics",
     "compile_latex",
     "render_charts",
+    "render_narrative_latex",
     "render_report_latex",
 ]
