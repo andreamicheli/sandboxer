@@ -8,8 +8,10 @@ Usage (credential-free rehearsal):
         --tts fake --youtube dry-run --out ../artifacts/broadcast.json
 
 Real mode requires control-plane credentials (GEMINI_API_KEY and the
-YOUTUBE_* refresh-token env vars), an explicit human approval
-(``--approved-by``), and a confirmation:
+YOUTUBE_* refresh-token env vars).  Publishing is unattended by default
+(human gates off): the upload stays ``unlisted`` for preview and the site
+indexes the result on the next odd day.  Pass ``--manual`` to re-enable the
+human gate (``--approved-by`` plus an interactive confirmation).
 
     uv run python scripts/publish_broadcast.py \\
         --manifest ../artifacts/video-manifest.json \\
@@ -20,18 +22,17 @@ YOUTUBE_* refresh-token env vars), an explicit human approval
         --tts real --youtube real --privacy unlisted \\
         --approved-by editor --yes
 
-Temporary unattended publishing (human gates off): ``--auto-approve`` skips
-both the reviewer requirement and the interactive confirmation, and
-``--publish-at`` (default: the next odd day) schedules when the site indexes
-the result as featured while the upload stays unlisted for preview:
+Manual (gated) publishing: ``--manual`` re-enables the reviewer requirement
+(``--approved-by``) and the interactive confirmation.  ``--publish-at``
+(default: the next odd day) always schedules when the site indexes the result
+as featured while the upload stays unlisted for preview:
 
     uv run python scripts/publish_broadcast.py \\
         --manifest ../artifacts/video-manifest.json \\
         --report ../artifacts/report.json \\
         --video ../artifacts/delivery.mp4 \\
         --tts fish --youtube real --privacy unlisted \\
-        --report-url https://sandboxer.example/reports/series-001/match-1 \\
-        --auto-approve
+        --bundle evidence.json --site-base-url https://sandboxer.example
 """
 
 from __future__ import annotations
@@ -49,7 +50,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sandboxer_v0.publication_index import PublicationIndexError, upsert_publication
 from sandboxer_v0.report import ResultReportError, build_result_report
-from sandboxer_v0.report_latex import build_report_latex
+from sandboxer_v0.report_latex import build_report_latex, compile_latex, render_narrative_latex
+from sandboxer_v0.report_narrative import (
+    DeterministicReportNarrativeDrafter,
+    GeminiReportNarrativeDrafter,
+    draft_report_narrative,
+    render_narrative_html,
+)
 from sandboxer_v0.schedule import first_publication_date, parse_iso_date
 from sandboxer_v0.tts import (
     DEFAULT_FISH_TTS_MODEL,
@@ -137,18 +144,28 @@ def _series_slug(bundle: Mapping[str, Any]) -> str:
     return slug or f"series-{str(bundle.get('bundle_hash', ''))[:12]}"
 
 
+def _draft_narrative(model: Mapping[str, Any]) -> dict[str, Any]:
+    """Draft the report narrative with a text model, falling back deterministically."""
+    try:
+        return draft_report_narrative(model, drafter=GeminiReportNarrativeDrafter())
+    except Exception as error:  # an ungrounded/failed draft must never block publication
+        print(f"report narrative LLM draft failed ({error}); using deterministic fallback", file=sys.stderr)
+        return draft_report_narrative(model, drafter=DeterministicReportNarrativeDrafter())
+
+
 def _build_site_report(
     args: argparse.Namespace,
     manifest: Mapping[str, Any],
     publish_at: str | None,
 ) -> dict[str, Any]:
-    """Generate and stage the canonical + detailed reports into the static site.
+    """Generate and stage the canonical, detailed, and LLM-narrative reports.
 
-    Returns the canonical ``report_url``, the ``slug``, a ``publication`` entry
-    for ``publications.json`` (its ``video_url`` is filled after the upload),
-    and a ``broadcast_report`` used for the YouTube title/winner metadata.
-    With no ``--bundle`` this is a no-op preserving the legacy ``--report-url``
-    behaviour (the site report is then expected to be published elsewhere).
+    Returns the canonical ``report_url`` (the LLM narrative subpage), the
+    ``slug``, a ``publication`` entry for ``publications.json`` (its
+    ``video_url`` is filled after the upload), and a ``broadcast_report`` used
+    for the YouTube title/winner metadata.  With no ``--bundle`` this is a
+    no-op preserving the legacy ``--report-url`` behaviour (the site report is
+    then expected to be published elsewhere).
     """
     if args.bundle is None:
         return {"report_url": args.report_url, "slug": None, "publication": None, "broadcast_report": None}
@@ -179,7 +196,16 @@ def _build_site_report(
     for name, content in latex.charts.items():
         (charts_dir / name).write_bytes(content)
     (reports_dir / "evidence.json").write_bytes(args.bundle.read_bytes())
-    report_url = f"{base_url}/assets/reports/{slug}/report.html"
+    narrative = _draft_narrative(model)
+    narrative_tex = render_narrative_latex(model, narrative, list(latex.charts.keys()))
+    try:
+        narrative_pdf = compile_latex(narrative_tex, latex.charts)
+    except RuntimeError as error:
+        raise SystemExit(f"REPORT_FAILED: {error}") from error
+    (reports_dir / "narrative.html").write_text(render_narrative_html(model, narrative), encoding="utf-8")
+    (reports_dir / "narrative.tex").write_text(narrative_tex, encoding="utf-8")
+    (reports_dir / "narrative.pdf").write_bytes(narrative_pdf)
+    report_url = f"{base_url}/assets/reports/{slug}/narrative.html"
     publication = {
         "id": slug,
         "title": title,
@@ -209,14 +235,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--playlist", default=None)
     parser.add_argument("--approved-by", default=None)
     parser.add_argument("--yes", action="store_true")
-    parser.add_argument("--auto-approve", action="store_true",
-                        help="temporarily bypass the human approval gate and interactive confirmation")
+    parser.add_argument("--manual", action="store_true",
+                        help="re-enable the human approval gate (--approved-by + confirmation); default is unattended auto-approve")
     parser.add_argument("--report-url", default=None,
                         help="canonical report URL on the site, linked from the video description")
     parser.add_argument("--publish-at", default=None,
                         help="ISO date (YYYY-MM-DD) the site indexes this result as featured; default: next odd day")
     parser.add_argument("--bundle", type=Path, default=None,
-                        help="frozen evidence bundle JSON; generates and stages the canonical + detailed report on the site")
+                        help="frozen evidence bundle JSON; stages the canonical, detailed, and LLM-narrative reports on the site")
     parser.add_argument("--site-root", type=Path, default=Path(__file__).resolve().parents[2] / "site",
                         help="static site directory receiving assets/reports/ and data/publications.json")
     parser.add_argument("--site-base-url", default=os.environ.get("SANDBOXER_SITE_BASE_URL"),
@@ -237,7 +263,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     publish_at: str | None = None
     if args.publish_at:
         publish_at = parse_iso_date(args.publish_at).isoformat()
-    elif args.auto_approve:
+    elif not args.manual:
         publish_at = first_publication_date(date.today()).isoformat()
 
     # 1. TTS commentary blocks (bounded, hashed; drift fails preflight).
@@ -266,11 +292,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.youtube == "dry-run":
             uploader = YoutubeUploader(dry_run=True)
         else:
-            if args.auto_approve:
+            if not args.manual:
                 args.approved_by = args.approved_by or "auto"
             elif not args.approved_by:
-                raise SystemExit("APPROVAL_REQUIRED: pass --approved-by <reviewer> (or --auto-approve) for a real upload")
-            if not args.auto_approve:
+                raise SystemExit("APPROVAL_REQUIRED: pass --approved-by <reviewer> for a manual upload")
+            if args.manual:
                 _confirm(f"YouTube upload ({args.privacy})", args.yes)
             uploader = YoutubeUploader(dry_run=False)
         preflight = uploader.preflight(video_path=args.video)

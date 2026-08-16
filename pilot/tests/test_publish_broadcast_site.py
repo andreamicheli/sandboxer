@@ -15,6 +15,8 @@ from sandboxer_v0 import (
     SeriesSpec,
     execute_series,
 )
+from sandboxer_v0.report_narrative import DeterministicReportNarrativeDrafter, draft_report_narrative
+from scripts import publish_broadcast as pb
 from scripts.publish_broadcast import _build_site_report, _series_slug, _slugify
 
 
@@ -59,19 +61,34 @@ def _ns(tmp_path: Path, **overrides) -> argparse.Namespace:
     return argparse.Namespace(**values)
 
 
+def _deterministic_narrative(model):
+    return draft_report_narrative(model, drafter=DeterministicReportNarrativeDrafter())
+
+
 def test_build_site_report_no_bundle_is_legacy_noop(tmp_path: Path) -> None:
     result = _build_site_report(_ns(tmp_path, bundle=None), {}, "2026-08-17")
     assert result == {"report_url": None, "slug": None, "publication": None, "broadcast_report": None}
 
 
 @pytest.mark.skipif(shutil.which("pdflatex") is None, reason="pdflatex not available")
-def test_build_site_report_stages_files_and_entry(tmp_path: Path) -> None:
+def test_build_site_report_stages_files_and_entry(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(pb, "_draft_narrative", _deterministic_narrative)
     ns = _ns(tmp_path)
     result = _build_site_report(ns, {}, "2026-08-17")
     assert result["slug"] == "publish-broadcast-fixture"
-    assert result["report_url"] == "https://sandboxer.example/assets/reports/publish-broadcast-fixture/report.html"
+    assert result["report_url"] == "https://sandboxer.example/assets/reports/publish-broadcast-fixture/narrative.html"
     reports_dir = ns.site_root / "assets" / "reports" / "publish-broadcast-fixture"
-    for name in ("report.html", "report.json", "report.pdf", "report-detailed.tex", "report-detailed.pdf", "evidence.json"):
+    for name in (
+        "report.html",
+        "report.json",
+        "report.pdf",
+        "report-detailed.tex",
+        "report-detailed.pdf",
+        "narrative.html",
+        "narrative.tex",
+        "narrative.pdf",
+        "evidence.json",
+    ):
         assert (reports_dir / name).is_file(), name
     assert (reports_dir / "charts" / "output_tokens.png").is_file()
     publication = result["publication"]

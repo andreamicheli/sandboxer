@@ -132,13 +132,16 @@ ffmpeg -y -nostdin -i artifacts/commentary-full.wav -af "loudnorm=I=-16:LRA=7:TP
 ffmpeg -y -nostdin -i artifacts/video-only.mp4 -i artifacts/commentary-full.normalized.wav -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 320k artifacts/master.mov
 ffmpeg -y -nostdin -i artifacts/master.mov -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -movflags +faststart artifacts/delivery.mp4
 
-# 4. Publish (unlisted) + captions + thumbnail
+# 4. Publish (unlisted) + captions + thumbnail.  Unattended by default;
+#    pass --manual to re-enable the human gate (--approved-by + confirmation).
+#    With a frozen evidence bundle add:
+#    --bundle evidence.json --site-base-url https://<site>
+#    to also stage the canonical + detailed + LLM-narrative reports on the site.
 uv run python scripts/publish_broadcast.py \
   --manifest artifacts/video-manifest.json --report artifacts/report.json \
   --video artifacts/delivery.mp4 --captions artifacts/captions.vtt \
   --thumb artifacts/thumbnail.png --audio-dir artifacts/broadcast.audio \
-  --out artifacts/broadcast.json --tts fish --youtube real --privacy unlisted \
-  --approved-by editor --yes
+  --out artifacts/broadcast.json --tts fish --youtube real --privacy unlisted
 ```
 
 Synthetic artifacts (replay/report/manifest) for a rehearsal come from
@@ -155,6 +158,15 @@ as the source. It is produced by `pilot/sandboxer_v0/report_latex.py` and
 `pilot/scripts/build_report_pdf.py`, and `build_release()` embeds the LaTeX
 source plus the compiled-PDF hash (`compile_latex=True` to compile) and links
 both from the published site.
+
+On top of that deterministic document, `pilot/sandboxer_v0/report_narrative.py`
+drafts an **LLM-written narrative** (summary, one short narrative per Match,
+analysis, limitations) grounded to the deterministic report model, with a
+`DeterministicReportNarrativeDrafter` template fallback and fail-closed
+validation. `publish_broadcast.py --bundle ...` stages it as
+`narrative.tex`/`narrative.pdf` (LaTeX) plus `narrative.html` — the less
+detailed site subpage that the video description links to — while the canonical
+`report.html` and `report-detailed.pdf` remain the authoritative facts.
 
 ```sh
 # From a frozen evidence bundle JSON (or omit --bundle for a demo fixture):

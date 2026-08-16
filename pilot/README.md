@@ -168,8 +168,9 @@ uv run python scripts/publish_broadcast.py \
 
 Real uploads default to `unlisted`, require `GEMINI_API_KEY` plus the
 `YOUTUBE_CLIENT_ID`/`YOUTUBE_CLIENT_SECRET`/`YOUTUBE_REFRESH_TOKEN` OAuth
-refresh-token env vars, and demand explicit human approval
-(`--approved-by <reviewer>`):
+refresh-token env vars, and are unattended by default (human gates off). Pass
+`--manual` to re-enable the human gate (`--approved-by <reviewer>` plus an
+interactive confirmation):
 
 ```sh
 uv run python scripts/publish_broadcast.py \
@@ -177,7 +178,7 @@ uv run python scripts/publish_broadcast.py \
   --report artifacts/report.json \
   --video artifacts/delivery.mp4 --captions artifacts/captions.vtt \
   --thumb artifacts/thumbnail.png \
-  --tts real --youtube real --privacy unlisted --approved-by editor --yes
+  --tts fish --youtube real --privacy unlisted
 ```
 
 Credentials live only in the control-plane `.env` and are never copied into a
