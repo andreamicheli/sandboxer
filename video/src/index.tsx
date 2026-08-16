@@ -10,6 +10,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
+import { ArenaVisual, type ArenaPlan } from './arena';
 
 /* ------------------------------------------------------------------ */
 /* Brand: deep navy-black, electric cobalt, monospace, CRT texture.    */
@@ -74,6 +75,7 @@ type Manifest = {
   scenes: Scene[];
   commentary: CommentaryLine[];
   terminal?: TerminalEvent[];
+  arena_visuals?: ArenaPlan | null;
 };
 
 /* ------------------------------------------------------------------ */
@@ -454,6 +456,8 @@ const MatchScene: React.FC<{ manifest: Manifest; scene: Scene; localBase: number
   const phasePulse = 0.5 + 0.5 * Math.sin(frame * 0.12);
   const redActive = events.some((e) => e.phase === 'red' && frame >= e.at_frame - localBase - 30);
   const phaseColor = redActive ? RED : CYAN;
+  const arena = manifest.arena_visuals;
+  const arenaHeight = arena ? 420 : 0;
   return (
     <AbsoluteFill style={{ background: NAVY }}>
       <Grid />
@@ -477,11 +481,16 @@ const MatchScene: React.FC<{ manifest: Manifest; scene: Scene; localBase: number
       >
         {redActive ? '● RED PHASE — ATTACK' : '◉ BLUE PHASE — DEFENSE'}
       </div>
-      <AbsoluteFill style={{ display: 'flex', flexDirection: 'row' }}>
+      {arena && (
+        <div style={{ position: 'absolute', top: 46, left: 0, right: 0, height: 420, zIndex: 2 }}>
+          <ArenaVisual plan={arena} identities={[a, b]} terminal={manifest.terminal ?? []} localBase={localBase} />
+        </div>
+      )}
+      <div style={{ position: 'absolute', top: 46 + arenaHeight, left: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'row' }}>
         <TerminalPane name={a} accent={ACCENTS[a] ?? COBALT} events={left} localBase={localBase} />
         <div style={{ width: 2, background: 'rgba(77,156,255,0.25)' }} />
         <TerminalPane name={b} accent={ACCENTS[b] ?? AMBER} events={right} localBase={localBase} />
-      </AbsoluteFill>
+      </div>
       <CaptionBar manifest={manifest} localBase={localBase} />
       <div
         style={{

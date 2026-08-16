@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from sandboxer_v0.arena_visual import FakeArenaVisualDrafter, GeminiArenaVisualDrafter, draft_arena_plan
 from sandboxer_v0.video import _digest, build_video_manifest
 
 ROOT = Path(__file__).resolve().parent.parent.parent / "artifacts"
@@ -131,6 +132,11 @@ def main() -> int:
         "CTF-Bench": {IDENTITY_A: 0.71, IDENTITY_B: 0.68},
         "Terminal Reasoning": {IDENTITY_A: 0.83, IDENTITY_B: 0.80},
     }
+    try:
+        arena = draft_arena_plan(replay, report, drafter=GeminiArenaVisualDrafter())
+    except Exception as error:  # an ungrounded draft must never block a rehearsal
+        print(f"arena LLM draft failed ({error}); using deterministic fallback", file=sys.stderr)
+        arena = draft_arena_plan(replay, report, drafter=FakeArenaVisualDrafter())
     manifest = build_video_manifest(
         replay,
         report=report,
@@ -138,6 +144,7 @@ def main() -> int:
         benchmark_snapshot=benchmark_snapshot,
         fps=30,
         commentary=_COMMENTARY,
+        arena_visuals=arena,
     )
     # Enrich with per-pane terminal data for the Remotion composition. The
     # editorial manifest itself stays authoritative; this is a renderer-side
