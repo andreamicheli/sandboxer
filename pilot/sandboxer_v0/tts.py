@@ -690,12 +690,19 @@ def render_commentary_audio(
     # here (streaming-WAV headers lie, so use the measured byte length).
     fps=int(manifest["fps"])
     if blocks:
-        at_ms=blocks[0]["start_frame"]*1000//fps
+        # Pack by actual rendered duration, but never pull a block *earlier*
+        # than its planned start: intro lines are scene-anchored and match lines
+        # are event-anchored, so the planned schedule must remain a lower bound
+        # while overlaps are still resolved forward.
+        prev_end_ms=None
         for block in blocks:
             duration_ms=int(block["duration_ms"])
+            planned_ms=block["start_frame"]*1000//fps
+            if prev_end_ms is None: at_ms=planned_ms
+            else: at_ms=max(planned_ms,prev_end_ms+_PACK_GAP_MS)
             block["start_frame"]=round(at_ms*fps/1000)
             block["end_frame"]=round((at_ms+duration_ms)*fps/1000)
-            at_ms+=duration_ms+_PACK_GAP_MS
+            prev_end_ms=at_ms+duration_ms
         recap_start=sum(scene["duration_frames"] for scene in manifest["scenes"][:-1])
         if blocks[-1]["end_frame"]>recap_start: raise TtsError("COMMENTARY_OVERFLOW_AFTER_RENDER")
     blocks_hash = _digest([block["script_hash"] for block in blocks])

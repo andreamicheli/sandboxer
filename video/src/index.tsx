@@ -413,7 +413,7 @@ const TerminalPane: React.FC<{
   );
 };
 
-const CaptionBar: React.FC<{ manifest: Manifest; localBase: number }> = ({ manifest, localBase }) => {
+const CaptionBar: React.FC<{ manifest: Manifest; localBase: number; bottom?: number }> = ({ manifest, localBase, bottom = 64 }) => {
   const frame = useCurrentFrame();
   const global = frame + localBase;
   const line = manifest.commentary.find((c) => global >= c.start_frame && global < c.end_frame);
@@ -426,7 +426,7 @@ const CaptionBar: React.FC<{ manifest: Manifest; localBase: number }> = ({ manif
     <div
       style={{
         position: 'absolute',
-        bottom: 64,
+        bottom,
         left: '50%',
         transform: 'translateX(-50%)',
         maxWidth: '80%',
@@ -457,7 +457,7 @@ const MatchScene: React.FC<{ manifest: Manifest; scene: Scene; localBase: number
   const redActive = events.some((e) => e.phase === 'red' && frame >= e.at_frame - localBase - 30);
   const phaseColor = redActive ? RED : CYAN;
   const arena = manifest.arena_visuals;
-  const arenaHeight = arena ? 420 : 0;
+  const arenaHeight = arena ? 280 : 0;
   return (
     <AbsoluteFill style={{ background: NAVY }}>
       <Grid />
@@ -481,17 +481,16 @@ const MatchScene: React.FC<{ manifest: Manifest; scene: Scene; localBase: number
       >
         {redActive ? '● RED PHASE — ATTACK' : '◉ BLUE PHASE — DEFENSE'}
       </div>
-      {arena && (
-        <div style={{ position: 'absolute', top: 46, left: 0, right: 0, height: 420, zIndex: 2 }}>
-          <ArenaVisual plan={arena} identities={[a, b]} terminal={manifest.terminal ?? []} localBase={localBase} />
-        </div>
-      )}
-      <div style={{ position: 'absolute', top: 46 + arenaHeight, left: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'row' }}>
+      <div style={{ position: 'absolute', top: 46, left: 0, right: 0, bottom: arenaHeight, display: 'flex', flexDirection: 'row' }}>
         <TerminalPane name={a} accent={ACCENTS[a] ?? COBALT} events={left} localBase={localBase} />
         <div style={{ width: 2, background: 'rgba(77,156,255,0.25)' }} />
         <TerminalPane name={b} accent={ACCENTS[b] ?? AMBER} events={right} localBase={localBase} />
       </div>
-      <CaptionBar manifest={manifest} localBase={localBase} />
+      {arena && (
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: arenaHeight, zIndex: 3 }}>
+          <ArenaVisual plan={arena} identities={[a, b]} terminal={manifest.terminal ?? []} localBase={localBase} height={arenaHeight} />
+        </div>
+      )}
       <div
         style={{
           position: 'absolute',
@@ -566,6 +565,12 @@ const FactualRecap: React.FC<{ scene: Scene; manifest: Manifest }> = ({ scene, m
 /* ------------------------------------------------------------------ */
 
 export const SeriesVideo: React.FC<{ manifest: Manifest }> = ({ manifest }) => {
+  const frame = useCurrentFrame();
+  const coldOpenFrames = manifest.scenes[0]?.duration_frames ?? 0;
+  const modelCardsFrames = manifest.scenes[1]?.duration_frames ?? 0;
+  const matchStart = coldOpenFrames + modelCardsFrames;
+  const arenaHeight = manifest.arena_visuals ? 280 : 0;
+  const captionBottom = frame >= matchStart ? arenaHeight + 16 : 64;
   let at = 0;
   return (
     <AbsoluteFill style={{ background: NAVY }}>
@@ -586,6 +591,7 @@ export const SeriesVideo: React.FC<{ manifest: Manifest }> = ({ manifest }) => {
           </Sequence>
         );
       })}
+      <CaptionBar manifest={manifest} localBase={0} bottom={captionBottom} />
     </AbsoluteFill>
   );
 };

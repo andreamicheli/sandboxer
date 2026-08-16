@@ -10,7 +10,7 @@ import subprocess
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
-from .commentary import validate_commentary
+from .commentary import HEDGE_MARKERS, validate_commentary
 
 
 class VideoError(ValueError): pass
@@ -88,7 +88,32 @@ def _line_length(text:str,fps:int)->int:
     return min(10*fps,max(int(1.5*fps),round(seconds*fps)))
 
 
-def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model_metadata:Mapping[str,Any],benchmark_snapshot:Mapping[str,Any],fps:int=30,commentary:Sequence[Mapping[str,Any]]|None=None,arena_visuals:Mapping[str,Any]|None=None)->dict[str,Any]:
+def _schedule_intro_commentary(intro:Sequence[Mapping[str,Any]],scenes:Sequence[Mapping[str,Any]],fps:int)->list[dict[str,Any]]:
+    """Schedule scene-anchored greeting/model-intro commentary lines.
+
+    Intro lines are placed at their ``offset_seconds`` within ``cold_open`` or
+    ``model_cards_and_rules`` (they are not event-grounded, so ``event_ids``
+    stays empty).  Validation is fail-closed and mirrors the match commentary:
+    known roles/types, non-empty text, and a hedge marker on interpreted lines.
+    """
+    if not intro: return []
+    scene_start={"cold_open":0,"model_cards_and_rules":int(scenes[0]["duration_frames"])}
+    lines:list[dict[str,Any]]=[]
+    for index,line in enumerate(intro):
+        voice_role=str(line.get("voice_role","")); line_type=str(line.get("line_type","editorial"))
+        scene=str(line.get("scene","")); text=str(line.get("text","")).strip(); offset=line.get("offset_seconds",0.0)
+        if voice_role not in {"play_by_play","analyst"}: raise VideoError(f"INTRO_COMMENTARY_INVALID: bad voice_role at {index}")
+        if line_type not in {"observed","interpreted","editorial"}: raise VideoError(f"INTRO_COMMENTARY_INVALID: bad line_type at {index}")
+        if not text: raise VideoError(f"INTRO_COMMENTARY_INVALID: empty text at {index}")
+        if scene not in scene_start: raise VideoError(f"INTRO_COMMENTARY_INVALID: bad scene {scene!r} at {index}")
+        if not isinstance(offset,(int,float)) or isinstance(offset,bool) or offset<0: raise VideoError(f"INTRO_COMMENTARY_INVALID: bad offset at {index}")
+        if line_type=="interpreted" and not any(marker in text.lower() for marker in HEDGE_MARKERS): raise VideoError(f"INTRO_COMMENTARY_INVALID: interpreted without hedge at {index}")
+        start_frame=scene_start[scene]+round(offset*fps); length=_line_length(text,fps)
+        lines.append({"voice_role":voice_role,"model":str(line.get("model","")),"start_frame":start_frame,"end_frame":start_frame+length,"text":text,"event_ids":[],"line_type":line_type})
+    lines.sort(key=lambda item:item["start_frame"]); return lines
+
+
+def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model_metadata:Mapping[str,Any],benchmark_snapshot:Mapping[str,Any],fps:int=30,commentary:Sequence[Mapping[str,Any]]|None=None,arena_visuals:Mapping[str,Any]|None=None,intro_commentary:Sequence[Mapping[str,Any]]|None=None)->dict[str,Any]:
     if replay.get("schema_version")!="sandboxer.replay.v1" or fps<24: raise VideoError("VIDEO_INPUT_INVALID")
     panes=replay.get("panes",())
     if not isinstance(panes,(list,tuple)) or len(panes)!=2: raise VideoError("VIDEO_IDENTITIES_INVALID")
@@ -128,27 +153,27 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
         # Deterministic fallback: narrate the terminal events verbatim.  Real
         # episodes pass a drafted two-voice commentary instead (see
         # ``sandboxer_v0/commentary.py``).
-        lines=[]
+        match_lines=[]
         for index,frame in enumerate(frames):
             if not frame.get("text") or index%2: continue
             length=_line_length(str(frame["text"]),fps)
             at=_anchor(frame)
-            lines.append({"voice_role":"analyst" if index and index%5==0 else "play_by_play","model":identities[frame.get("pane",0) or 0],"start_frame":at,"end_frame":at+length,"text":str(frame["text"]),"event_ids":[frame["event_id"]],"line_type":"observed"})
+            match_lines.append({"voice_role":"analyst" if index and index%5==0 else "play_by_play","model":identities[frame.get("pane",0) or 0],"start_frame":at,"end_frame":at+length,"text":str(frame["text"]),"event_ids":[frame["event_id"]],"line_type":"observed"})
     else:
         failures=validate_commentary(commentary,frames)
         if failures: raise VideoError("COMMENTARY_INVALID: "+"; ".join(failures))
-        lines=[]
+        match_lines=[]
         for line in commentary:
             eids=[str(item) for item in line.get("event_ids",())]
             anchors=[event_frame[item] for item in eids]
             at=min(_anchor(frame) for frame in anchors)
             length=_line_length(str(line.get("text","")),fps)
             pane=int(anchors[0].get("pane",0) or 0)
-            lines.append({"voice_role":line["voice_role"],"model":str(line.get("model") or identities[pane]),"start_frame":at,"end_frame":at+length,"text":str(line["text"]),"event_ids":eids,"line_type":line.get("line_type","observed")})
-    lines.sort(key=lambda item:item["start_frame"])
+            match_lines.append({"voice_role":line["voice_role"],"model":str(line.get("model") or identities[pane]),"start_frame":at,"end_frame":at+length,"text":str(line["text"]),"event_ids":eids,"line_type":line.get("line_type","observed")})
+    match_lines.sort(key=lambda item:item["start_frame"])
     if commentary is None:
         # Verbatim fallback: keep event anchors, forbid overlap, preserve length.
-        for previous,current in zip(lines,lines[1:]):
+        for previous,current in zip(match_lines,match_lines[1:]):
             duration=current["end_frame"]-current["start_frame"]
             current["start_frame"]=max(current["start_frame"],previous["end_frame"]+round(.35*fps))
             current["end_frame"]=current["start_frame"]+duration
@@ -156,14 +181,20 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
         # Drafted dialogue: flow back-to-back with a short natural pause so the
         # two voices sound like a conversation, not isolated event readings.
         gap=round(.4*fps)
-        at=lines[0]["start_frame"]
-        for line in lines:
+        at=match_lines[0]["start_frame"]
+        for line in match_lines:
             duration=line["end_frame"]-line["start_frame"]
             line["start_frame"]=at
             line["end_frame"]=at+duration
             at=line["end_frame"]+gap
         recap_start=sum(scene["duration_frames"] for scene in scenes[:-1])
-        if lines[-1]["end_frame"]>recap_start: raise VideoError("COMMENTARY_OVERFLOW")
-    commentary=lines
+        if match_lines[-1]["end_frame"]>recap_start: raise VideoError("COMMENTARY_OVERFLOW")
+    intro_lines=_schedule_intro_commentary(intro_commentary,scenes,fps)
+    if intro_lines:
+        commentary=sorted(match_lines+intro_lines,key=lambda item:item["start_frame"])
+        recap_start=sum(scene["duration_frames"] for scene in scenes[:-1])
+        if commentary[-1]["end_frame"]>recap_start: raise VideoError("COMMENTARY_OVERFLOW")
+    else:
+        commentary=match_lines
     manifest={"schema":"sandboxer.video-manifest.v1","fps":fps,"identities":identities,"source_bundle_hash":replay.get("source_bundle_hash"),"layout":{"split":{"left":.5,"right":.5,"permanent":True}},"timeline":timeline,"terminal":terminal,"scenes":scenes,"commentary":commentary,"arena_visuals":dict(arena_visuals) if arena_visuals else None,"silence_allowed":True,"tts":{"expected":asdict(TtsPreflight("gemini-3.1-flash-tts-preview",("Kore","Charon"),"settings-v1")),"blocks":"bounded-and-hashed"},"qa":{"required":["alignment","clipping","noise","speaker_swaps","silence","pronunciation","factual_traceability","accessibility","licensing","decisive_cue_audibility"]},"composition":{"engine":"remotion","ffmpeg":["probe","loudness-normalize","mux","delivery-encode"]}}
     manifest["manifest_hash"]=_digest(manifest);return manifest

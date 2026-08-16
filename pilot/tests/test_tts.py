@@ -362,6 +362,20 @@ def test_render_commentary_resumes_streaming_wav_blocks(tmp_path):
     assert second["blocks_hash"] == first["blocks_hash"]
 
 
+def test_render_commentary_preserves_scene_anchored_intro_start(tmp_path):
+    intro = [{"voice_role": "play_by_play", "line_type": "editorial", "scene": "cold_open", "offset_seconds": 4.0, "text": "Welcome back."}]
+    manifest = build_video_manifest(
+        _replay(), report={"report_url": "r", "outcome": {"winner": "DeepSeek V4 Pro"}},
+        model_metadata={}, benchmark_snapshot={}, intro_commentary=intro,
+    )
+    rendered = render_commentary_audio(manifest, FakeTtsAdapter(), out_dir=tmp_path)
+    blocks = rendered["blocks"]
+    # The intro block keeps its scene-anchored start (4s = frame 120) and the
+    # match block is NOT pulled earlier than its event anchor (frame 840).
+    assert blocks[0]["start_frame"] == 120
+    assert blocks[1]["start_frame"] == 840
+
+
 def test_render_commentary_packs_blocks_by_actual_duration_no_overlap(tmp_path):
     drafted = [
         {"voice_role": "play_by_play", "line_type": "observed", "event_ids": ["e1"], "text": "A defends."},

@@ -51,7 +51,6 @@ const RED = '#ff4d5e';
 const CYAN = '#38e1c8';
 const MONO = "'JetBrains Mono', 'Fira Code', 'SFMono-Regular', 'Consolas', monospace";
 
-const AVATAR_HOME = { left: { x: 180, y: 210 }, right: { x: 1740, y: 210 } };
 const SLOT_X = (index: number, side: 'left' | 'right') =>
   side === 'left' ? 480 + index * 130 : 1440 - index * 130;
 
@@ -99,10 +98,14 @@ export const ArenaVisual: React.FC<{
   identities: string[];
   terminal: TerminalEvent[];
   localBase: number;
-}> = ({ plan, identities, terminal, localBase }) => {
+  height?: number;
+}> = ({ plan, identities, terminal, localBase, height = 420 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   if (!plan) return null;
+  const H = height;
+  const midY = H / 2;
+  const HOME = { left: { x: 180, y: midY }, right: { x: 1740, y: midY } };
   const [a, b] = identities;
 
   const avatarBy = (name: string) => plan.avatars.find((av) => av.competitor === name);
@@ -140,7 +143,7 @@ export const ArenaVisual: React.FC<{
       const side = name === a ? 'right' : 'left';
       const tIndex = defensesFor(target?.competitor ?? '').findIndex((d) => d.id === target?.id);
       const tx = target ? SLOT_X(Math.max(tIndex, 0), side) : home.x;
-      const ty = 210;
+      const ty = midY;
       const start = localTime(activeAttack);
       const p = interpolate(frame, [start, start + 24], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
       dx = (tx - home.x) * 0.55 * p;
@@ -193,7 +196,7 @@ export const ArenaVisual: React.FC<{
         style={{
           position: 'absolute',
           left: x - 48,
-          top: 210 - 48,
+          top: midY - 48,
           opacity: p,
           transform: `scale(${p}) translateX(${shake}px)`,
           display: 'flex',
@@ -212,10 +215,10 @@ export const ArenaVisual: React.FC<{
     const target = plan.defenses.find((d) => d.id === activeAttack.target);
     if (!target) return null;
     const side = activeAttack.attacker === a ? 'right' : 'left';
-    const home = activeAttack.attacker === a ? AVATAR_HOME.left : AVATAR_HOME.right;
+    const home = activeAttack.attacker === a ? HOME.left : HOME.right;
     const tIndex = defensesFor(target.competitor).findIndex((d) => d.id === target.id);
     const tx = SLOT_X(Math.max(tIndex, 0), side);
-    const ty = 210;
+    const ty = midY;
     const start = localTime(activeAttack);
     const dur = activeAttack.duration_frames ?? 120;
     const p = interpolate(frame, [start, start + dur], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
@@ -230,15 +233,15 @@ export const ArenaVisual: React.FC<{
   };
 
   return (
-    <AbsoluteFill style={{ position: 'absolute', inset: 0, height: 420, background: `linear-gradient(180deg, ${NAVY}, rgba(5,11,24,0.2))`, borderBottom: '1px solid rgba(77,156,255,0.2)', overflow: 'hidden' }}>
-      <svg width="1920" height="420" style={{ position: 'absolute', inset: 0 }}>
-        <line x1={960} y1={20} x2={960} y2={400} stroke="rgba(77,156,255,0.18)" strokeDasharray="3 6" />
+    <AbsoluteFill style={{ position: 'absolute', inset: 0, height: H, background: `linear-gradient(180deg, ${NAVY}, rgba(5,11,24,0.2))`, borderBottom: '1px solid rgba(77,156,255,0.2)', overflow: 'hidden' }}>
+      <svg width="1920" height={H} style={{ position: 'absolute', inset: 0 }}>
+        <line x1={960} y1={20} x2={960} y2={H - 20} stroke="rgba(77,156,255,0.18)" strokeDasharray="3 6" />
       </svg>
       <div style={{ position: 'absolute', top: 10, left: 20, color: DIM, fontFamily: MONO, fontSize: 12, letterSpacing: 3 }}>
         ARENA · {a.toUpperCase()} <span style={{ color: accentA }}>◈</span> vs <span style={{ color: accentB }}>◈</span> {b.toUpperCase()}
       </div>
-      {renderAvatar(a, AVATAR_HOME.left, accentA)}
-      {renderAvatar(b, AVATAR_HOME.right, accentB)}
+      {renderAvatar(a, HOME.left, accentA)}
+      {renderAvatar(b, HOME.right, accentB)}
       {defensesFor(a).map((d, i) => renderDefense(d, 'left', i))}
       {defensesFor(b).map((d, i) => renderDefense(d, 'right', i))}
       {renderAttackPath()}

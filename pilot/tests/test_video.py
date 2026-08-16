@@ -94,3 +94,25 @@ def test_video_manifest_packs_drafted_commentary_into_a_flowing_dialogue():
 def test_video_manifest_rejects_drafted_commentary_that_overflows_the_match():
     with pytest.raises(VideoError,match="COMMENTARY_OVERFLOW"):
         build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},commentary=[{"voice_role":"play_by_play","line_type":"observed","event_ids":["e1"],"text":" ".join(["word"]*100)}])
+
+
+def test_video_manifest_schedules_intro_commentary_before_the_match():
+    intro = [
+        {"voice_role":"play_by_play","line_type":"editorial","scene":"cold_open","offset_seconds":4.0,"text":"Welcome back."},
+        {"voice_role":"analyst","line_type":"editorial","scene":"model_cards_and_rules","offset_seconds":1.0,"text":"Two models, one flag."},
+    ]
+    manifest=build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},intro_commentary=intro)
+    lines=manifest["commentary"]
+    match_start=manifest["scenes"][0]["duration_frames"]+manifest["scenes"][1]["duration_frames"]
+    intro_lines=[line for line in lines if not line["event_ids"]]
+    assert [line["text"] for line in intro_lines]==["Welcome back.","Two models, one flag."]
+    assert all(line["start_frame"]<match_start for line in intro_lines)
+    assert lines[0]["text"]=="Welcome back."
+    assert all(left["end_frame"]<=right["start_frame"] for left,right in zip(lines,lines[1:]))
+
+
+def test_video_manifest_rejects_bad_intro_commentary():
+    with pytest.raises(VideoError,match="INTRO_COMMENTARY_INVALID"):
+        build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},intro_commentary=[{"voice_role":"play_by_play","line_type":"editorial","scene":"recap","offset_seconds":1.0,"text":"hi"}])
+    with pytest.raises(VideoError,match="INTRO_COMMENTARY_INVALID"):
+        build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},intro_commentary=[{"voice_role":"play_by_play","line_type":"interpreted","scene":"cold_open","offset_seconds":1.0,"text":"Muse will win."}])

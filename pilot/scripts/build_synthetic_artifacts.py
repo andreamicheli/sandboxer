@@ -82,6 +82,25 @@ _COMMENTARY = [
      "text": "Both tokens retrieved, Laguna takes it on budget. The recap is next."},
 ]
 
+# Scene-anchored greeting + model introduction: the greeting starts toward the
+# end of the cold open, the model intro fills the model-cards scene.  Facts are
+# sourced from public releases (Poolside Laguna S 2.1, Meta Muse Spark 1.2, UC
+# Berkeley CyberGym); the "expectation" framing stays editorial/hedged.
+_INTRO_COMMENTARY = [
+    {"voice_role": "play_by_play", "line_type": "editorial", "scene": "cold_open", "offset_seconds": 3.0,
+     "text": "Welcome back to Sandboxer, Series 001."},
+    {"voice_role": "analyst", "line_type": "editorial", "scene": "cold_open", "offset_seconds": 5.5,
+     "text": "Two isolated models, one flag each. No way out but through."},
+    {"voice_role": "play_by_play", "line_type": "editorial", "scene": "model_cards_and_rules", "offset_seconds": 1.0, "model": IDENTITY_A,
+     "text": "In violet, Laguna S 2.1 — Poolside's hundred-billion-parameter coder."},
+    {"voice_role": "analyst", "line_type": "editorial", "scene": "model_cards_and_rules", "offset_seconds": 4.5,
+     "text": "It runs on a desktop, trading blows with models ten times its size."},
+    {"voice_role": "play_by_play", "line_type": "editorial", "scene": "model_cards_and_rules", "offset_seconds": 8.0, "model": IDENTITY_B,
+     "text": "In blue, Muse Spark 1.2 — Meta's first closed frontier model."},
+    {"voice_role": "analyst", "line_type": "interpreted", "scene": "model_cards_and_rules", "offset_seconds": 11.5,
+     "text": "Strong on agentic benchmarks like CyberGym, it seems Muse moves fast."},
+]
+
 
 def build_replay() -> dict:
     frames = []
@@ -145,6 +164,7 @@ def main() -> int:
         fps=30,
         commentary=_COMMENTARY,
         arena_visuals=arena,
+        intro_commentary=_INTRO_COMMENTARY,
     )
     # Enrich with per-pane terminal data for the Remotion composition. The
     # editorial manifest itself stays authoritative; this is a renderer-side
