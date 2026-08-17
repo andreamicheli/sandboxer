@@ -138,8 +138,61 @@ def build_method():
     )
 
 
+# ------------------------------------------------------------------ #
+#  Lighten existing dark artwork so it matches the light theme.       #
+#  The figures are drawn light-on-dark; we re-render them as ink on   #
+#  paper (or as a transparent ink emblem for the logo).               #
+# ------------------------------------------------------------------ #
+
+
+def _luminance_mask(l, thr=60, soft=140, gamma=1.2):
+    a = (l - thr) / soft
+    a = min(1.0, max(0.0, a))
+    return a ** gamma
+
+
+def lighten_figure(src, dst, paper=BG, ink=INK):
+    """Re-render a light-on-dark figure as ink on paper."""
+    im = Image.open(src).convert("L")
+    w, h = im.size
+    L = im.load()
+    out = Image.new("RGB", (w, h), paper)
+    op = out.load()
+    for y in range(h):
+        for x in range(w):
+            a = _luminance_mask(L[x, y])
+            op[x, y] = tuple(round(paper[i] * (1 - a) + ink[i] * a) for i in range(3))
+    out.save(dst, quality=92, optimize=True)
+
+
+def lighten_logo(src, dst, ink=INK):
+    """Re-render the light-on-dark logo emblem as transparent ink."""
+    im = Image.open(src).convert("L")
+    w, h = im.size
+    L = im.load()
+    out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    op = out.load()
+    for y in range(h):
+        for x in range(w):
+            a = round(_luminance_mask(L[x, y], gamma=1.0) * 255)
+            op[x, y] = (ink[0], ink[1], ink[2], a)
+    out.save(dst, optimize=True)
+
+
 if __name__ == "__main__":
     random.seed(7)
     build_banner()
     build_method()
-    print("wrote banner + method art")
+    lighten_figure(
+        os.path.join(ROOT, "assets/models/laguna-s-2.1-free.jpg"),
+        os.path.join(ROOT, "assets/models/laguna-s-2.1-free.jpg"),
+    )
+    lighten_figure(
+        os.path.join(ROOT, "assets/models/meta-muse-spark-1.2-contributor.jpg"),
+        os.path.join(ROOT, "assets/models/meta-muse-spark-1.2-contributor.jpg"),
+    )
+    lighten_logo(
+        os.path.join(ROOT, "assets/brand/sandboxer-logo.png"),
+        os.path.join(ROOT, "assets/brand/sandboxer-logo.png"),
+    )
+    print("wrote banner + method art + lightened model art + logo")
