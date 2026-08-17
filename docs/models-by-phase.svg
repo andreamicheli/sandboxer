@@ -1,0 +1,199 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="1500" viewBox="0 0 1180 1500" font-family="'SF Mono','Menlo','Consolas','DejaVu Sans Mono',monospace">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="head" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#9a65e8"/>
+      <stop offset="100%" stop-color="#58a9ff"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1180" height="1500" fill="url(#bg)"/>
+
+  <!-- Title -->
+  <text x="590" y="52" text-anchor="middle" font-size="30" font-weight="bold" fill="#e6edf3">Modelli per fase — Sandboxer</text>
+  <text x="590" y="82" text-anchor="middle" font-size="15" fill="#8b949e">mappa esatta degli agenti LLM in ogni stadio della pipeline</text>
+  <line x1="60" y1="104" x2="1120" y2="104" stroke="#30363d" stroke-width="2"/>
+
+  <!-- ============ 1. MATCH ============ -->
+  <g>
+    <rect x="40" y="130" width="1100" height="250" rx="14" fill="#161b22" stroke="#9a65e8" stroke-width="2"/>
+    <rect x="40" y="130" width="1100" height="44" rx="14" fill="#2a1f3d"/>
+    <rect x="40" y="160" width="1100" height="14" fill="#2a1f3d"/>
+    <text x="64" y="158" font-size="17" font-weight="bold" fill="#d2a8ff">1 · MATCH — il duello</text>
+    <text x="590" y="158" text-anchor="middle" font-size="13" fill="#8b949e">executor: cmd (Command Code) · headless · bridge MCP deny-by-default</text>
+
+    <!-- Blue -->
+    <rect x="80" y="210" width="320" height="140" rx="10" fill="#0d1117" stroke="#9a65e8" stroke-width="1.5"/>
+    <text x="240" y="238" text-anchor="middle" font-size="14" font-weight="bold" fill="#d2a8ff">BLUE · difende</text>
+    <rect x="110" y="258" width="260" height="36" rx="6" fill="#2a1f3d"/>
+    <text x="240" y="281" text-anchor="middle" font-size="13" fill="#e6edf3">poolside/laguna-s-2.1-free</text>
+    <text x="240" y="304" text-anchor="middle" font-size="12" fill="#8b949e">(Laguna)</text>
+    <rect x="110" y="290" width="260" height="36" rx="6" fill="#152238"/>
+    <text x="240" y="313" text-anchor="middle" font-size="13" fill="#e6edf3">meta/muse-spark-1.2-contributor</text>
+    <text x="240" y="336" text-anchor="middle" font-size="12" fill="#8b949e">(Muse Spark)</text>
+
+    <!-- Interview -->
+    <rect x="430" y="210" width="320" height="140" rx="10" fill="#0d1117" stroke="#8b949e" stroke-width="1.5"/>
+    <text x="590" y="238" text-anchor="middle" font-size="14" font-weight="bold" fill="#c9d1d9">INTERVIEW · baseline</text>
+    <text x="590" y="268" text-anchor="middle" font-size="13" fill="#e6edf3">stessi modelli,</text>
+    <text x="590" y="290" text-anchor="middle" font-size="13" fill="#e6edf3">nessun tool</text>
+    <text x="590" y="322" text-anchor="middle" font-size="12" fill="#8b949e">budget 1.024 token</text>
+
+    <!-- Red -->
+    <rect x="780" y="210" width="320" height="140" rx="10" fill="#0d1117" stroke="#ff7b72" stroke-width="1.5"/>
+    <text x="940" y="238" text-anchor="middle" font-size="14" font-weight="bold" fill="#ffa198">RED · attacca</text>
+    <rect x="810" y="258" width="260" height="36" rx="6" fill="#3d1f1f"/>
+    <text x="940" y="281" text-anchor="middle" font-size="13" fill="#e6edf3">poolside/laguna-s-2.1-free</text>
+    <text x="940" y="304" text-anchor="middle" font-size="12" fill="#8b949e">attacca l'altro</text>
+    <rect x="810" y="290" width="260" height="36" rx="6" fill="#3d1f1f"/>
+    <text x="940" y="313" text-anchor="middle" font-size="13" fill="#e6edf3">meta/muse-spark-1.2-contributor</text>
+    <text x="940" y="336" text-anchor="middle" font-size="12" fill="#8b949e">attacca l'altro</text>
+  </g>
+
+  <!-- arrow -->
+  <line x1="590" y1="380" x2="590" y2="416" stroke="#58a9ff" stroke-width="3" marker-end="url(#arrow)"/>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#58a9ff"/></marker></defs>
+
+  <!-- ============ 2. CONTENT ============ -->
+  <g>
+    <rect x="40" y="420" width="1100" height="300" rx="14" fill="#161b22" stroke="#58a9ff" stroke-width="2"/>
+    <rect x="40" y="420" width="1100" height="44" rx="14" fill="#152238"/>
+    <rect x="40" y="450" width="1100" height="14" fill="#152238"/>
+    <text x="64" y="448" font-size="17" font-weight="bold" fill="#7cc0ff">2 · PRODUZIONE CONTENUTI</text>
+    <text x="590" y="448" text-anchor="middle" font-size="13" fill="#8b949e">agents.py · override per fase: SANDBOXER_&lt;FASE&gt;_AGENT=codex|cmd|agy</text>
+
+    <!-- Commentary -->
+    <rect x="80" y="494" width="500" height="96" rx="10" fill="#0d1117" stroke="#58a9ff" stroke-width="1.5"/>
+    <rect x="104" y="512" width="130" height="26" rx="6" fill="#152238"/>
+    <text x="170" y="530" text-anchor="middle" font-size="13" font-weight="bold" fill="#7cc0ff">COMMENTARY</text>
+    <text x="104" y="560" font-size="14" fill="#e6edf3">codex · gpt-5.6-luna</text>
+    <text x="104" y="580" font-size="12" fill="#8b949e">telecronaca a 2 voci · grounded agli event_id</text>
+
+    <!-- Intro -->
+    <rect x="600" y="494" width="500" height="96" rx="10" fill="#0d1117" stroke="#58a9ff" stroke-width="1.5"/>
+    <rect x="624" y="512" width="150" height="26" rx="6" fill="#152238"/>
+    <text x="700" y="530" text-anchor="middle" font-size="13" font-weight="bold" fill="#7cc0ff">INTRO / GREETING</text>
+    <text x="624" y="560" font-size="14" fill="#e6edf3">agy · gemini-3.7-flash-high</text>
+    <text x="624" y="580" font-size="12" fill="#8b949e">saluto + presentazione modelli (fatti ricercati)</text>
+
+    <!-- Arena -->
+    <rect x="80" y="604" width="500" height="96" rx="10" fill="#0d1117" stroke="#58a9ff" stroke-width="1.5"/>
+    <rect x="104" y="622" width="110" height="26" rx="6" fill="#152238"/>
+    <text x="160" y="640" text-anchor="middle" font-size="13" font-weight="bold" fill="#7cc0ff">ARENA PLAN</text>
+    <text x="104" y="670" font-size="14" fill="#e6edf3">cmd · muse-spark-1.2-contributor</text>
+    <text x="104" y="690" font-size="12" fill="#8b949e">coreografia avatar/difese/attacchi · JSON validato</text>
+
+    <!-- Narrative -->
+    <rect x="600" y="604" width="500" height="96" rx="10" fill="#0d1117" stroke="#58a9ff" stroke-width="1.5"/>
+    <rect x="624" y="622" width="160" height="26" rx="6" fill="#152238"/>
+    <text x="704" y="640" text-anchor="middle" font-size="13" font-weight="bold" fill="#7cc0ff">REPORT NARRATIVE</text>
+    <text x="624" y="670" font-size="14" fill="#e6edf3">agy · gemini-3.7-flash-high</text>
+    <text x="624" y="690" font-size="12" fill="#8b949e">prosa del report (fatti = deterministici, solo prosa)</text>
+  </g>
+
+  <!-- arrow -->
+  <line x1="590" y1="720" x2="590" y2="756" stroke="#58a9ff" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <!-- ============ 3. REVIEW ============ -->
+  <g>
+    <rect x="40" y="760" width="1100" height="210" rx="14" fill="#161b22" stroke="#d29922" stroke-width="2"/>
+    <rect x="40" y="760" width="1100" height="44" rx="14" fill="#2d2416"/>
+    <rect x="40" y="790" width="1100" height="14" fill="#2d2416"/>
+    <text x="64" y="788" font-size="17" font-weight="bold" fill="#e3b341">3 · REVIEW CHAIN (5 stadi)</text>
+    <text x="590" y="788" text-anchor="middle" font-size="13" fill="#8b949e">review_pipeline.py · un agente diverso per stadio</text>
+
+    <rect x="80" y="830" width="196" height="110" rx="10" fill="#0d1117" stroke="#d29922" stroke-width="1.5"/>
+    <text x="178" y="856" text-anchor="middle" font-size="12" font-weight="bold" fill="#e3b341">evidence triage</text>
+    <text x="178" y="882" text-anchor="middle" font-size="14" fill="#e6edf3">agy</text>
+    <text x="178" y="904" text-anchor="middle" font-size="11" fill="#8b949e">gemini-3.7-flash-high</text>
+    <text x="178" y="924" text-anchor="middle" font-size="11" fill="#8b949e">(geo-blocked → fallback)</text>
+
+    <rect x="288" y="830" width="196" height="110" rx="10" fill="#0d1117" stroke="#d29922" stroke-width="1.5"/>
+    <text x="386" y="856" text-anchor="middle" font-size="12" font-weight="bold" fill="#e3b341">source discovery</text>
+    <text x="386" y="882" text-anchor="middle" font-size="13" fill="#e6edf3">codex · gpt-5.6-luna</text>
+    <text x="386" y="904" text-anchor="middle" font-size="11" fill="#8b949e">ricerca fonti</text>
+
+    <rect x="496" y="830" width="196" height="110" rx="10" fill="#0d1117" stroke="#d29922" stroke-width="1.5"/>
+    <text x="594" y="856" text-anchor="middle" font-size="12" font-weight="bold" fill="#e3b341">behavioral analysis</text>
+    <text x="594" y="882" text-anchor="middle" font-size="12" fill="#e6edf3">cmd · muse-spark-1.2-contributor</text>
+    <text x="594" y="904" text-anchor="middle" font-size="11" fill="#8b949e">analisi comportamento</text>
+
+    <rect x="704" y="830" width="196" height="110" rx="10" fill="#0d1117" stroke="#d29922" stroke-width="1.5"/>
+    <text x="802" y="856" text-anchor="middle" font-size="12" font-weight="bold" fill="#e3b341">skeptical review</text>
+    <text x="802" y="882" text-anchor="middle" font-size="14" fill="#e6edf3">agy</text>
+    <text x="802" y="904" text-anchor="middle" font-size="11" fill="#8b949e">gemini-3.7-flash-high</text>
+    <text x="802" y="924" text-anchor="middle" font-size="11" fill="#8b949e">(geo-blocked → fallback)</text>
+
+    <rect x="912" y="830" width="196" height="110" rx="10" fill="#0d1117" stroke="#d29922" stroke-width="1.5"/>
+    <text x="1010" y="856" text-anchor="middle" font-size="12" font-weight="bold" fill="#e3b341">final synthesis</text>
+    <text x="1010" y="882" text-anchor="middle" font-size="13" fill="#e6edf3">codex · gpt-5.6-luna</text>
+    <text x="1010" y="904" text-anchor="middle" font-size="11" fill="#8b949e">sintesi finale</text>
+
+    <!-- arrows between stages -->
+    <line x1="276" y1="885" x2="288" y2="885" stroke="#d29922" stroke-width="2"/>
+    <line x1="484" y1="885" x2="496" y2="885" stroke="#d29922" stroke-width="2"/>
+    <line x1="692" y1="885" x2="704" y2="885" stroke="#d29922" stroke-width="2"/>
+    <line x1="900" y1="885" x2="912" y2="885" stroke="#d29922" stroke-width="2"/>
+  </g>
+
+  <!-- arrow -->
+  <line x1="590" y1="970" x2="590" y2="1006" stroke="#58a9ff" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <!-- ============ 4. AUDIO ============ -->
+  <g>
+    <rect x="40" y="1010" width="1100" height="150" rx="14" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
+    <rect x="40" y="1010" width="1100" height="44" rx="14" fill="#1a2f22"/>
+    <rect x="40" y="1040" width="1100" height="14" fill="#1a2f22"/>
+    <text x="64" y="1038" font-size="17" font-weight="bold" fill="#6fd98a">4 · AUDIO (TTS)</text>
+    <text x="590" y="1038" text-anchor="middle" font-size="13" fill="#8b949e">tts.py · voci Kore (play-by-play) + Charon (analyst)</text>
+
+    <rect x="80" y="1076" width="500" height="60" rx="10" fill="#0d1117" stroke="#3fb950" stroke-width="1.5"/>
+    <text x="104" y="1102" font-size="14" font-weight="bold" fill="#6fd98a">Fish Audio (primario)</text>
+    <text x="104" y="1122" font-size="13" fill="#e6edf3">s2.1-pro-free · reference_id Kore + Charon</text>
+
+    <rect x="600" y="1076" width="500" height="60" rx="10" fill="#0d1117" stroke="#3fb950" stroke-width="1.5"/>
+    <text x="624" y="1102" font-size="14" font-weight="bold" fill="#6fd98a">Fallback Gemini TTS</text>
+    <text x="624" y="1122" font-size="13" fill="#e6edf3">gemini-3.1-flash-tts-preview → 2.5-flash-preview-tts</text>
+  </g>
+
+  <!-- arrow -->
+  <line x1="590" y1="1160" x2="590" y2="1196" stroke="#58a9ff" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <!-- ============ 5. DETERMINISTIC ============ -->
+  <g>
+    <rect x="40" y="1200" width="1100" height="180" rx="14" fill="#161b22" stroke="#8b949e" stroke-width="2"/>
+    <rect x="40" y="1200" width="1100" height="44" rx="14" fill="#21262d"/>
+    <rect x="40" y="1230" width="1100" height="14" fill="#21262d"/>
+    <text x="64" y="1228" font-size="17" font-weight="bold" fill="#c9d1d9">5 · DETERMINISTICO — nessun LLM</text>
+    <text x="590" y="1228" text-anchor="middle" font-size="13" fill="#8b949e">i fatti non li scrive mai un modello</text>
+
+    <rect x="80" y="1266" width="240" height="84" rx="10" fill="#0d1117" stroke="#8b949e" stroke-width="1.5"/>
+    <text x="200" y="1292" text-anchor="middle" font-size="13" font-weight="bold" fill="#c9d1d9">Report canonico</text>
+    <text x="200" y="1314" text-anchor="middle" font-size="11" fill="#8b949e">report.py · dal bundle firmato</text>
+    <text x="200" y="1334" text-anchor="middle" font-size="11" fill="#8b949e">html / json / pdf</text>
+
+    <rect x="340" y="1266" width="240" height="84" rx="10" fill="#0d1117" stroke="#8b949e" stroke-width="1.5"/>
+    <text x="460" y="1292" text-anchor="middle" font-size="13" font-weight="bold" fill="#c9d1d9">LaTeX + grafici</text>
+    <text x="460" y="1314" text-anchor="middle" font-size="11" fill="#8b949e">report_latex.py · matplotlib</text>
+    <text x="460" y="1334" text-anchor="middle" font-size="11" fill="#8b949e">tex / pdf / charts</text>
+
+    <rect x="600" y="1266" width="240" height="84" rx="10" fill="#0d1117" stroke="#8b949e" stroke-width="1.5"/>
+    <text x="720" y="1292" text-anchor="middle" font-size="13" font-weight="bold" fill="#c9d1d9">Render + mux</text>
+    <text x="720" y="1314" text-anchor="middle" font-size="11" fill="#8b949e">Remotion · ffmpeg</text>
+    <text x="720" y="1334" text-anchor="middle" font-size="11" fill="#8b949e">video-only + commentary</text>
+
+    <rect x="860" y="1266" width="240" height="84" rx="10" fill="#0d1117" stroke="#8b949e" stroke-width="1.5"/>
+    <text x="980" y="1292" text-anchor="middle" font-size="13" font-weight="bold" fill="#c9d1d9">Upload + sito</text>
+    <text x="980" y="1314" text-anchor="middle" font-size="11" fill="#8b949e">youtube.py · schedule.py</text>
+    <text x="980" y="1334" text-anchor="middle" font-size="11" fill="#8b949e">pubblicazione datata</text>
+  </g>
+
+  <!-- footer -->
+  <line x1="60" y1="1410" x2="1120" y2="1410" stroke="#30363d" stroke-width="2"/>
+  <text x="590" y="1440" text-anchor="middle" font-size="13" fill="#8b949e">agy = Antigravity Gemini (geo-blocked su questo host → fallback) · cmd = Command Code · codex = OpenAI Codex</text>
+  <text x="590" y="1466" text-anchor="middle" font-size="13" fill="#8b949e">fonte: sandboxer_v0/agents.py · review_pipeline.py · tts.py · pilot/config.json</text>
+  <text x="590" y="1492" text-anchor="middle" font-size="12" fill="#6e7681">defaults: codex → gpt-5.6-luna (Luna 5.6) · cmd → meta/muse-spark-1.2-contributor (Muse Spark Contributor) · agy → gemini-3.7-flash-high (intro, report narrative)</text>
+</svg>
