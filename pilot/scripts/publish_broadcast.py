@@ -246,7 +246,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--site-root", type=Path, default=Path(__file__).resolve().parents[2] / "site",
                         help="static site directory receiving assets/reports/ and data/publications.json")
     parser.add_argument("--site-base-url", default=os.environ.get("SANDBOXER_SITE_BASE_URL"),
-                        help="deployed site base URL (e.g. https://site-two-beta-34.vercel.app); required with --bundle")
+                        help="deployed site base URL (e.g. https://sandboxer.vercel.app); required with --bundle")
     parser.add_argument("--report-slug", default=None,
                         help="report slug on the site (default: derived from the bundle series_id)")
     args = parser.parse_args(argv)
