@@ -67,6 +67,37 @@ and the evaluation produces a success rate against that static corpus. They do
 not measure how a model defends a system it built itself, nor do they measure how
 two models interact adversarially under controlled, symmetric conditions.
 
+Two further considerations make this gap timely rather than merely academic. The
+first concerns \emph{open-weight models}, which today sit in a grey zone from the
+point of view of cybersecurity measurement. Unlike proprietary models---whose
+inference is highly controlled and regulated, as exemplified by Anthropic's
+Project Glasswing, a restricted model that autonomously discovers
+vulnerabilities in critical software under strict deployment controls
+\cite{glasswing}---open-weight models can be downloaded, fine-tuned, and hosted
+by anyone. For these self-hostable models there is still no clear, systematic
+picture of their offensive and defensive cyber capabilities, even though the
+question is highly relevant to society: Anthropic has publicly discussed the
+risks of open-weight models \cite{anthropic-open}, Z.ai has proposed a
+dedicated cybersecurity framework for open models \cite{zai-cyber}, and
+malicious models and datasets have repeatedly been used to attack platforms such
+as Hugging Face \cite{huggingface-attacks}. An exploration of what open-weight
+models can actually do---in both directions---is therefore a relevant and
+currently under-served evaluation target.
+
+The second consideration is that, so far, the community has concentrated almost
+entirely on \emph{offensive} capability, at the expense of the \emph{defensive}
+side. This imbalance matters because defense is where another key lever for
+managing the explosive growth of AI cyber capability lies: there are already
+reported cases in which open-weight models successfully defended infrastructure
+against real attacks, including attacks originating from closed-source models.
+The July 2026 Hugging Face incident is a striking example: an autonomous agent
+running on a proprietary model escaped its sandbox and attacked Hugging Face's
+infrastructure, and open-weight models were used in the response and analysis of
+that intrusion \cite{huggingface-incident, huggingface-timeline}. Measuring how
+models defend systems they built themselves is therefore not a niche concern but
+a central element of understanding how to govern the growth of AI cyber
+capability.
+
 \sandboxer{} is designed to fill this gap. Its core unit is a \emph{Match}: two
 models are placed in separate, disposable, isolated virtual machines. In the
 \bluephase, each model receives the same minimal synthetic service and the same
@@ -158,9 +189,31 @@ cited above.
 \section{Methodology}
 \label{sec:methodology}
 
+This section describes how a Match is actually run: the design principles that
+govern the arena, the containment of the two Runners, the task family and the
+Blue Brief, the phase protocol, scoring, and the telemetry and auditing
+machinery that make a result trustworthy. We report the concrete engineering
+choices---including the adoption of a purpose-built harness rather than an
+off-the-shelf evaluation framework---so that the benchmark is reproducible and
+its boundary conditions are explicit.
+
+In particular, we evaluated the UK AI Safety Institute's Inspect framework
+\cite{inspect}, an open, well-engineered harness for running and logging LLM
+evaluations, as a possible substrate for \sandboxer{}. Inspect is excellent for
+single-agent, task-scoring evaluations, but its execution model is centered on a
+single model solving a scored task; the \emph{two-sided, adversarial} structure
+of \sandboxer{}---two models that each build, defend, and then attack a
+synthetic service under symmetric budgets, with an independent auditor---does
+not map cleanly onto that model. We therefore built a purpose-specific
+Orchestrator that reuses the same discipline Inspect popularized (frozen
+configuration, execution-based scoring, versioned telemetry) while expressing
+the model-versus-model duel natively.
+
 \subsection{Design principles}
 
-Four principles govern every design decision in \sandboxer{}.
+Before describing the mechanics, we state the four principles that govern every
+design decision in \sandboxer{}; each one exists to keep the benchmark honest
+about what it can and cannot claim.
 
 \begin{itemize}
   \item \textbf{Safety first.} The arena is synthetic and self-contained. Targets
@@ -343,6 +396,15 @@ through the Command Code provider via a headless CLI adapter. The adapter runs t
 CLI non-interactively, parses its NDJSON event stream, denies all native CLI tools,
 and exposes only phase-scoped tools backed by the Runner bridge.
 
+Command Code was chosen for the pilot primarily for \emph{budget reasons}: it
+gives free-tier access to the two open-weight models we wished to compare, which
+is what makes a best-of-three series affordable at this stage. This is an
+engineering decision, not a scientific endorsement of the provider; the current
+version of \sandboxer{} is explicitly a \emph{pilot} whose purpose is to
+validate the concept, the protocol, and the machinery end-to-end, and the
+provider is a declared, versioned boundary that a future series can replace
+without changing the benchmark's claims.
+
 Before any Match, a \textbf{deterministic provider preflight} records the CLI
 binary hash and version, a redacted account fingerprint, a live catalog snapshot,
 exact model presence, and the accounting categories actually reported by the
@@ -397,6 +459,16 @@ following limitations in mind.
         model differences. Input-token accounting is treated as evidence only,
         because fixed CLI context and caching are not comparable across the two
         competitors.
+  \item \textbf{Command Code as the pilot provider.} The first series runs
+        through the Command Code provider, chosen for budget reasons rather than
+        for any demonstrated scientific advantage. Command Code's session
+        controls, accounting categories, refusal behavior, and free-tier
+        concurrency limits are therefore part of the measured configuration, and
+        results are conditional on that provider. The current version is a pilot
+        intended to validate the concept and the machinery; the provider is a
+        declared, versioned boundary, and conclusions about the models
+        themselves should be drawn only after the same protocol is run on
+        additional providers and harnesses.
   \item \textbf{Token-budget divergence.} Nominal token budgets and observed
         consumption can diverge, and a model's refusal, voluntary finish, or
         ineffective action is recorded as behavior, not as an infrastructure
@@ -471,6 +543,36 @@ arXiv preprint arXiv:2506.02548, 2025.
 T.~Abramovich, M.~Udeshi, M.~Shao, \emph{et al.},
 ``EnIGMA: Interactive tools substantially assist LM agents in finding security vulnerabilities,''
 arXiv preprint arXiv:2409.16165, 2024.
+
+\bibitem{glasswing}
+Anthropic,
+``Project Glasswing: Securing critical software for the AI era,''
+\url{https://www.anthropic.com/glasswing}, 2026.
+
+\bibitem{anthropic-open}
+Anthropic,
+``Our position on open-weights models,''
+\url{https://www.anthropic.com/news/position-open-weights-models}, 2026.
+
+\bibitem{zai-cyber}
+Z.ai,
+``GLM-5.3: Frontier coding with emergent cyber capabilities,''
+\url{https://z.ai/blog/glm-5.3}, 2026.
+
+\bibitem{huggingface-attacks}
+ReversingLabs,
+``Malicious ML models discovered on the Hugging Face platform,''
+\url{https://www.reversinglabs.com/blog/rl-identifies-malware-ml-model-hosted-on-hugging-face}, 2025.
+
+\bibitem{huggingface-incident}
+Hugging Face,
+``Security incident disclosure --- July 2026,''
+\url{https://huggingface.co/blog/security-incident-july-2026}, 2026.
+
+\bibitem{huggingface-timeline}
+Hugging Face,
+``Anatomy of a frontier-lab agent intrusion: technical timeline,''
+\url{https://huggingface.co/blog/agent-intrusion-technical-timeline}, 2026.
 
 \end{thebibliography}
 
