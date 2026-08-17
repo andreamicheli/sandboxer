@@ -15,10 +15,11 @@ numbers next to the drafted narrative.
 from __future__ import annotations
 
 import json
-import os
 import re
 from html import escape
 from typing import Any, Mapping, Protocol, Sequence
+
+from .agents import HeadlessAgentAdapter, phase_adapter
 
 
 class ReportNarrativeError(ValueError):
@@ -115,34 +116,15 @@ class DeterministicReportNarrativeDrafter:
         return {"summary": summary, "per_match": per_match, "analysis": analysis, "limitations": limitations}
 
 
-class GeminiReportNarrativeDrafter:
-    """Drafts the narrative with a Gemini text model (injectable client)."""
+class HeadlessReportNarrativeDrafter:
+    """Drafts the narrative with a headless coding agent (default ``codex``)."""
 
-    def __init__(
-        self,
-        *,
-        api_key: str | None = None,
-        model: str | None = None,
-        client: Any | None = None,
-    ) -> None:
-        self._api_key = api_key
-        self.model = model or os.environ.get("SANDBOXER_REPORT_MODEL", "gemini-2.5-flash")
-        self._client = client
-
-    def _genai_client(self) -> Any:
-        if self._client is not None:
-            return self._client
-        key = self._api_key or os.environ.get("GEMINI_API_KEY")
-        if not key:
-            raise ReportNarrativeError("REPORT_NARRATIVE_KEY_MISSING")
-        from google import genai  # lazy: tests and dry runs never import the SDK
-
-        return genai.Client(api_key=key)
+    def __init__(self, *, adapter: HeadlessAgentAdapter | None = None) -> None:
+        self._adapter = adapter or phase_adapter("report_narrative")
 
     def draft(self, model: Mapping[str, Any]) -> dict[str, Any]:
-        client = self._genai_client()
-        response = client.models.generate_content(model=self.model, contents=self._prompt(model))
-        return self._parse(response.text, model)
+        text = self._adapter.complete(self._prompt(model))
+        return self._parse(text, model)
 
     def _prompt(self, model: Mapping[str, Any]) -> str:
         chapters = [
@@ -298,7 +280,7 @@ footer{{margin-top:2.5rem;padding-top:1rem;border-top:1px solid #ddd;font-size:.
 
 __all__ = [
     "DeterministicReportNarrativeDrafter",
-    "GeminiReportNarrativeDrafter",
+    "HeadlessReportNarrativeDrafter",
     "ReportNarrativeDrafter",
     "ReportNarrativeError",
     "draft_report_narrative",

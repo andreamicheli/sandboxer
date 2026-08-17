@@ -56,9 +56,12 @@ Commentary is never terminal text read aloud: it is a drafted, two-voice
 narrative. `pilot/sandboxer_v0/commentary.py` owns that step:
 
 - `CommentaryDrafter` protocol — `draft(replay, report) -> list[lines]`.
-- `GeminiCommentaryDrafter` — the production mechanism: builds a grounded
-  prompt from the replay frames + report outcome and calls a Gemini text model
-  (injectable `client`; control-plane `GEMINI_API_KEY` otherwise).
+- `HeadlessCommentaryDrafter` — the production mechanism: builds a grounded
+  prompt from the replay frames + report outcome and calls a headless coding
+  agent (default `codex`) through `sandboxer_v0/agents.py`.
+- `HeadlessIntroCommentaryDrafter` + `draft_intro_commentary` — drafts the
+  greeting/model intro from citable facts (`model_metadata` +
+  `benchmark_snapshot`), validated fail-closed with an authored fallback.
 - `validate_commentary(lines, frames)` — every line must be grounded to real
   `event_ids`, use a known `voice_role` (`play_by_play` | `analyst`), carry a
   known `line_type` (`observed` | `interpreted` | `editorial`), and interpreted
@@ -69,6 +72,25 @@ with a word-based reading-time budget and raises `COMMENTARY_OVERFLOW` if the
 plan would run past the Match into the recap. Without a draft it falls back to
 reading the terminal events verbatim (a rehearsal placeholder only). Human
 review of the draft is mandatory before publication.
+
+## Content agents (headless)
+
+All content-producing phases (commentary, arena plan, report narrative, intro)
+draft through the same seam: `pilot/sandboxer_v0/agents.py`.
+
+- `HeadlessAgentAdapter` protocol — `complete(prompt) -> str` (text or JSON).
+- `CodexAdapter` — `codex exec "<prompt>" -s read-only -o <file>` (final message).
+- `CmdAdapter` — `cmd -p "<prompt>" --output-format json --no-session …`, parses
+  the NDJSON result's `finalText`.
+- `AgyAdapter` — `agy --print …` (Antigravity Gemini). Implemented for
+  completeness but **geo-blocked** on this host ("User location is not
+  supported"); phases that would prefer it default to `cmd`/`codex` instead.
+- `phase_adapter(phase)` — resolves an agent per phase, overridable via
+  `SANDBOXER_<PHASE>_AGENT` (see the config table below).
+
+Every drafter keeps a deterministic fallback and fails closed: a failed or
+invalid draft never blocks publication, and the underlying facts stay
+deterministic (only the prose/choreography is LLM-drafted).
 
 Overlap is prevented at render time, not just planned for: after TTS renders
 the blocks, `render_commentary_audio()` re-packs them by their *actual*
@@ -101,6 +123,8 @@ Copy `FishAudioTtsAdapter` and adapt. The steps:
 | Gemini | `GEMINI_API_KEY`, `GEMINI_TTS_FALLBACK_MODELS`, `SANDBOXER_TTS_ALLOW_FALLBACK` |
 | Fish | `FISH_API_KEY`, `FISH_TTS_VOICES=Kore=<ref>,Charon=<ref>`, `FISH_TTS_MODEL` |
 | Default provider | `SANDBOXER_TTS_PROVIDER=gemini|fish` |
+| Content agents | `SANDBOXER_COMMENTARY_AGENT`, `SANDBOXER_ARENA_AGENT`, `SANDBOXER_REPORT_NARRATIVE_AGENT`, `SANDBOXER_INTRO_AGENT` (each `codex|cmd|agy`) |
+| Review agents | `SANDBOXER_REVIEW_<STAGE>_AGENT` per review stage |
 | YouTube | `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN` |
 
 ## End-to-end runbook
@@ -161,7 +185,8 @@ both from the published site.
 
 On top of that deterministic document, `pilot/sandboxer_v0/report_narrative.py`
 drafts an **LLM-written narrative** (summary, one short narrative per Match,
-analysis, limitations) grounded to the deterministic report model, with a
+analysis, limitations) grounded to the deterministic report model, via
+`HeadlessReportNarrativeDrafter` (default `codex`), with a
 `DeterministicReportNarrativeDrafter` template fallback and fail-closed
 validation. `publish_broadcast.py --bundle ...` stages it as
 `narrative.tex`/`narrative.pdf` (LaTeX) plus `narrative.html` — the less

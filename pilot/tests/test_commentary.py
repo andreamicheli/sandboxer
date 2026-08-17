@@ -4,8 +4,11 @@ import pytest
 
 from sandboxer_v0.commentary import (
     CommentaryError,
-    GeminiCommentaryDrafter,
+    HeadlessCommentaryDrafter,
+    HeadlessIntroCommentaryDrafter,
+    draft_intro_commentary,
     validate_commentary,
+    validate_intro_commentary,
 )
 
 _FRAMES = [
@@ -50,24 +53,14 @@ def test_validate_commentary_flags_bad_role_and_type():
     assert any("line_type" in failure for failure in failures)
 
 
-class _Response:
-    def __init__(self, text: str) -> None:
-        self.text = text
-
-
-class _FakeModels:
+class _FakeAdapter:
     def __init__(self, text: str) -> None:
         self._text = text
-        self.last_call: tuple | None = None
+        self.last_prompt: str | None = None
 
-    def generate_content(self, *, model: str, contents: str):
-        self.last_call = (model, contents)
-        return _Response(self._text)
-
-
-class _FakeClient:
-    def __init__(self, text: str) -> None:
-        self.models = _FakeModels(text)
+    def complete(self, prompt: str) -> str:
+        self.last_prompt = prompt
+        return self._text
 
 
 def _replay():
@@ -77,26 +70,69 @@ def _replay():
     }
 
 
-def test_gemini_drafter_drafts_and_validates_lines():
-    client = _FakeClient(
+def test_headless_drafter_drafts_and_validates_lines():
+    adapter = _FakeAdapter(
         '{"lines":[{"voice_role":"analyst","line_type":"interpreted",'
         '"event_ids":["e2"],"text":"It seems MiMo attacks."}]}'
     )
-    drafter = GeminiCommentaryDrafter(client=client)
+    drafter = HeadlessCommentaryDrafter(adapter=adapter)
     lines = drafter.draft(_replay(), {})
     assert lines[0]["text"].startswith("It seems")
     assert lines[0]["voice_role"] == "analyst"
+    assert adapter.last_prompt  # the adapter was driven by the drafted prompt
 
 
-def test_gemini_drafter_rejects_ungrounded_output():
-    client = _FakeClient(
+def test_headless_drafter_rejects_ungrounded_output():
+    adapter = _FakeAdapter(
         '{"lines":[{"voice_role":"play_by_play","line_type":"observed",'
         '"event_ids":["ghost"],"text":"hi"}]}'
     )
     with pytest.raises(CommentaryError, match="COMMENTARY_INVALID"):
-        GeminiCommentaryDrafter(client=client).draft(_replay(), {})
+        HeadlessCommentaryDrafter(adapter=adapter).draft(_replay(), {})
 
 
-def test_gemini_drafter_rejects_malformed_json():
+def test_headless_drafter_rejects_malformed_json():
     with pytest.raises(CommentaryError, match="COMMENTARY_PARSE_FAILED"):
-        GeminiCommentaryDrafter(client=_FakeClient("not json")).draft(_replay(), {})
+        HeadlessCommentaryDrafter(adapter=_FakeAdapter("not json")).draft(_replay(), {})
+
+
+def _intro_line(**overrides):
+    line = {
+        "voice_role": "play_by_play",
+        "line_type": "editorial",
+        "scene": "cold_open",
+        "offset_seconds": 3.0,
+        "text": "Welcome back to Sandboxer.",
+    }
+    line.update(overrides)
+    return line
+
+
+def test_validate_intro_commentary_accepts_valid_lines():
+    assert validate_intro_commentary([_intro_line()], identities=["Laguna S 2.1", "Muse Spark 1.2"]) == ()
+
+
+def test_validate_intro_commentary_rejects_bad_scene_and_hedge():
+    failures = validate_intro_commentary([_intro_line(scene="recap")], identities=["Laguna S 2.1"])
+    assert any("scene" in f for f in failures)
+    failures = validate_intro_commentary(
+        [_intro_line(line_type="interpreted", text="Muse will lose.")], identities=["Laguna S 2.1"]
+    )
+    assert any("hedge" in f for f in failures)
+
+
+def test_intro_drafter_parses_fenced_json_list():
+    payload = [
+        {"voice_role": "play_by_play", "line_type": "editorial", "scene": "cold_open", "offset_seconds": 4.0, "text": "Welcome."},
+        {"voice_role": "analyst", "line_type": "interpreted", "scene": "model_cards_and_rules", "offset_seconds": 1.0, "text": "It seems Muse moves fast.", "model": "Muse Spark 1.2"},
+    ]
+    adapter = _FakeAdapter("```json\n" + __import__("json").dumps(payload) + "\n```")
+    lines = HeadlessIntroCommentaryDrafter(adapter=adapter).draft(["Laguna S 2.1", "Muse Spark 1.2"], {})
+    assert [line["scene"] for line in lines] == ["cold_open", "model_cards_and_rules"]
+    assert lines[1]["model"] == "Muse Spark 1.2"
+
+
+def test_draft_intro_commentary_raises_on_invalid():
+    with pytest.raises(CommentaryError, match="INTRO_COMMENTARY_INVALID"):
+        draft_intro_commentary(["Laguna S 2.1"], {}, drafter=HeadlessIntroCommentaryDrafter(adapter=_FakeAdapter('{"lines":[{"voice_role":"x"}]}')))
+

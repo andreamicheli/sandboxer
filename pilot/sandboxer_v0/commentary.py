@@ -20,8 +20,9 @@ interpretation:
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Mapping, Protocol, Sequence
+
+from .agents import HeadlessAgentAdapter, phase_adapter
 
 
 class CommentaryError(ValueError):
@@ -30,6 +31,8 @@ class CommentaryError(ValueError):
 
 COMMENTARY_LINE_TYPES = frozenset({"observed", "interpreted", "editorial"})
 COMMENTARY_ROLES = frozenset({"play_by_play", "analyst"})
+# Intro/greeting lines anchor to named scenes instead of event IDs.
+INTRO_SCENES = frozenset({"cold_open", "model_cards_and_rules"})
 # Hedge markers keep interpreted lines recognisably interpretive (issue #2).
 HEDGE_MARKERS = (
     "appear", "seem", "looks like", "probably", "maybe", "likely",
@@ -76,44 +79,23 @@ class CommentaryDrafter(Protocol):
     ) -> list[dict[str, Any]]: ...
 
 
-class GeminiCommentaryDrafter:
-    """Drafts commentary with a Gemini text model.
+class HeadlessCommentaryDrafter:
+    """Drafts commentary with a headless coding agent (default ``codex``).
 
-    The client is injectable for tests; without it a control-plane
-    ``GEMINI_API_KEY`` is used lazily, mirroring ``GeminiTtsAdapter``.  The
-    returned lines are validated before being handed back, so an ungrounded or
-    untyped draft fails closed rather than reaching the manifest.
+    The adapter is injectable for tests; without it the phase default from
+    ``phase_adapter("commentary")`` (env-overridable) is used.  The returned
+    lines are validated before being handed back, so an ungrounded or untyped
+    draft fails closed rather than reaching the manifest.
     """
 
-    def __init__(
-        self,
-        *,
-        api_key: str | None = None,
-        model: str = "gemini-2.5-flash",
-        client: Any | None = None,
-    ) -> None:
-        self._api_key = api_key
-        self.model = model
-        self._client = client
-
-    def _genai_client(self) -> Any:
-        if self._client is not None:
-            return self._client
-        key = self._api_key or os.environ.get("GEMINI_API_KEY")
-        if not key:
-            raise CommentaryError("COMMENTARY_KEY_MISSING")
-        from google import genai  # lazy: tests and dry runs never import the SDK
-
-        return genai.Client(api_key=key)
+    def __init__(self, *, adapter: HeadlessAgentAdapter | None = None) -> None:
+        self._adapter = adapter or phase_adapter("commentary")
 
     def draft(
         self, replay: Mapping[str, Any], report: Mapping[str, Any]
     ) -> list[dict[str, Any]]:
-        client = self._genai_client()
-        response = client.models.generate_content(
-            model=self.model, contents=self._prompt(replay, report)
-        )
-        return self._parse(response.text, replay)
+        text = self._adapter.complete(self._prompt(replay, report))
+        return self._parse(text, replay)
 
     def _prompt(self, replay: Mapping[str, Any], report: Mapping[str, Any]) -> str:
         identities = [str(pane["identity"]) for pane in replay.get("panes", ())]
@@ -163,3 +145,150 @@ class GeminiCommentaryDrafter:
         if failures:
             raise CommentaryError(f"COMMENTARY_INVALID: {'; '.join(failures)}")
         return [dict(line) for line in lines]
+
+
+def draft_commentary(
+    replay: Mapping[str, Any],
+    report: Mapping[str, Any],
+    *,
+    drafter: CommentaryDrafter | None = None,
+) -> list[dict[str, Any]]:
+    """Draft and validate a two-voice commentary; raises if the draft is invalid."""
+    lines = (drafter or HeadlessCommentaryDrafter()).draft(replay, report)
+    failures = validate_commentary(lines, replay.get("frames", ()))
+    if failures:
+        raise CommentaryError(f"COMMENTARY_INVALID: {'; '.join(failures)}")
+    return [dict(line) for line in lines]
+
+
+def validate_intro_commentary(
+    lines: Sequence[Mapping[str, Any]],
+    *,
+    identities: Sequence[str],
+) -> tuple[str, ...]:
+    """Validate scene-anchored greeting/model-intro lines (no event grounding)."""
+    failures: list[str] = []
+    known = {str(item) for item in identities}
+    for index, line in enumerate(lines):
+        role = line.get("voice_role")
+        if role not in COMMENTARY_ROLES:
+            failures.append(f"{index}: bad voice_role {role!r}")
+        line_type = line.get("line_type", "editorial")
+        if line_type not in COMMENTARY_LINE_TYPES:
+            failures.append(f"{index}: bad line_type {line_type!r}")
+        text = str(line.get("text", "")).strip()
+        if not text:
+            failures.append(f"{index}: empty text")
+        scene = line.get("scene")
+        if scene not in INTRO_SCENES:
+            failures.append(f"{index}: bad scene {scene!r}")
+        offset = line.get("offset_seconds")
+        if not isinstance(offset, (int, float)) or isinstance(offset, bool) or offset < 0:
+            failures.append(f"{index}: bad offset_seconds {offset!r}")
+        if line_type == "interpreted" and not any(marker in text.lower() for marker in HEDGE_MARKERS):
+            failures.append(f"{index}: interpreted line lacks a hedge marker")
+        model = line.get("model")
+        if model not in (None, "") and str(model) not in known:
+            failures.append(f"{index}: unknown model {model!r}")
+    return tuple(failures)
+
+
+class IntroCommentaryDrafter(Protocol):
+    """Produces a greeting + model-intro rundown from competitor facts."""
+
+    def draft(self, identities: Sequence[str], facts: Mapping[str, Any]) -> list[dict[str, Any]]: ...
+
+
+class HeadlessIntroCommentaryDrafter:
+    """Drafts the greeting/model intro with a headless coding agent.
+
+    ``facts`` carries the researched, citable material (producer, architecture,
+    benchmark highlights) so the model writes the *prose* but never invents the
+    underlying facts; the draft is validated fail-closed and the caller keeps a
+    deterministic fallback rundown.
+    """
+
+    def __init__(self, *, adapter: HeadlessAgentAdapter | None = None) -> None:
+        self._adapter = adapter or phase_adapter("intro")
+
+    def draft(self, identities: Sequence[str], facts: Mapping[str, Any]) -> list[dict[str, Any]]:
+        text = self._adapter.complete(self._prompt(identities, facts))
+        return self._parse(text, identities)
+
+    def _prompt(self, identities: Sequence[str], facts: Mapping[str, Any]) -> str:
+        return json.dumps(
+            {
+                "task": (
+                    "Write a short, voiced opening for a broadcast of a simulated "
+                    "capture-the-flag match between two AI models. Two voices share "
+                    "the rundown: a play-by-play voice and a less frequent analyst. "
+                    "Include a greeting toward the end of the cold open, then a short "
+                    "hype-laden-but-hedged introduction of each competitor during the "
+                    "model-cards scene. Use only the facts below; frame expectations "
+                    "as opinion with hedges ('we expect', 'it seems'). Keep it human, "
+                    "curious and fun — never glorify real harm."
+                ),
+                "rules": {
+                    "scenes": sorted(INTRO_SCENES),
+                    "voice_roles": ["play_by_play", "analyst"],
+                    "line_types": ["observed", "interpreted", "editorial"],
+                    "hedging": "interpreted lines must use 'seems', 'we expect', 'likely', or similar",
+                    "offset_seconds": "non-negative float; place the greeting near the end of the cold open",
+                },
+                "identities": [str(item) for item in identities],
+                "facts": facts,
+                "output_schema": {
+                    "lines": ["voice_role", "line_type", "scene", "offset_seconds", "text", "model?"]
+                },
+            },
+            indent=2,
+        )
+
+    def _parse(self, text: str, identities: Sequence[str]) -> list[dict[str, Any]]:
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```", 2)[1]
+            if cleaned.lstrip().startswith("json"):
+                cleaned = cleaned.lstrip()[4:]
+        start, end = cleaned.find("["), cleaned.rfind("]")
+        if start != -1 and end > start:
+            cleaned = cleaned[start : end + 1]
+        try:
+            payload = json.loads(cleaned)
+        except json.JSONDecodeError as error:
+            raise CommentaryError("INTRO_COMMENTARY_PARSE_FAILED") from error
+        if isinstance(payload, dict):
+            payload = payload.get("lines")
+        if not isinstance(payload, list) or not payload:
+            raise CommentaryError("INTRO_COMMENTARY_EMPTY")
+        failures = validate_intro_commentary(payload, identities=identities)
+        if failures:
+            raise CommentaryError(f"INTRO_COMMENTARY_INVALID: {'; '.join(failures)}")
+        return [dict(line) for line in payload]
+
+
+def draft_intro_commentary(
+    identities: Sequence[str],
+    facts: Mapping[str, Any],
+    *,
+    drafter: IntroCommentaryDrafter | None = None,
+) -> list[dict[str, Any]]:
+    """Draft and validate a greeting/model intro; raises if the draft is invalid."""
+    lines = (drafter or HeadlessIntroCommentaryDrafter()).draft(identities, facts)
+    failures = validate_intro_commentary(lines, identities=identities)
+    if failures:
+        raise CommentaryError(f"INTRO_COMMENTARY_INVALID: {'; '.join(failures)}")
+    return [dict(line) for line in lines]
+
+
+__all__ = [
+    "CommentaryDrafter",
+    "CommentaryError",
+    "HeadlessCommentaryDrafter",
+    "HeadlessIntroCommentaryDrafter",
+    "IntroCommentaryDrafter",
+    "draft_commentary",
+    "draft_intro_commentary",
+    "validate_commentary",
+    "validate_intro_commentary",
+]

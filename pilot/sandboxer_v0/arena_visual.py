@@ -17,8 +17,9 @@ bad draft fails closed instead of producing a broken video.
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Mapping, Protocol, Sequence
+
+from .agents import HeadlessAgentAdapter, phase_adapter
 
 AVATAR_SHAPES = frozenset({"circle", "diamond", "hexagon", "triangle"})
 DEFENSE_SHAPES = frozenset({"cube", "sphere", "pyramid", "hex", "shield"})
@@ -211,34 +212,20 @@ class FakeArenaVisualDrafter:
         return "direct"
 
 
-class GeminiArenaVisualDrafter:
-    """Drafts the arena plan with a Gemini text model.
+class HeadlessArenaVisualDrafter:
+    """Drafts the arena plan with a headless coding agent (default ``cmd``).
 
-    Mirrors ``GeminiCommentaryDrafter``: the client is injectable for tests and
-    a control-plane ``GEMINI_API_KEY`` is used lazily otherwise.  The returned
-    plan is validated before being handed back, so an ungrounded draft fails
-    closed.
+    The adapter is injectable for tests; without it the phase default from
+    ``phase_adapter("arena")`` (env-overridable) is used.  The returned plan is
+    validated before being handed back, so an ungrounded draft fails closed.
     """
 
-    def __init__(self, *, api_key: str | None = None, model: str = "gemini-2.5-flash", client: Any | None = None) -> None:
-        self._api_key = api_key
-        self.model = model
-        self._client = client
-
-    def _genai_client(self) -> Any:
-        if self._client is not None:
-            return self._client
-        key = self._api_key or os.environ.get("GEMINI_API_KEY")
-        if not key:
-            raise ArenaVisualError("ARENA_VISUAL_KEY_MISSING")
-        from google import genai  # lazy: tests and dry runs never import the SDK
-
-        return genai.Client(api_key=key)
+    def __init__(self, *, adapter: HeadlessAgentAdapter | None = None) -> None:
+        self._adapter = adapter or phase_adapter("arena")
 
     def draft(self, replay: Mapping[str, Any], report: Mapping[str, Any]) -> dict[str, Any]:
-        client = self._genai_client()
-        response = client.models.generate_content(model=self.model, contents=self._prompt(replay, report))
-        return self._parse(response.text, replay)
+        text = self._adapter.complete(self._prompt(replay, report))
+        return self._parse(text, replay)
 
     def _prompt(self, replay: Mapping[str, Any], report: Mapping[str, Any]) -> str:
         identities = [str(pane["identity"]) for pane in replay.get("panes", ())]
@@ -352,7 +339,7 @@ __all__ = [
     "ArenaVisualDrafter",
     "ArenaVisualError",
     "FakeArenaVisualDrafter",
-    "GeminiArenaVisualDrafter",
+    "HeadlessArenaVisualDrafter",
     "draft_arena_plan",
     "validate_arena_plan",
 ]

@@ -53,7 +53,7 @@ from sandboxer_v0.report import ResultReportError, build_result_report
 from sandboxer_v0.report_latex import build_report_latex, compile_latex, render_narrative_latex
 from sandboxer_v0.report_narrative import (
     DeterministicReportNarrativeDrafter,
-    GeminiReportNarrativeDrafter,
+    HeadlessReportNarrativeDrafter,
     draft_report_narrative,
     render_narrative_html,
 )
@@ -147,7 +147,7 @@ def _series_slug(bundle: Mapping[str, Any]) -> str:
 def _draft_narrative(model: Mapping[str, Any]) -> dict[str, Any]:
     """Draft the report narrative with a text model, falling back deterministically."""
     try:
-        return draft_report_narrative(model, drafter=GeminiReportNarrativeDrafter())
+        return draft_report_narrative(model, drafter=HeadlessReportNarrativeDrafter())
     except Exception as error:  # an ungrounded/failed draft must never block publication
         print(f"report narrative LLM draft failed ({error}); using deterministic fallback", file=sys.stderr)
         return draft_report_narrative(model, drafter=DeterministicReportNarrativeDrafter())

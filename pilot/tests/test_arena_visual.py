@@ -9,7 +9,7 @@ import pytest
 from sandboxer_v0.arena_visual import (
     ArenaVisualError,
     FakeArenaVisualDrafter,
-    GeminiArenaVisualDrafter,
+    HeadlessArenaVisualDrafter,
     draft_arena_plan,
     validate_arena_plan,
 )
@@ -71,23 +71,17 @@ def test_validate_rejects_self_attack():
     assert any("own defense" in f for f in failures)
 
 
-class _FakeClient:
+class _FakeAdapter:
     def __init__(self, text: str):
         self._text = text
-        self.models = self
 
-    def generate_content(self, *, model: str, contents: str):
-        return _FakeResponse(self._text)
-
-
-class _FakeResponse:
-    def __init__(self, text: str):
-        self.text = text
+    def complete(self, prompt: str) -> str:
+        return self._text
 
 
-def test_gemini_parse_handles_markdown_fence_and_eventid_in_start_frame():
-    drafter = GeminiArenaVisualDrafter(
-        client=_FakeClient(
+def test_headless_parse_handles_markdown_fence_and_eventid_in_start_frame():
+    drafter = HeadlessArenaVisualDrafter(
+        adapter=_FakeAdapter(
             "```json\n"
             + json.dumps(
                 {
@@ -116,16 +110,16 @@ def test_gemini_parse_handles_markdown_fence_and_eventid_in_start_frame():
     assert plan["beats"][2]["start_frame"] == 0
 
 
-def test_gemini_parse_rejects_non_json():
-    drafter = GeminiArenaVisualDrafter(client=_FakeClient("sorry, I can't do that"))
+def test_headless_parse_rejects_non_json():
+    drafter = HeadlessArenaVisualDrafter(adapter=_FakeAdapter("sorry, I can't do that"))
     with pytest.raises(ArenaVisualError) as exc:
         drafter.draft(_replay(), _report())
     assert "PARSE" in str(exc.value)
 
 
-def test_gemini_parse_rejects_ungrounded_draft():
-    drafter = GeminiArenaVisualDrafter(
-        client=_FakeClient(
+def test_headless_parse_rejects_ungrounded_draft():
+    drafter = HeadlessArenaVisualDrafter(
+        adapter=_FakeAdapter(
             json.dumps(
                 {
                     "avatars": [{"competitor": IDENTITIES[0], "label": "A", "shape": "circle"}],

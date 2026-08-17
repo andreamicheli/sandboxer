@@ -17,7 +17,7 @@ from sandboxer_v0.report import build_result_report
 from sandboxer_v0.report_latex import compile_latex, compute_analytics, render_charts, render_narrative_latex
 from sandboxer_v0.report_narrative import (
     DeterministicReportNarrativeDrafter,
-    GeminiReportNarrativeDrafter,
+    HeadlessReportNarrativeDrafter,
     ReportNarrativeError,
     draft_report_narrative,
     render_narrative_html,
@@ -87,21 +87,15 @@ def test_draft_report_narrative_raises_on_invalid() -> None:
         draft_report_narrative(_model(), drafter=_BadDrafter())
 
 
-class _FakeClient:
+class _FakeAdapter:
     def __init__(self, text: str):
         self._text = text
-        self.models = self
 
-    def generate_content(self, *, model: str, contents: str):
-        return _FakeResponse(self._text)
-
-
-class _FakeResponse:
-    def __init__(self, text: str):
-        self.text = text
+    def complete(self, prompt: str) -> str:
+        return self._text
 
 
-def test_gemini_parse_handles_fence_and_float_match_number() -> None:
+def test_headless_parse_handles_fence_and_float_match_number() -> None:
     model = _model()
     numbers = [chapter["match_number"] for chapter in model["technical_chapters"]]
     payload = {
@@ -113,14 +107,14 @@ def test_gemini_parse_handles_fence_and_float_match_number() -> None:
         "analysis": "Analysis.",
         "limitations": "Limitations.",
     }
-    drafter = GeminiReportNarrativeDrafter(client=_FakeClient("```json\n" + json.dumps(payload) + "\n```"))
+    drafter = HeadlessReportNarrativeDrafter(adapter=_FakeAdapter("```json\n" + json.dumps(payload) + "\n```"))
     narrative = drafter.draft(model)
     assert isinstance(narrative["per_match"][0]["match_number"], int)
     assert narrative["per_match"][0]["match_number"] == numbers[0]
 
 
-def test_gemini_parse_rejects_bad_json() -> None:
-    drafter = GeminiReportNarrativeDrafter(client=_FakeClient("sorry, no JSON here"))
+def test_headless_parse_rejects_bad_json() -> None:
+    drafter = HeadlessReportNarrativeDrafter(adapter=_FakeAdapter("sorry, no JSON here"))
     with pytest.raises(ReportNarrativeError):
         drafter.draft(_model())
 

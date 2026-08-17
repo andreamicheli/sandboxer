@@ -14,7 +14,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sandboxer_v0.arena_visual import FakeArenaVisualDrafter, GeminiArenaVisualDrafter, draft_arena_plan
+from sandboxer_v0.arena_visual import FakeArenaVisualDrafter, HeadlessArenaVisualDrafter, draft_arena_plan
+from sandboxer_v0.commentary import HeadlessIntroCommentaryDrafter, draft_intro_commentary
 from sandboxer_v0.video import _digest, build_video_manifest
 
 ROOT = Path(__file__).resolve().parent.parent.parent / "artifacts"
@@ -152,10 +153,24 @@ def main() -> int:
         "Terminal Reasoning": {IDENTITY_A: 0.83, IDENTITY_B: 0.80},
     }
     try:
-        arena = draft_arena_plan(replay, report, drafter=GeminiArenaVisualDrafter())
+        arena = draft_arena_plan(replay, report, drafter=HeadlessArenaVisualDrafter())
     except Exception as error:  # an ungrounded draft must never block a rehearsal
         print(f"arena LLM draft failed ({error}); using deterministic fallback", file=sys.stderr)
         arena = draft_arena_plan(replay, report, drafter=FakeArenaVisualDrafter())
+    # The greeting/model intro is drafted by a headless agent from citable facts;
+    # the authored rundown below is the deterministic fallback.
+    intro_facts = {
+        "models": {
+            IDENTITY_A: {**model_metadata[IDENTITY_A], "expectation": "a hundred-billion-parameter coder that trades blows with far larger models"},
+            IDENTITY_B: {**model_metadata[IDENTITY_B], "expectation": "a closed frontier model with strong agentic-benchmark results"},
+        },
+        "benchmark_snapshot": benchmark_snapshot,
+    }
+    try:
+        intro = draft_intro_commentary([IDENTITY_A, IDENTITY_B], intro_facts, drafter=HeadlessIntroCommentaryDrafter())
+    except Exception as error:  # a bad intro must never block a rehearsal
+        print(f"intro LLM draft failed ({error}); using authored fallback", file=sys.stderr)
+        intro = _INTRO_COMMENTARY
     manifest = build_video_manifest(
         replay,
         report=report,
@@ -164,7 +179,7 @@ def main() -> int:
         fps=30,
         commentary=_COMMENTARY,
         arena_visuals=arena,
-        intro_commentary=_INTRO_COMMENTARY,
+        intro_commentary=intro,
     )
     # Enrich with per-pane terminal data for the Remotion composition. The
     # editorial manifest itself stays authoritative; this is a renderer-side
