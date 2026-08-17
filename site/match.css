@@ -1,68 +1,56 @@
-.match-link {
-  display: flex;
-  justify-content: space-between;
-  padding: 22px;
-  border: 1px solid var(--line);
-  color: var(--paper);
-  text-decoration: none;
-  text-transform: uppercase;
-  font-family: 'Fraunces';
-  font-size: 11px;
-  letter-spacing: .13em;
-}
-
-.match-link:hover {
-  background: #101113;
-}
+/* ------------------------------------------------------------------ */
+/*  SandBoxer — Match detail page (light theme)                       */
+/* ------------------------------------------------------------------ */
 
 .match-hero {
-  padding: 60px 3vw 90px;
+  padding: clamp(40px, 6vw, 72px) var(--pad-narrow) clamp(48px, 7vw, 90px);
   border-bottom: 1px solid var(--line);
 }
 
 .match-kicker {
   display: flex;
   justify-content: space-between;
-  color: #777;
-  font-family: 'Fraunces';
-  font-size: 10px;
-  letter-spacing: .16em;
-  padding-bottom: 25px;
+  color: var(--faint);
+  font-size: var(--fs-label);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--line);
 }
 
 .duel-shell {
   display: grid;
   grid-template-columns: 1fr 100px 1fr;
   align-items: center;
+  margin-top: clamp(28px, 4vw, 48px);
 }
 
 .duelist {
   position: relative;
   min-width: 0;
-  padding: 3vw;
+  padding: clamp(22px, 3vw, 40px);
   border-top: 2px solid var(--model-accent);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--model-accent) 10%, #050607), #050607 44%);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--model-accent) 6%, #ffffff), #ffffff 48%);
 }
 
-.duelist:last-child {
-  text-align: right;
-}
+.duelist:last-child { text-align: right; }
 
 .duelist .model-maker {
   color: var(--model-accent);
-  font-family: 'Fraunces';
-  font-size: 10px;
-  letter-spacing: .16em;
+  font-size: var(--fs-label);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 
 .duelist h1 {
-  min-height: 1.8em;
-  font-family: 'Fraunces';
-  font-weight: 400;
-  font-size: clamp(42px, 5.6vw, 92px);
-  line-height: .88;
-  letter-spacing: -.05em;
-  margin: 30px 0;
+  min-height: 1.6em;
+  font-weight: var(--w-regular);
+  font-size: clamp(38px, 5vw, 84px);
+  line-height: 0.92;
+  letter-spacing: -0.03em;
+  margin: 24px 0;
 }
 
 .duelist img {
@@ -72,102 +60,99 @@
   object-fit: cover;
 }
 
-.duelist:last-child img {
-  margin-left: auto;
-}
+.duelist:last-child img { margin-left: auto; }
 
-.match-center {
-  text-align: center;
-  z-index: 1;
-}
+.match-center { text-align: center; z-index: 1; }
 
 .match-center span {
   display: block;
-  font-family: 'Fraunces';
-  font-size: 42px;
+  font-size: 40px;
+  font-weight: var(--w-regular);
 }
 
 .match-center small {
   display: block;
-  color: #777;
-  font-family: 'Fraunces';
-  font-size: 8px;
-  letter-spacing: .13em;
+  color: var(--faint);
+  font-size: var(--fs-micro);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
   margin-top: 10px;
 }
 
-.technical-facts {
-  margin-top: 22px;
-}
+.technical-facts { margin-top: 22px; }
 
-.technical-facts:empty {
-  display: none;
-}
+.technical-facts:empty { display: none; }
 
 .technical-facts div {
   display: flex;
   justify-content: space-between;
-  border-top: 1px solid #333;
+  border-top: 1px solid var(--line);
   padding: 10px 0;
-  font-family: 'Fraunces';
-  font-size: 10px;
+  font-size: var(--fs-micro);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.1em;
   text-transform: uppercase;
+  color: var(--muted);
 }
+
+.technical-facts b { color: var(--ink); }
 
 .match-rule {
   display: grid;
-  grid-template-columns: 1fr 3fr;
+  grid-template-columns: 200px 1fr;
   gap: 30px;
-  margin-top: 45px;
-  padding-top: 25px;
+  margin-top: clamp(28px, 4vw, 48px);
+  padding-top: 24px;
   border-top: 1px solid var(--line);
-  font-family: 'Fraunces';
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.7;
 }
 
-.match-rule p {
-  margin: 0;
-  color: #999;
+.match-rule b {
+  font-size: var(--fs-label);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
 
-.timeline-list {
-  border-top: 1px solid var(--line);
-}
+.match-rule p { margin: 0; color: var(--muted); }
+
+.timeline-list { border-top: 1px solid var(--line); }
 
 .timeline-list article {
   display: grid;
   grid-template-columns: 90px 1fr;
-  padding: 30px 0;
+  gap: 20px;
+  padding: clamp(22px, 3vw, 32px) 0;
   border-bottom: 1px solid var(--line);
 }
 
 .timeline-list article > span {
-  color: #555;
-  font-family: 'Fraunces';
-  font-size: 11px;
+  color: var(--faint);
+  font-size: var(--fs-label);
+  font-weight: var(--w-semibold);
 }
 
 .timeline-list small {
-  color: #777;
-  font-family: 'Fraunces';
-  font-size: 9px;
-  letter-spacing: .14em;
+  color: var(--faint);
+  font-size: var(--fs-micro);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
 
 .timeline-title {
-  font-family: 'Fraunces';
-  font-weight: 400;
-  font-size: 32px;
-  line-height: 1.2;
+  font-weight: var(--w-regular);
+  font-size: clamp(24px, 3vw, 32px);
+  line-height: 1.15;
   margin: 8px 0;
-  color: var(--paper);
+  color: var(--ink);
 }
 
 .timeline-list p {
-  color: #888;
-  font-family: 'Fraunces';
-  font-size: 13px;
+  color: var(--muted);
+  font-size: 14px;
   line-height: 1.6;
   margin: 0;
 }
@@ -180,18 +165,17 @@
 }
 
 .comparison article, .empty-data {
-  background: #0a0b0c;
-  padding: 30px;
+  background: var(--paper);
+  padding: clamp(22px, 3vw, 30px);
   margin: 0;
 }
 
 .comparison-title {
-  font-family: 'Fraunces';
-  font-weight: 400;
-  font-size: 25px;
+  font-weight: var(--w-regular);
+  font-size: 24px;
   line-height: 1.2;
   margin: 0 0 16px 0;
-  color: var(--paper);
+  color: var(--ink);
 }
 
 .comparison article div {
@@ -199,77 +183,55 @@
   justify-content: space-between;
   padding: 12px 0;
   border-top: 1px solid var(--line);
-  font-family: 'Fraunces';
-  font-size: 11px;
+  font-size: var(--fs-label);
+  color: var(--muted);
 }
+
+.comparison article div b { color: var(--ink); }
 
 .empty-data {
   grid-column: 1 / -1;
-  color: #85837d;
-  font-family: 'Fraunces';
-  font-size: 13px;
+  color: var(--muted);
+  font-size: 14px;
   line-height: 1.7;
 }
 
-.evidence-links {
-  display: flex;
-  gap: 1px;
-  margin-top: 1px;
-}
+.evidence-links { display: flex; gap: 1px; margin-top: 1px; }
 
 .evidence-links a, .evidence-links p {
   flex: 1;
-  background: #0a0b0c;
+  background: var(--paper);
   margin: 0;
-  padding: 20px;
-  color: #999;
-  font-family: 'Fraunces';
-  font-size: 10px;
+  padding: 20px 22px;
+  color: var(--muted);
+  font-size: var(--fs-label);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   text-decoration: none;
 }
 
+.evidence-links a:hover { color: var(--accent); }
+
 .load-error {
   margin: 20vh auto;
   text-align: center;
-  color: #aaa;
-  font-family: 'Fraunces';
-  font-size: 14px;
+  color: var(--muted);
+  font-size: 15px;
 }
 
 @media (max-width: 1000px) {
-  .duel-shell {
-    grid-template-columns: 1fr;
-  }
-  .match-center {
-    padding: 25px;
-  }
-  .comparison {
-    grid-template-columns: 1fr;
-  }
+  .duel-shell { grid-template-columns: 1fr; }
+  .match-center { padding: 25px; }
+  .comparison { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 620px) {
-  .match-hero {
-    padding: 40px 18px;
-  }
-  .duelist {
-    padding: 22px;
-  }
-  .duelist h1 {
-    font-size: 47px;
-  }
-  .match-rule {
-    grid-template-columns: 1fr;
-  }
-  .timeline-list article {
-    grid-template-columns: 45px 1fr;
-  }
-  .evidence-links {
-    display: block;
-  }
-  .evidence-links > * {
-    display: block;
-    margin-bottom: 1px !important;
-  }
+  .match-hero { padding: 32px 20px; }
+  .duelist { padding: 22px; }
+  .duelist h1 { font-size: 44px; }
+  .match-rule { grid-template-columns: 1fr; }
+  .timeline-list article { grid-template-columns: 45px 1fr; }
+  .evidence-links { display: block; }
+  .evidence-links > * { display: block; margin-bottom: 1px !important; }
 }

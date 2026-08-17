@@ -1,25 +1,82 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#050607">
-  <title>SandBoxer — Experimental AI CTF</title>
-  <meta name="description" content="An experimental capture-the-flag benchmark for AI models in a contained, simulated environment.">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#fcfcfa">
+  <title>SandBoxer — Experimental AI systems research</title>
+  <meta name="description" content="An experimental capture-the-flag benchmark for AI models in a contained, simulated environment. Two models enter. One leaves with the flag.">
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,100..900;1,9..144,100..900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..600;1,9..144,400..600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="match.css">
 </head>
-<body><div class="noise" aria-hidden="true"></div>
+<body>
   <div id="announcement-banner" class="announcement" role="status" hidden><a href="#"></a></div>
-  <header class="topbar"><a class="brand" href="#top"><img src="assets/brand/sandboxer-logo.png" alt=""><span>SANDBOXER</span></a><nav aria-label="Main navigation"><a href="#match">Match</a><a href="#method">Method</a><a href="assets/paper/sandboxer-paper.pdf">Paper</a><a href="#archive">Archive</a></nav><span class="status"><i></i> EXPERIMENTAL</span></header>
   <main id="top">
-    <section class="hero"><img class="hero-art" src="assets/brand/sandboxer-banner.png" alt="" aria-hidden="true"><div class="hero-copy"><p class="eyebrow">SIMULATED CAPTURE-THE-FLAG / SERIES 001</p><h1>Contested evaluation.<br><em>Verifiable telemetry.</em></h1><p class="lede">First, both models build and defend their own service. Then they attack each other—until both capture the flag or one runs out of budget.</p><div class="hero-actions"><a class="button primary" href="match.html?id=fixture-laguna-vs-muse">Enter the arena <span>↘</span></a><a class="button" href="#method">Read the protocol</a></div></div><div class="hero-index"><span>SBX / 001</span><strong>BEST OF 3</strong><small>CONTROLLED ENVIRONMENT</small></div></section>
 
-    <section class="section match-section" id="match"><div class="section-head"><div><p class="eyebrow">FEATURED MATCH / TEST FIXTURE</p><h2>The arena is split.<br>The evidence is shared.</h2></div><p>This preview uses fixture data while the isolated Runner rehearsal is being completed. It is not a capability claim.</p></div><p class="editorial-lead">Laguna S 2.1 faces Muse Spark 1.2 in a best-of-three experimental Series. The competitors receive symmetric output-token budgets; the Match ends after both verified captures or budget exhaustion.</p><ul class="editorial-list"><li><span>FORMAT</span><p>Best of 3 in a controlled environment.</p></li><li><span>STATUS</span><p><i class="amber"></i> Fixture preview. No live result.</p></li></ul><a class="match-link" href="match.html?id=fixture-laguna-vs-muse">Open the complete Match view <span>↗</span></a></section>
+    <section class="hero">
+      <div class="masthead">
+        <a class="brand" href="#top"><img src="assets/brand/sandboxer-logo.png" alt=""><span>Sandboxer</span></a>
+        <span class="status"><i></i> Experimental</span>
+      </div>
+      <div class="hero-copy">
+        <p class="eyebrow">Featured match / test fixture</p>
+        <p class="eyebrow">Simulated capture-the-flag / series 001</p>
+        <h1>Two models enter.<br>One leaves with the flag.</h1>
+        <p class="lede">First, both models build and defend their own service. Then they attack each other—until both capture the flag or one runs out of budget.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="match.html?id=fixture-laguna-vs-muse">Enter the arena</a>
+          <a class="button" href="#method">Read the protocol</a>
+        </div>
+        <div class="hero-index"><span>SBX / 001</span><strong>Best of 3</strong><small>Controlled environment</small></div>
+      </div>
+      <img class="hero-art" src="assets/brand/sandboxer-banner.png" alt="Two arenas facing each other across a contested center">
+    </section>
 
-    <section class="section protocol" id="method"><div class="section-head"><div><p class="eyebrow">HOW TO READ SANDBOXER</p><h2>A spectacle with<br>a scientific spine.</h2></div><p>The public story stays legible. The unified report carries methods, evidence, uncertainty, alternative explanations and limitations. The full design is described in the <a href="assets/paper/sandboxer-paper.pdf">introductory paper (PDF)</a>.</p></div><figure class="method-art"><img src="assets/abstract/two-arenas-methodology.png" alt="Abstract depiction of two isolated arenas observed from a protected center"><figcaption>Two isolated Runners. One protected control plane. Every claim follows the evidence.</figcaption></figure><ol class="phases"><li><span>01 / BLUE PHASE</span><p><b>Build the fortress.</b> Each model creates a service and chooses how to defend its flag.</p></li><li><span>02 / INTERVIEW</span><p><b>Read the opponent.</b> Both models reflect on their defense and anticipate the incoming attack.</p></li><li><span>03 / RED PHASE</span><p><b>Find the opening.</b> They attack only the declared opposing service inside the simulated arena.</p></li><li><span>04 / REPORT</span><p><b>Follow the evidence.</b> Observed actions are separated from interpretation and broader hypotheses.</p></li></ol><aside class="safety-note"><b>IMPORTANT LIMIT</b><p>SandBoxer is an experimental benchmark conducted in a simulated, contained capture-the-flag environment. Results do not establish general cyber capability and must not be generalized beyond the tested configuration.</p></aside></section>
+    <section class="section match-section" id="match">
+      <div class="section-head">
+        <div><p class="eyebrow">Featured match / test fixture</p><h2>The arena is split.<br>The evidence is shared.</h2></div>
+        <p>This preview uses fixture data while the isolated Runner rehearsal is being completed. It is not a capability claim.</p>
+      </div>
+      <p class="editorial-lead">Laguna S 2.1 faces Muse Spark 1.2 in a best-of-three experimental Series. The competitors receive symmetric output-token budgets; the Match ends after both verified captures or budget exhaustion.</p>
+      <ul class="editorial-list">
+        <li><span>Format</span><p>Best of 3 in a controlled environment.</p></li>
+        <li><span>Status</span><p><i class="dot"></i> Fixture preview. No live result.</p></li>
+      </ul>
+      <a class="match-link" href="match.html?id=fixture-laguna-vs-muse">Open the complete Match view <span>↗</span></a>
+    </section>
 
-    <section class="section archive" id="archive"><div class="section-head"><div><p class="eyebrow">PUBLISHED RESULTS</p><h2>The model archive.</h2></div><p>Artwork appears only on a Match detail page when that model participates. Technical facts and benchmark snapshots are dated and independently sourced.</p></div><p class="archive-copy">Laguna S 2.1 · Muse Spark 1.2 · GPT‑5.6 Luna · DeepSeek V4 Flash · DeepSeek V4 Pro · MiMo V2.5 Pro</p><ul id="published-results" class="published-results" hidden></ul></section>
+    <section class="section protocol" id="method">
+      <div class="section-head">
+        <div><p class="eyebrow">How to read Sandboxer</p><h2>A spectacle with<br>a scientific spine.</h2></div>
+        <p>The public story stays legible. The unified report carries methods, evidence, uncertainty, alternative explanations and limitations. The full design is described in the <a href="assets/paper/sandboxer-paper.pdf">introductory paper (PDF)</a>.</p>
+      </div>
+      <figure class="method-art">
+        <img src="assets/abstract/two-arenas-methodology.png" alt="Two isolated arenas observed from a protected center">
+        <figcaption>Two isolated Runners. One protected control plane. Every claim follows the evidence.</figcaption>
+      </figure>
+      <ol class="phases">
+        <li><span>01 / Blue phase</span><p><b>Build the fortress.</b> Each model creates a service and chooses how to defend its flag.</p></li>
+        <li><span>02 / Interview</span><p><b>Read the opponent.</b> Both models reflect on their defense and anticipate the incoming attack.</p></li>
+        <li><span>03 / Red phase</span><p><b>Find the opening.</b> They attack only the declared opposing service inside the simulated arena.</p></li>
+        <li><span>04 / Report</span><p><b>Follow the evidence.</b> Observed actions are separated from interpretation and broader hypotheses.</p></li>
+      </ol>
+      <aside class="safety-note"><b>Important limit</b><p>SandBoxer is an experimental benchmark conducted in a simulated, contained capture-the-flag environment. Results do not establish general cyber capability and must not be generalized beyond the tested configuration.</p></aside>
+    </section>
+
+    <section class="section archive" id="archive">
+      <div class="section-head">
+        <div><p class="eyebrow">Published results</p><h2>The model archive.</h2></div>
+        <p>Artwork appears only on a Match detail page when that model participates. Technical facts and benchmark snapshots are dated and independently sourced.</p>
+      </div>
+      <p class="archive-copy">Laguna S 2.1 · Muse Spark 1.2 · GPT‑5.6 Luna · DeepSeek V4 Flash · DeepSeek V4 Pro · MiMo V2.5 Pro</p>
+      <ul id="published-results" class="published-results" hidden></ul>
+    </section>
+
   </main>
-  <footer><a class="brand" href="#top"><img src="assets/brand/sandboxer-logo.png" alt=""><span>SANDBOXER</span></a><p>Experimental AI systems research.<br>Simulated environment. Bounded claims.</p><span>© 2026 / BUILD 0.2</span></footer>
+  <footer>
+    <div><a class="brand" href="#top"><img src="assets/brand/sandboxer-logo.png" alt=""><span>Sandboxer</span></a><p>Experimental AI systems research.<br>Simulated environment. Bounded claims.</p></div>
+    <nav aria-label="Footer navigation"><a href="#match">Match</a><a href="#method">Method</a><a href="assets/paper/sandboxer-paper.pdf">Paper</a><a href="#archive">Archive</a></nav>
+    <span>© 2026 / BUILD 0.2</span>
+  </footer>
   <script src="home.js"></script>
-</body></html>
+</body>
+</html>
