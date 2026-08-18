@@ -62,8 +62,8 @@ direct CLI around the same engine:
 uv run python scripts/preflight_command_code.py      # deterministic provider preflight
 sudo -E uv run inspect eval inspect_match.py \
   -T match_id=<unique-match-id> \
-  -T image=/var/lib/sandboxer/images/sandboxer-runner-v0.qcow2 \
-  -T profile=/var/lib/sandboxer/profiles/sandboxer-runner.json \
+  -T image=/var/lib/sandboxer/images/runner-alpine-3.24.1-r67.qcow2 \
+  -T profile=/var/lib/sandboxer/images/runner-alpine-3.24.1-r67.profile.json \
   --display plain                                   # one private calibration Match
 ```
 

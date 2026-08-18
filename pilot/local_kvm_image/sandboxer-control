@@ -11,6 +11,21 @@ probe_bool() {
     if "$1"; then printf 1; else printf 0; fi
 }
 
+http_request_status_or_unavailable() {
+    # BusyBox wget exits non-zero for HTTP error statuses (4xx/5xx) and
+    # saves no document body for them; with -S it prints the status line to
+    # stderr.  A status line means the service responded, so surface it (e.g.
+    # "403 Forbidden") instead of the misleading "service down" label.  Only
+    # a missing status line is a genuine connection failure.
+    if /bin/busybox grep -q 'HTTP/' "$1.hdr"; then
+        /bin/busybox awk '/HTTP\// { print; exit }' "$1.hdr" > "$1"
+    else
+        printf 'HTTP_REQUEST_APPLICATION_UNAVAILABLE\n' > "$1"
+        tool_status=1
+    fi
+    /bin/busybox rm -f "$1.hdr"
+}
+
 sandboxer_service_health_path() {
     # This file is emitted exclusively by the Orchestrator after strict
     # ServiceSpec validation.  Read the one declared health route without
@@ -177,9 +192,10 @@ runner_tool() {
                     header_arg=
                 fi
                 case "$tool_method" in
-                    GET) /bin/busybox timeout -s KILL 4 /bin/busybox wget -q -T 3 $header_arg -O - "http://$tool_peer:8080$tool_path" >"$tool_file" 2>&1 || { printf 'HTTP_REQUEST_APPLICATION_UNAVAILABLE\n' >"$tool_file"; tool_status=1; } ;;
-                    POST) /bin/busybox timeout -s KILL 4 /bin/busybox wget -q -T 3 $header_arg --post-data="$tool_body" -O - "http://$tool_peer:8080$tool_path" >"$tool_file" 2>&1 || { printf 'HTTP_REQUEST_APPLICATION_UNAVAILABLE\n' >"$tool_file"; tool_status=1; } ;;
+                    GET) /bin/busybox timeout -s KILL 4 /bin/busybox wget -S -q -T 3 $header_arg -O - "http://$tool_peer:8080$tool_path" >"$tool_file" 2>"$tool_file.hdr" || http_request_status_or_unavailable "$tool_file" ;;
+                    POST) /bin/busybox timeout -s KILL 4 /bin/busybox wget -S -q -T 3 $header_arg --post-data="$tool_body" -O - "http://$tool_peer:8080$tool_path" >"$tool_file" 2>"$tool_file.hdr" || http_request_status_or_unavailable "$tool_file" ;;
                 esac
+                /bin/busybox rm -f "$tool_file.hdr"
             fi
             ;;
         write_service_file)

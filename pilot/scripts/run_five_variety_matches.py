@@ -226,8 +226,8 @@ async def run_five_matches(args: argparse.Namespace) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--image", type=Path, default=Path("/var/lib/sandboxer/images/runner-alpine-3.24.1-r66.qcow2"))
-    parser.add_argument("--profile", type=Path, default=Path("/var/lib/sandboxer/images/runner-alpine-3.24.1-r66.profile.json"))
+    parser.add_argument("--image", type=Path, default=Path("/var/lib/sandboxer/images/runner-alpine-3.24.1-r67.qcow2"))
+    parser.add_argument("--profile", type=Path, default=Path("/var/lib/sandboxer/images/runner-alpine-3.24.1-r67.profile.json"))
     parser.add_argument("--batch-id", help="unique batch identifier")
     parser.add_argument("--runner-root", type=Path, default=Path("/var/lib/sandboxer/runners"))
     parser.add_argument("--evidence-dir", type=Path, default=Path("/var/lib/sandboxer/evidence"))

@@ -236,8 +236,8 @@ async def execute_private_series(args: argparse.Namespace) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--image", type=Path, default=Path("/var/lib/sandboxer/images/runner-alpine-3.24.1-r66.qcow2"))
-    parser.add_argument("--profile", type=Path, default=Path("/var/lib/sandboxer/images/runner-alpine-3.24.1-r66.profile.json"))
+    parser.add_argument("--image", type=Path, default=Path("/var/lib/sandboxer/images/runner-alpine-3.24.1-r67.qcow2"))
+    parser.add_argument("--profile", type=Path, default=Path("/var/lib/sandboxer/images/runner-alpine-3.24.1-r67.profile.json"))
     parser.add_argument("--series-id", help="unique series identifier")
     parser.add_argument("--seed-prefix", help="deterministic seed prefix for match seeds")
     parser.add_argument("--initial-order", choices=["random", "laguna_first", "muse_first"], default="random")
