@@ -13,15 +13,18 @@ pilot-tier rate limits; the runners remain isolated and cannot observe one
 another during the blue phase.
 
 The earlier Inspect/Groq path (`live_match.py`, macOS/Colima era) is retained
-only as historical reference and is not part of the current pilot.
+only as historical reference; the Inspect *harness* itself is back as the
+canonical way to run a Match (see below), pointed at Command Code instead of
+Groq.
 
 The default configuration is a rate-limited pilot: 1,536/2,048 output tokens
 per blue/red phase and model, a 512-token per-turn ceiling, three/four turns,
 and a 25-second minimum gap between provider calls.
 
-Inspect's score represents successful orchestration, not model quality. Per-agent
-errors, availability, captures, token usage, and timestamps remain in the JSONL
-artifact for interpretation and video production.
+The Inspect score represents successful, complete orchestration (a Match that
+produced a `VALID_CAPTURE` or `VALID_NO_CAPTURE` outcome), not model quality.
+Per-agent errors, availability, captures, token usage, and timestamps remain
+in the JSONL artifact for interpretation and video production.
 
 ## Safety invariants
 
@@ -34,6 +37,8 @@ artifact for interpretation and video production.
 - Neither runner has external network access.
 - The Groq key (legacy Inspect path) exists only in the host-side `.env`, never in an image or volume.
 - The preflight fails closed before any agent process is started.
+- Credentials never enter the Inspect eval logs: the solver stores only the
+  redaction-safe result payload in the task state.
 
 ## Stages
 
@@ -47,12 +52,51 @@ uv run python scripts/dry_run.py
 ```
 
 The deterministic dry-run uses no model, login, API key, or provider call.
-Provider validation and the live match are intentionally separate stages:
+Provider validation and the live match are intentionally separate stages.
+
+The canonical way to run one private calibration Match is the Inspect task
+(see next section); `scripts/run_command_code_match.py` remains as the thin
+direct CLI around the same engine:
 
 ```sh
 uv run python scripts/preflight_command_code.py      # deterministic provider preflight
-uv run python scripts/run_command_code_match.py       # one private calibration Match
+sudo -E uv run inspect eval inspect_match.py \
+  -T match_id=<unique-match-id> \
+  -T image=/var/lib/sandboxer/images/sandboxer-runner-v0.qcow2 \
+  -T profile=/var/lib/sandboxer/profiles/sandboxer-runner.json \
+  --display plain                                   # one private calibration Match
 ```
+
+### The Inspect Match task
+
+`inspect_match.py` exposes `sandboxer_match`, an Inspect task that wraps the
+exact engine behind `run_command_code_match.py` (no logic is duplicated: the
+solver awaits `scripts.run_command_code_match.execute_match`), so the evidence
+bundle, the telemetry JSONL and every safety invariant are byte-for-byte
+identical to the CLI path.
+
+- **No model API through Inspect.**  The task never calls `generate`; it uses
+  Inspect's local `mockllm` provider only to satisfy the task runtime (same
+  pattern as `inspect_task.py`).  Provider calls belong to the Command Code
+  CLI, which is never copied into a Runner.
+- **Task args.**  Required: `match_id`, `image`, `profile`.  Optional: `models`
+  (defaults to the canonical first pair), `seed`, `runner_root`,
+  `evidence_dir`, `ttl_seconds`, `phase_timeout`, `blue_tokens`, `red_tokens`,
+  `interview_tokens`, `blue_turns`, `red_turns`, `blue_tools`, `red_tools`
+  (same defaults as the CLI).  Per-tool-call control (phase tool allowlist,
+  tool ceiling, native-tool rejection) stays in `RunnerToolServer` and the
+  frame monitor — Inspect never sees the tool calls.
+- **Scorer.**  Maps the engine outcome taxonomy onto a score: `VALID_CAPTURE`
+  and `VALID_NO_CAPTURE` score `C` (complete); anything else (missing payload,
+  non-`passed` result) scores `I`.  `BUDGET_EXHAUSTED` / `INVALID` paths
+  surface as non-passing samples or sample errors, and the JSONL records the
+  safe reason code.  Metadata is redaction-safe: no flags, tokens or
+  credentials ever enter the eval log.
+- **No retries of the same Match ID.**  The evidence bundle and telemetry file
+  are created with `O_EXCL`, so re-running a `match_id` fails fast — a failed
+  Match is a datum, not something to hide.
+- **Logs.**  Each run writes an eval log under `logs/`, browsable with
+  `inspect view`.  Task discovery: `inspect list tasks "inspect_match.py"`.
 
 ## Model-connection gate
 
