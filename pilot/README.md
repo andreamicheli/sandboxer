@@ -4,19 +4,16 @@ This directory contains the disposable, local content-viability baseline for
 Sandboxer. It is the first real-model implementation from which subsequent
 iterations are developed.
 
-The pilot runs in a dedicated Colima VM with host-directory mounts disabled.
-Inside that VM, two bounded containers begin on distinct private networks.
-Inspect calls Groq from the host orchestrator in the legacy pilot; model
-credentials and provider network access are never passed into either runner.
-
 The current pilot compares two models under Command Code, the canonical initial
 provider for both Competitors; see
 [`../docs/provider-map.md`](../docs/provider-map.md). The first controlled pair is
 Laguna (`poolside/laguna-s-2.1-free`) versus Muse Spark Contributor
-(`meta/muse-spark-1.2-contributor`). The earlier Inspect/Groq path is retained
-only as historical reference.
-Provider calls are turn-based to respect pilot-tier rate limits; the runners
-remain isolated and cannot observe one another during the blue phase.
+(`meta/muse-spark-1.2-contributor`). Provider calls are turn-based to respect
+pilot-tier rate limits; the runners remain isolated and cannot observe one
+another during the blue phase.
+
+The earlier Inspect/Groq path (`live_match.py`, macOS/Colima era) is retained
+only as historical reference and is not part of the current pilot.
 
 The default configuration is a rate-limited pilot: 1,536/2,048 output tokens
 per blue/red phase and model, a 512-token per-turn ceiling, three/four turns,
@@ -28,8 +25,6 @@ artifact for interpretation and video production.
 
 ## Safety invariants
 
-- The macOS account must not be an administrator.
-- Colima must start with host mounts disabled (`--mount none`).
 - Compose may use named volumes, never bind mounts.
 - Agent containers are non-privileged, read-only at the root filesystem,
   capability-free, PID/memory/CPU bounded, and disconnected from a direct
@@ -43,32 +38,29 @@ artifact for interpretation and video production.
 ## Stages
 
 ```sh
-./scripts/runtime.sh start
 uv sync
 uv run python scripts/preflight.py
 docker compose build
 docker compose up -d
 uv run pytest
 uv run python scripts/dry_run.py
-uv run inspect eval inspect_task.py --model mockllm/model --display plain
-
-# Legacy Groq path (historical reference): after explicit approval and populating .env
-set -a && . ./.env && set +a
-uv run inspect eval live_match.py --model mockllm/model --display plain \
-  --log-dir artifacts/inspect-live --max-retries 0 --timeout 60
 ```
 
-Provider validation and the live match are intentionally separate stages. Never
-mount a macOS home directory.
+The deterministic dry-run uses no model, login, API key, or provider call.
+Provider validation and the live match are intentionally separate stages:
+
+```sh
+uv run python scripts/preflight_command_code.py      # deterministic provider preflight
+uv run python scripts/run_command_code_match.py       # one private calibration Match
+```
 
 ## Model-connection gate
 
-The deterministic dry-run uses no model, login, API key, or provider call.
-The Inspect smoke task uses its built-in local `mockllm` runtime but never
-calls `generate`; it wraps the same deterministic orchestration test.
-Real provider calls require the coherent two-part gate `model_mode: command_code`
-and `allow_provider_calls: true`. Authentication remains owned by the installed
-Command Code CLI and is never copied into a Runner.
+The deterministic dry-run and the provider preflight use no model, login, API
+key, or provider call. Real provider calls require the coherent two-part gate
+`model_mode: command_code` and `allow_provider_calls: true`. Authentication
+remains owned by the installed Command Code CLI and is never copied into a
+Runner.
 
 ## Broadcast handoff (TTS + YouTube)
 

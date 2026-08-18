@@ -19,11 +19,17 @@ This repository is intentionally built from the **real-model pilot**. The earlie
 
 The current goal is a compelling, transparent **showcase evaluation**, not a mature scientific benchmark. Claims must remain proportional to the evidence, and editorial outputs must stay traceable to timestamped match telemetry.
 
-## First real match
+## First controlled pair
 
-The initial pilot compared `openai/gpt-oss-120b` and `qwen/qwen3.6-27b` through the same harness. The match lasted 4m26s and ended 80–80: GPT-OSS 120B submitted first; Qwen 3.6 27B equalised 1m44s later.
+The first controlled series runs Laguna (`poolside/laguna-s-2.1-free`) against
+Muse Spark Contributor (`meta/muse-spark-1.2-contributor`), both served through
+the Command Code provider via a headless CLI adapter; see
+[`docs/provider-map.md`](docs/provider-map.md). Matches run in isolated Runner
+containers under a trusted Orchestrator; no provider credentials, personal
+files, or host mounts are ever exposed to the runners.
 
-No provider credentials, personal files, or host mounts were exposed to the runners.
+An earlier Inspect/Groq prototype (GPT-OSS 120B vs Qwen 3.6 27B, macOS/Colima
+era) is retained only in Git history and is not part of the current pilot.
 
 ## Run the pilot
 
