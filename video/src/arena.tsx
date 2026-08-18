@@ -67,6 +67,17 @@ const MONO = "'JetBrains Mono', 'Fira Code', 'SFMono-Regular', 'Consolas', monos
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const PARTICLE_COUNT = 20;
 
+/* Win-probability bar: each beat contributes head-to-head "momentum" that
+ * ramps in over MOMENTUM_RAMP frames.  Defense quality (builds), movement
+ * quality (attack activity) and outcomes (breach/block/partial) all count;
+ * the differential is mapped to a bounded probability with a logistic so the
+ * bar starts at 50/50 and leans toward whoever is ahead, never fully 0/100. */
+const WIN_BAR_HEIGHT = 48;
+const MOMENTUM_RAMP = 40;
+const WIN_K = 0.4;
+const WIN_FLOOR = 0.06;
+const WIN_CEIL = 0.94;
+
 const SLOT_X = (index: number, side: 'left' | 'right') =>
   side === 'left' ? 480 + index * 130 : 1440 - index * 130;
 
@@ -120,7 +131,7 @@ export const ArenaVisual: React.FC<{
   const { fps } = useVideoConfig();
   if (!plan) return null;
   const H = height;
-  const midY = H / 2;
+  const midY = (H - WIN_BAR_HEIGHT) / 2;
   const HOME = { left: { x: 180, y: midY }, right: { x: 1740, y: midY } };
   const [a, b] = identities;
 
@@ -152,6 +163,51 @@ export const ArenaVisual: React.FC<{
     const dur = b.duration_frames ?? 120;
     return { start, dur, end: start + dur };
   };
+
+  /* ---- win probability: momentum from defense quality, movement, attacks ---- */
+  const winProb = (() => {
+    let ma = 0;
+    let mb = 0;
+    for (const beat of plan.beats) {
+      const t = localTime(beat);
+      const progress = interpolate(frame, [t, t + MOMENTUM_RAMP], [0, 1], {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+        easing: Easing.inOut(Easing.quad),
+      });
+      let da = 0;
+      let db = 0;
+      if (beat.type === 'build') {
+        // defense quality: establishing a defense
+        const owner = plan.defenses.find((d) => d.id === beat.defense)?.competitor;
+        if (owner === a) da += 1.0;
+        else if (owner === b) db += 1.0;
+      } else {
+        const defender = plan.defenses.find((d) => d.id === beat.target)?.competitor;
+        // movement quality: every attack attempt signals activity
+        if (beat.attacker === a) da += 0.5;
+        else if (beat.attacker === b) db += 0.5;
+        if (beat.outcome === 'breached') {
+          if (beat.attacker === a) da += 2.0;
+          else if (beat.attacker === b) db += 2.0;
+          if (defender === a) da -= 0.5;
+          else if (defender === b) db -= 0.5;
+        } else if (beat.outcome === 'blocked') {
+          if (defender === a) da += 1.5;
+          else if (defender === b) db += 1.5;
+        } else if (beat.outcome === 'partial') {
+          if (beat.attacker === a) da += 1.0;
+          else if (beat.attacker === b) db += 1.0;
+        }
+      }
+      ma += da * progress;
+      mb += db * progress;
+    }
+    const diff = ma - mb;
+    const raw = 1 / (1 + Math.exp(-WIN_K * diff));
+    const probA = Math.min(WIN_CEIL, Math.max(WIN_FLOOR, raw));
+    return { probA, probB: 1 - probA };
+  })();
 
   const activeAttack = plan.beats.find((b) => {
     if (b.type !== 'attack') return false;
@@ -389,11 +445,101 @@ export const ArenaVisual: React.FC<{
       {defensesFor(a).map((d, i) => renderDefense(d, 'left', i))}
       {defensesFor(b).map((d, i) => renderDefense(d, 'right', i))}
       {renderAttack()}
+      {/* ---- win-probability bar (starts 50/50, tracks momentum) ---- */}
+      <div
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: WIN_BAR_HEIGHT,
+          boxSizing: 'border-box',
+          padding: '6px 16px 7px',
+          background: 'rgba(3,7,17,0.78)',
+          borderTop: '1px solid rgba(77,156,255,0.22)',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'baseline',
+            fontFamily: MONO,
+            marginBottom: 5,
+          }}
+        >
+          <span style={{ color: INK, fontSize: 12, letterSpacing: 2 }}>
+            {avatarBy(a)?.label ?? a}{' '}
+            <span style={{ color: accentA, fontWeight: 700 }}>{Math.round(winProb.probA * 100)}%</span>
+          </span>
+          <span style={{ color: DIM, fontSize: 10, letterSpacing: 4 }}>WIN PROBABILITY</span>
+          <span style={{ color: INK, fontSize: 12, letterSpacing: 2 }}>
+            <span style={{ color: accentB, fontWeight: 700 }}>{Math.round(winProb.probB * 100)}%</span>{' '}
+            {avatarBy(b)?.label ?? b}
+          </span>
+        </div>
+        <div
+          style={{
+            position: 'relative',
+            height: 14,
+            borderRadius: 3,
+            background: 'rgba(255,255,255,0.05)',
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: `${winProb.probA * 100}%`,
+              background: `linear-gradient(90deg, ${accentA}aa, ${accentA})`,
+              boxShadow: `0 0 12px ${accentA}88`,
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              right: 0,
+              top: 0,
+              bottom: 0,
+              width: `${winProb.probB * 100}%`,
+              background: `linear-gradient(270deg, ${accentB}aa, ${accentB})`,
+              boxShadow: `0 0 12px ${accentB}88`,
+            }}
+          />
+          {/* 50/50 reference tick */}
+          <div
+            style={{
+              position: 'absolute',
+              left: '50%',
+              top: 0,
+              bottom: 0,
+              width: 1,
+              background: 'rgba(240,238,231,0.4)',
+            }}
+          />
+          {/* current boundary */}
+          <div
+            style={{
+              position: 'absolute',
+              left: `${winProb.probA * 100}%`,
+              top: -2,
+              bottom: -2,
+              width: 2,
+              marginLeft: -1,
+              background: INK,
+              boxShadow: '0 0 8px rgba(240,238,231,0.9)',
+            }}
+          />
+        </div>
+      </div>
       {activeAttack && (
         <div
           style={{
             position: 'absolute',
-            bottom: 8,
+            bottom: WIN_BAR_HEIGHT + 8,
             left: '50%',
             transform: 'translateX(-50%)',
             color: activeAttack.outcome === 'breached' ? RED : CYAN,
