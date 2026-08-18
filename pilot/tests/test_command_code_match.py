@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,52 @@ def test_blue_prompt_includes_a_shared_non_prescriptive_seed_brief():
     assert "recovery_path" in prompt
     assert "recovery_posture" in prompt
     assert "header or public" in prompt
+
+
+def test_blue_prompt_route_examples_pass_the_spec_validator():
+    """Regression: the prompt's example routes must be accepted by the spec
+    validator, or models copying them verbatim fail deploy with
+    SERVICE_SPEC_PATH_INVALID (underscores are not allowed in route values)."""
+    import re
+
+    from sandboxer_v0.service_spec import parse_service_spec
+
+    brief = select_blue_briefs("calibration-seed", count=1)[0]
+    prompt = _blue_prompt(brief)
+    assert "app_health" not in prompt
+    assert "app-health" in prompt
+    examples = re.findall(r"/cgi-bin/service\.cgi\?route=[a-z0-9-]+", prompt)
+    assert len(examples) >= 4
+    spec = parse_service_spec(
+        json.dumps({
+            "schema_version": "sandboxer.service-spec.v1",
+            "health_path": examples[0],
+            "public_path": examples[1],
+            "protected_path": examples[2],
+            "protected_policy": "header",
+            "access_header": "X-Arena-Key",
+            "access_token": "valid-token-8chars",
+            "recovery_path": examples[3],
+            "recovery_posture": "header",
+        }),
+        brief=brief,
+    )
+    assert spec.graph_hash
+
+
+def test_deploy_service_error_surfaces_validation_reason_to_the_model():
+    """The deploy tool must return the ServiceSpecError reason (a public
+    validation category) so the model can self-correct instead of guessing."""
+    from scripts.run_command_code_match import _blue_prompt
+
+    # The informative error string lives in the deploy branch of execute();
+    # assert the source wiring exists so a silent regression is caught.
+    import inspect as pyinspect
+    import scripts.run_command_code_match as module
+
+    source = pyinspect.getsource(module)
+    assert "deployment rejected: {error}" in source
+    assert "ServiceSpecError" in source
 
 
 def test_monitor_allows_runner_tools_and_rejects_unallowlisted_provider_tools():
