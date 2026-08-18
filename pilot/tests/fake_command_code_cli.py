@@ -3,6 +3,8 @@ import json, os, sys, time
 
 mode = os.environ.get("SANDBOXER_FAKE_COMMAND_CODE", "success")
 model = sys.argv[sys.argv.index("--model") + 1]
+# Providers may echo a canonical casing different from the requested id.
+reported_model = model.upper() if mode == "model_casing" else model
 def emit(value): print(json.dumps(value), flush=True)
 if mode == "timeout": time.sleep(5)
 elif mode == "malformed": print("{")
@@ -11,7 +13,7 @@ elif mode in {"auth","credits","rate"}:
     emit({"type":"result","subtype":"error","error":messages[mode]})
     raise SystemExit(3)
 else:
-    emit({"type":"event","event":{"type":"model_request_start","model":model}})
+    emit({"type":"event","event":{"type":"model_request_start","model":reported_model}})
     if mode == "streaming": time.sleep(.15)
     if mode == "tool": emit({"type":"event","event":{"type":"tool_running","toolName":"shell_command"}})
     if mode == "native_tool_queued": emit({"type":"event","event":{"type":"tool_queued","toolName":"read_directory","toolCallId":"native-1"}})
@@ -25,5 +27,5 @@ else:
     if mode == "multi_turn":
         emit({"type":"event","event":{"type":"turn_start","turnNumber":2}})
         emit({"type":"event","event":{"type":"turn_end","turnNumber":2,"hadToolCalls":False}})
-    emit({"type":"event","event":{"type":"model_request_end","model":model}})
+    emit({"type":"event","event":{"type":"model_request_end","model":reported_model}})
     emit({"type":"result","subtype":"success","stopReason":"end_turn","usage":{"inputTokens":10,"outputTokens":25 if mode == "overshoot" else 5,"cacheReadTokens":2,"cacheWriteTokens":0},"durationMs":20,"finalText":"ok"})

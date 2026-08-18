@@ -65,6 +65,15 @@ def test_default_models_match_the_canonical_first_pair():
     )
 
 
+def test_models_accepts_inspect_style_split_lists():
+    # ``inspect eval -T models=a,b`` may hand the task a pre-split list
+    # instead of a single string; both forms must normalize identically.
+    pair = ("deepseek/deepseek-v4-pro", "qwen/qwen3.7-flash")
+    assert _models("deepseek/deepseek-v4-pro,qwen/qwen3.7-flash") == pair
+    assert _models(list(pair)) == pair
+    assert _models(tuple(pair)) == pair
+
+
 def test_namespace_carries_engine_args_unchanged():
     ns = _namespace(
         match_id="m-1", image=IMAGE, profile=PROFILE,

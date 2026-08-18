@@ -349,7 +349,11 @@ class CommandCodeAdapter:
             elif any(token in message for token in ("turn", "max turns")): code = "COMMAND_CODE_TURN_LIMIT"
             else: code = "COMMAND_CODE_PROVIDER_FAILURE"
             raise CommandCodeError(code)
-        if observed != {model}: raise CommandCodeError("COMMAND_CODE_MODEL_MISMATCH")
+        # Providers may echo a canonical casing (e.g. "Qwen/Qwen3.7-Flash" for
+        # a requested "qwen/qwen3.7-flash").  Match case-insensitively; a
+        # genuinely different model id still fails this check.
+        if {name.casefold() for name in observed} != {model.casefold()}:
+            raise CommandCodeError("COMMAND_CODE_MODEL_MISMATCH")
         if subtype not in {"success", "max_turns"} or exit_code != ({"success": 0, "max_turns": 8}[subtype]):
             raise CommandCodeError("COMMAND_CODE_PROVIDER_FAILURE")
         usage = result.get("usage")

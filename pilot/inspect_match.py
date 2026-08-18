@@ -40,7 +40,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from inspect_ai import Task, task
 from inspect_ai.dataset import Sample
@@ -62,8 +62,18 @@ DEFAULT_MODELS_STR = ",".join(DEFAULT_MODELS)
 COMPLETE_OUTCOMES = frozenset({"VALID_CAPTURE", "VALID_NO_CAPTURE"})
 
 
-def _models(value: str) -> tuple[str, str]:
-    models = tuple(model.strip() for model in value.split(",") if model.strip())
+def _models(value: str | Sequence[str]) -> tuple[str, str]:
+    """Normalize the models task argument to an exact two-model pair.
+
+    ``inspect eval -T`` may pass a comma-separated value either as a single
+    string (``-T models="a,b"``) or, depending on the CLI's argument parser,
+    as an already-split list; both forms are accepted here.
+    """
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",") if item.strip()]
+    else:
+        items = [str(item).strip() for item in value if str(item).strip()]
+    models = tuple(items)
     if len(models) != 2 or len(set(models)) != 2:
         raise ValueError(f"models must list exactly two distinct model IDs, got: {value!r}")
     return models

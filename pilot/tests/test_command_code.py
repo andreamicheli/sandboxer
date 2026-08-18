@@ -81,6 +81,14 @@ def test_named_matchup_stays_unschedulable_without_same_live_preflight():
 def test_multi_turn_continuation_is_counted():
     assert run("multi_turn").turn_count==2
 
+def test_provider_model_casing_is_not_treated_as_a_mismatch():
+    # A provider that echoes a canonical casing (e.g. Qwen/Qwen3.7-Flash for
+    # qwen/qwen3.7-flash) is the same model; only a genuinely different id
+    # should fail the identity check.
+    result = run("model_casing")
+    assert result.requested_model == "example/model"
+    assert result.observed_model == "EXAMPLE/MODEL"
+
 def test_allowlisted_runner_tool_is_preserved_not_rejected():
     assert "tool_running" in run("runner_tool").event_types
 
