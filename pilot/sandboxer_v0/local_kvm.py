@@ -449,6 +449,7 @@ class _RunnerRecord:
     deadline: float
     serial_evidence: str | None = None
     phase: Phase = Phase.BLUE
+    host_octet: int = 0
 
 
 @dataclass
@@ -646,7 +647,9 @@ class LocalKvmRunnerProvider:
         record = self._records.get(runner.runner_id)
         if record is None or record.handle != runner:
             raise RuntimeError("RUNNER_TOOL_RUNNER_UNKNOWN")
-        return record.ip_address
+        if not 11 <= record.host_octet <= 12:
+            raise RuntimeError("RUNNER_TOOL_ADDRESS_UNAVAILABLE")
+        return f"10.77.0.{record.host_octet}"
 
     def verified_submission(self, runner: RunnerHandle) -> str:
         try:
@@ -790,7 +793,7 @@ class LocalKvmRunnerProvider:
             response = self._control_exchange(control_socket, nonce)
             ready = self._parse_control(response, nonce, require_probe=False)
             handle = RunnerHandle(runner_id, name, ready.boot_id, ready.uid == 1001, True, True)
-            return _RunnerRecord(handle, match_id, blue_namespace, red_namespace, red_bridge, tap, root, workspace, control_socket, pid, process_identity, cgroup, ttl_token, nonce, time.monotonic() + self.config.ttl_seconds)
+            return _RunnerRecord(handle, match_id, blue_namespace, red_namespace, red_bridge, tap, root, workspace, control_socket, pid, process_identity, cgroup, ttl_token, nonce, time.monotonic() + self.config.ttl_seconds, host_octet=host_octet)
         except Exception as error:
             failures: list[str] = []
             if ttl_token is not None and not self._cancel_ttl(ttl_token):

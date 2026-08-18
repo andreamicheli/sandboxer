@@ -304,6 +304,19 @@ def test_local_kvm_provider_executes_tools_only_over_the_runner_control_channel(
             provider.destroy(runner)
 
 
+def test_local_kvm_provider_runner_address_matches_the_guest_network_octet(tmp_path: Path) -> None:
+    provider, host = configured_provider(tmp_path)
+    runners = provider.provision("address-match", ("deepseek", "mimo"))
+    try:
+        # The cloud-init metadata pins 10.77.0.11 / 10.77.0.12; the address
+        # is the same in Blue (isolated namespaces) and Red (shared bridge).
+        assert provider.runner_address(runners[0]) == "10.77.0.11"
+        assert provider.runner_address(runners[1]) == "10.77.0.12"
+    finally:
+        for runner in runners:
+            provider.destroy(runner)
+
+
 def test_local_kvm_provider_owns_flag_injection_and_submission_verification(tmp_path: Path) -> None:
     provider, host = configured_provider(tmp_path)
     runners = provider.provision("flag-match", ("deepseek", "mimo"))
