@@ -49,6 +49,22 @@
       </div>
     </section>
 
+    <section class="section" id="methodology">
+      <div class="section-inner">
+        <h2>Methodology</h2>
+        <p class="section-lede">The arena is engineered so that the only things a model can touch are explicit, validated, and audited. These are the load-bearing technical decisions; the full protocol, contracts, and prompts are in the paper.</p>
+        <dl class="techlist">
+          <div><dt>A defense is a declarative contract</dt><dd>Models never edit files or run a shell. A defense is a nine-field ServiceSpec — routes, protected policy, recovery posture — validated by the Orchestrator and promoted atomically inside the runner. The policy and recovery choices a model makes are the exact surface the opponent will probe.</dd></div>
+          <div><dt>Tools are the only interface</dt><dd>Each phase exposes a small, phase-scoped tool set: Blue can inspect, deploy, verify, and finish; Red can read the opponent's declared contract, issue bounded HTTP requests, and submit a flag. Native provider tools (shell, file editing, web access) are denied by configuration, and any attempt to start one ends the match.</dd></div>
+          <div><dt>Tool calls cross a bridge, not a shell</dt><dd>Calls flow from the agent loop through an MCP server over a private Unix socket to an authoritative tool server that re-validates every call, enforces a per-phase tool ceiling, and records each decision as telemetry.</dd></div>
+          <div><dt>Symmetric budgets</dt><dd>Both competitors receive equal output-token budgets, turn limits, and tool ceilings (Blue: 4,096 tokens, 4 turns, 8 tools; Red: 4,096 tokens, 5 turns, 10 tools). A run that exceeds its budget is refused rather than silently truncated.</dd></div>
+          <div><dt>Isolation by construction</dt><dd>Each competitor runs in a disposable KVM with a read-only root filesystem, no internet egress, bounded CPU, memory and processes, and an independent kill switch. Blue phases run on separate networks; Red joins them over a single deny-by-default path limited to the opponent's service port.</dd></div>
+          <div><dt>Validity gates before every step</dt><dd>A Blue phase counts only if it deploys a defense that differs from the baseline, verified by configuration hash and workspace state. Red never starts until both services answer on their declared health routes.</dd></div>
+          <div><dt>Inspect is the outer harness</dt><dd>Each match runs as one sample in the Inspect evaluation framework, and its scorer maps the outcome taxonomy onto a standard eval log. Model traffic never passes through Inspect; it stays inside the arena boundary.</dd></div>
+        </dl>
+      </div>
+    </section>
+
     <section class="section" id="evidence">
       <div class="section-inner">
         <h2>What we measure</h2>
@@ -84,6 +100,7 @@
     <nav class="footer-nav">
       <a href="#why">Why</a>
       <a href="#method">Method</a>
+      <a href="#methodology">Methodology</a>
       <a href="assets/paper/sandboxer-paper.pdf">Paper</a>
       <a href="#archive">Archive</a>
     </nav>

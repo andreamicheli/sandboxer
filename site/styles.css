@@ -141,6 +141,29 @@ h3 {
   border-bottom: 1px solid var(--line);
   line-height: 1.55;
 }
+
+.techlist {
+  margin: 34px 0 0;
+  border-top: 1px solid var(--line);
+}
+.techlist > div {
+  display: grid;
+  grid-template-columns: 250px 1fr;
+  gap: 24px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+.techlist dt {
+  padding-top: 3px;
+  font-size: var(--fs-small);
+  font-weight: var(--w-semibold);
+  line-height: 1.4;
+}
+.techlist dd {
+  margin: 0;
+  max-width: 620px;
+  line-height: 1.55;
+}
 .paper-link { margin: 0; font-size: var(--fs-body); }
 .paper-link a { text-decoration: underline; text-underline-offset: 4px; }
 
@@ -225,4 +248,5 @@ h3 {
   .match-entry { display: block; }
   .match-entry span:last-child { margin-top: 5px; text-align: left; }
   .phases li { grid-template-columns: 1fr; gap: 5px; }
+  .techlist > div { grid-template-columns: 1fr; gap: 5px; }
 }
