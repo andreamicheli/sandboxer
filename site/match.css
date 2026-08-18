@@ -1,6 +1,24 @@
 /* ------------------------------------------------------------------ */
-/*  SandBoxer — Match detail page (light theme, single ink)           */
+/*  SandBoxer: Match detail page (light theme, single ink)            */
 /* ------------------------------------------------------------------ */
+
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 24px;
+  margin-bottom: 26px;
+}
+
+.section-head h2 { margin-bottom: 0; }
+
+.section-head p {
+  max-width: 420px;
+  margin: 0;
+  font-size: var(--fs-caption);
+  line-height: 1.6;
+  text-align: right;
+}
 
 .match-hero {
   padding: clamp(40px, 6vw, 72px) var(--pad-narrow) clamp(48px, 7vw, 90px);
