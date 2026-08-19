@@ -192,6 +192,13 @@ Fill the broadcast env vars with `scripts/setup_credentials.py` (writes
   Alternatively `--flow local` (default) starts a loopback server on
   `--port 8080`; tunnel it from a machine that has a browser:
   `ssh -L 8080:localhost:8080 <user>@<this-host>`
+- **Orca Router key (Hermes agent)** — store the Nous Research API key into
+  the Hermes `.env` (`~/.hermes/.env`) so the `orcarouter` provider in
+  `config.yaml` can read it via `key_env`:
+  `uv run python scripts/setup_credentials.py orca --probe`
+  (prompts for the key, writes only masked output; `--probe` lists the
+  available models to validate the key).  Override the target env file with
+  `--env PATH`.
 
 Credential-free rehearsal (deterministic fake TTS, fake YouTube service):
 

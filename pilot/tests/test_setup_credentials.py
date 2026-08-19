@@ -34,6 +34,34 @@ def test_env_writer_updates_keys_preserves_others_and_chmods(tmp_path):
     assert env.read_text(encoding="utf-8").splitlines().count("GEMINI_API_KEY=newer") == 1
 
 
+def test_orca_writes_key_to_target_env_without_exposing_it(tmp_path, capsys):
+    from scripts.setup_credentials import _cmd_orca
+
+    class _Args:
+        key = "sk-orca-test1234567890abcdef"
+        probe = False
+        env = tmp_path / "hermes.env"
+
+    assert _cmd_orca(_Args()) == 0
+    lines = (tmp_path / "hermes.env").read_text(encoding="utf-8").splitlines()
+    assert "ORCAROUTER_API_KEY=sk-orca-test1234567890abcdef" in lines
+    out = capsys.readouterr().out
+    assert "sk-orca-test1234567890abcdef" not in out
+    assert "sk-o...cdef" in out
+
+
+def test_orca_rejects_missing_key():
+    from scripts.setup_credentials import _cmd_orca
+
+    class _Args:
+        key = None
+        probe = False
+        env = None
+
+    with mock.patch("builtins.input", return_value="  "):
+        assert _cmd_orca(_Args()) == 2
+
+
 def test_mask_never_exposes_full_secret():
     assert _mask("AIza0123456789") == "AIza...6789"
     assert _mask("short") == "*****"

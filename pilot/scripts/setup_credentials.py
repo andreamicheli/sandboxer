@@ -12,6 +12,15 @@ Fish Audio API key + voice reference_ids (from https://fish.audio):
     python scripts/setup_credentials.py fish --key <FISH_API_KEY> \\
         --voice-kore <ref> --voice-charon <ref> --probe
 
+Orca Router API key (Nous Research, for the Hermes agent on this host):
+
+    python scripts/setup_credentials.py orca --probe
+
+Writes ORCAROUTER_API_KEY into ~/.hermes/.env (chmod 600) so the
+``orcarouter`` custom provider in Hermes config.yaml can resolve it via
+``key_env``.  ``--probe`` lists the models available on the endpoint to
+validate the key.
+
 YouTube OAuth 2.0 login (Desktop-app client, captures a refresh token and
 verifies the authorized channel):
 
@@ -90,6 +99,39 @@ def _write_env(path: Path, updates: dict[str, str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(output) + "\n", encoding="utf-8")
     path.chmod(0o600)
+
+
+def _cmd_orca(args: argparse.Namespace) -> int:
+    """Store an Orca Router API key (Nous Research) into the Hermes .env."""
+    path = args.env or Path.home() / ".hermes" / ".env"
+    key = args.key or os.environ.get("ORCAROUTER_API_KEY")
+    if not key:
+        key = input("Paste your Orca Router API key (https://api.orcarouter.ai): ").strip()
+    if not key:
+        print("ORCAROUTER_KEY_MISSING: no API key provided", file=sys.stderr)
+        return 2
+    if not key.startswith("sk-orca"):
+        print(f"WARNING: key {_mask(key)} does not look like an Orca Router key (expected sk-orca...)", file=sys.stderr)
+    _write_env(path, {"ORCAROUTER_API_KEY": key})
+    print(f"Wrote ORCAROUTER_API_KEY ({_mask(key)}) to {path}")
+    if args.probe:
+        import json
+        import urllib.request
+        req = urllib.request.Request(
+            "https://api.orcarouter.ai/v1/models",
+            headers={"Authorization": f"Bearer {key}"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                body = json.loads(resp.read().decode())
+        except Exception as error:
+            print(f"ORCAROUTER_PROBE_FAILED: {type(error).__name__}: {error}", file=sys.stderr)
+            return 1
+        ids = [m.get("id") for m in body.get("data", []) if isinstance(m, dict)]
+        print(f"Orca Router probe ok: {len(ids)} models available")
+        for mid in ids[:8]:
+            print(f"  - {mid}")
+    return 0
 
 
 def _cmd_gemini(args: argparse.Namespace) -> int:
@@ -316,6 +358,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     fish.add_argument("--voice-charon", default=None, help="reference_id of the analyst voice (Charon)")
     fish.add_argument("--probe", action="store_true", help="Run one tiny real TTS synthesis to validate the key and voices")
     fish.add_argument("--env", type=Path, default=None)
+    orca = sub.add_parser("orca", help="Store the Orca Router API key (Nous Research) into the Hermes .env")
+    orca.add_argument("--key", default=None)
+    orca.add_argument("--probe", action="store_true", help="List available models to validate the key")
+    orca.add_argument("--env", type=Path, default=None, help="Target .env file (default: ~/.hermes/.env)")
     youtube = sub.add_parser("youtube", help="OAuth login to YouTube and store a refresh token")
     youtube.add_argument("--client-id", default=None)
     youtube.add_argument("--client-secret", default=None)
@@ -331,11 +377,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("  python scripts/setup_credentials.py gemini --key <AIza...> --probe")
         print("  python scripts/setup_credentials.py youtube --client-id <id> --client-secret <secret>")
         print("  python scripts/setup_credentials.py fish --key <key> --voice-kore <ref> --voice-charon <ref> --probe")
+        print("  python scripts/setup_credentials.py orca --key <sk-orca...> --probe   (writes ~/.hermes/.env)")
         return 2
     if args.command == "gemini":
         return _cmd_gemini(args)
     if args.command == "fish":
         return _cmd_fish(args)
+    if args.command == "orca":
+        return _cmd_orca(args)
     return _cmd_youtube(args)
 
 
