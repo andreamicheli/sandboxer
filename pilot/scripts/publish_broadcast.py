@@ -70,6 +70,7 @@ from sandboxer_v0.tts import (
     render_commentary_audio,
 )
 from sandboxer_v0.youtube import FakeYoutubeService, YoutubeError, YoutubeUploader, youtube_metadata
+from sandboxer_v0.video import validate_provenance
 
 
 def _confirm(action: str, yes: bool) -> None:
@@ -272,6 +273,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         tts_section = render_commentary_audio(manifest, adapter, out_dir=audio_dir)
     except (TtsError, ValueError) as error:
         raise SystemExit(f"TTS_FAILED: {error}") from error
+    # The broadcast record must identify the provider that actually produced
+    # the audio: requested (pre-synthesis config) and observed (call-time) are
+    # both recorded, and an inconsistent pair fails closed before upload.
+    tts_provenance = {
+        "requested": tts_section.get("requested"),
+        "observed": tts_section.get("observed"),
+        "tts_provider_drift": tts_section.get("tts_provider_drift", False),
+    }
+    problems = validate_provenance({"tts": {**manifest.get("tts", {}), **tts_provenance}})
+    if problems:
+        raise SystemExit(f"TTS_PROVENANCE_INVALID: {', '.join(problems)}")
 
     # 2. Site report (canonical + detailed LaTeX) staged from the frozen bundle.
     site_report = _build_site_report(args, manifest, publish_at)
@@ -333,6 +345,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "tts": {
             "model": tts_section["expected"]["model"],
             "models_used": tts_section.get("models_used", [tts_section["expected"]["model"]]),
+            "requested": tts_provenance["requested"],
+            "observed": tts_provenance["observed"],
+            "tts_provider_drift": tts_provenance["tts_provider_drift"],
             "voices": tts_section["voices"],
             "block_count": tts_section["block_count"],
             "blocks_hash": tts_section["blocks_hash"],

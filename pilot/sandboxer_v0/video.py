@@ -39,6 +39,80 @@ class TtsPreflight:
         if self!=observed: raise VideoError("TTS_PREFLIGHT_DRIFT")
 
 
+@dataclass(frozen=True)
+class TtsProvenance:
+    """One end of the TTS provenance pair: provider/model/voices.
+
+    ``requested`` is the configuration before synthesis; ``observed`` is what
+    the adapter actually used, recorded at call time.  A reviewer reading the
+    manifest must be able to tell which provider produced the audio without
+    trusting that the requested settings were honored.
+    """
+    provider:str
+    model:str
+    voices:tuple[str,...]
+
+
+def _provenance_view(value:Any)->dict[str,Any]|None:
+    """Normalize a provenance mapping for comparison (JSON round-trip safe).
+
+    JSON turns voice tuples into lists, and voice order is not semantic, so
+    voices are compared as sorted tuples of strings.
+    """
+    if not isinstance(value,Mapping) or not value: return None
+    return {"provider":str(value.get("provider","")),
+            "model":str(value.get("model","")),
+            "voices":tuple(sorted(str(voice) for voice in value.get("voices") or ()))}
+
+
+def provenance_drift(requested:Any,observed:Any)->bool:
+    """Whether the audio could not have come from the requested settings.
+
+    A different provider or model is drift, and so is any voice the request
+    never asked for.  A requested-but-unspoken voice is not drift: a short
+    episode may simply never reach the analyst role.
+    """
+    req=_provenance_view(requested)
+    obs=_provenance_view(observed)
+    if req is None or obs is None: return False
+    return (req["provider"]!=obs["provider"]
+            or req["model"]!=obs["model"]
+            or bool(set(obs["voices"])-set(req["voices"])))
+
+
+def tts_provenance_section(requested:TtsProvenance,observed:TtsProvenance)->dict[str,Any]:
+    """Build the manifest TTS provenance section with its drift flag."""
+    return {"requested":asdict(requested),"observed":asdict(observed),
+            "tts_provider_drift":provenance_drift(asdict(requested),asdict(observed))}
+
+
+def validate_provenance(manifest:Mapping[str,Any])->list[str]:
+    """Audit a manifest's TTS provenance; returns a list of problems.
+
+    Flags: observed section missing entirely, an empty observed model,
+    a drift flag set true while requested matches observed, or left false
+    while requested differs from observed.  An empty list means the
+    provenance is internally consistent and a reviewer can trust both halves.
+    """
+    tts=manifest.get("tts") if isinstance(manifest,Mapping) else None
+    if not isinstance(tts,Mapping): return ["TTS_PROVENANCE_SECTION_MISSING"]
+    problems:list[str]=[]
+    observed=_provenance_view(tts.get("observed"))
+    if observed is None:
+        problems.append("TTS_PROVENANCE_OBSERVED_MISSING")
+        return problems
+    if not observed["model"].strip():
+        problems.append("TTS_PROVENANCE_OBSERVED_MODEL_EMPTY")
+        return problems
+    drift=tts.get("tts_provider_drift")
+    differs=provenance_drift(tts.get("requested"),tts.get("observed"))
+    if drift is True and not differs:
+        problems.append("TTS_PROVENANCE_DRIFT_FLAG_INCONSISTENT")
+    elif not drift and differs:
+        problems.append("TTS_PROVENANCE_DRIFT_FLAG_UNSET")
+    return problems
+
+
 def tts_block(*,script:str,model:str,voice:str,style:Mapping[str,Any],audio:bytes,duration_ms:int)->dict[str,Any]:
     if not script.strip() or not audio or not 1<=duration_ms<=30_000: raise VideoError("TTS_BLOCK_INVALID")
     return {"script":script,"model":model,"voice":voice,"style":dict(style),"duration_ms":duration_ms,"script_hash":_digest({"script":script,"model":model,"voice":voice,"style":style}),"audio_sha256":hashlib.sha256(audio).hexdigest()}
@@ -264,5 +338,5 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
     match_lines=_schedule_commentary(commentary,budgets,scene_starts,fps,candidates,_narration())
     intro_lines=_schedule_intro_commentary(intro_commentary or (),budgets,scene_starts,fps,identities)
     scheduled=sorted(match_lines+intro_lines,key=lambda item:(item["start_frame"],item["end_frame"]))
-    manifest={"schema":"sandboxer.video-manifest.v1","fps":fps,"identities":identities,"source_bundle_hash":replay.get("source_bundle_hash"),"layout":{"split":{"left":.5,"right":.5,"permanent":True}},"timeline":timeline,"terminal":terminal,"scenes":scenes,"commentary":scheduled,"arena_visuals":dict(arena_visuals) if arena_visuals else None,"silence_allowed":True,"tts":{"expected":asdict(TtsPreflight("gemini-3.1-flash-tts-preview",("Kore","Charon"),"settings-v1")),"blocks":"bounded-and-hashed"},"qa":{"required":["alignment","clipping","noise","speaker_swaps","silence","pronunciation","factual_traceability","accessibility","licensing","decisive_cue_audibility"]},"composition":{"engine":"remotion","ffmpeg":["probe","loudness-normalize","mux","delivery-encode"]}}
+    manifest={"schema":"sandboxer.video-manifest.v1","fps":fps,"identities":identities,"source_bundle_hash":replay.get("source_bundle_hash"),"layout":{"split":{"left":.5,"right":.5,"permanent":True}},"timeline":timeline,"terminal":terminal,"scenes":scenes,"commentary":scheduled,"arena_visuals":dict(arena_visuals) if arena_visuals else None,"silence_allowed":True,"tts":{"expected":asdict(TtsPreflight("gemini-3.1-flash-tts-preview",("Kore","Charon"),"settings-v1")),"requested":asdict(TtsProvenance("gemini","gemini-3.1-flash-tts-preview",("Kore","Charon"))),"observed":None,"tts_provider_drift":False,"blocks":"bounded-and-hashed"},"qa":{"required":["alignment","clipping","noise","speaker_swaps","silence","pronunciation","factual_traceability","accessibility","licensing","decisive_cue_audibility"]},"composition":{"engine":"remotion","ffmpeg":["probe","loudness-normalize","mux","delivery-encode"]}}
     manifest["manifest_hash"]=_digest(manifest);return manifest

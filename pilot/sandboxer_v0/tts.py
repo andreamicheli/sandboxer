@@ -35,7 +35,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
-from .video import TtsPreflight, VideoError, tts_block
+from .video import TtsPreflight, TtsProvenance, VideoError, tts_block, tts_provenance_section
 
 PCM_RATE = 24_000
 PCM_CHANNELS = 1
@@ -264,6 +264,10 @@ class GeminiTtsAdapter:
         # Preferred model once a working one is found: avoids re-burning retry
         # time on an exhausted primary for every block of the same episode.
         self._preferred: str | None = None
+        # Provenance observed at call time (provider/model/voice actually used),
+        # appended by every successful synthesize(); never copied from config.
+        self.provider = "gemini"
+        self.observed_provenances: list[TtsProvenance] = []
 
     def _genai_client(self) -> Any:
         if self._client is not None:
@@ -381,16 +385,22 @@ class GeminiTtsAdapter:
         pcm = _audio_data(interaction)
         wav = _wav_bytes(pcm)
         duration_ms = _duration_ms(wav)
+        actual_model = used_model or self.model
+        # Observed provenance comes from the config that actually succeeded on
+        # this call (the accepted chain entry), never from the requested one.
+        self.observed_provenances.append(
+            TtsProvenance(provider=self.provider, model=actual_model, voices=(voice,))
+        )
         record = tts_block(
             script=script,
-            model=used_model or self.model,
+            model=actual_model,
             voice=voice,
             style=style,
             audio=wav,
             duration_ms=duration_ms,
         )
         return TtsBlockResult(
-            script=script, model=used_model or self.model, voice=voice, style=dict(style),
+            script=script, model=actual_model, voice=voice, style=dict(style),
             audio=wav, duration_ms=duration_ms, record=record,
         )
 
@@ -434,6 +444,9 @@ class FishAudioTtsAdapter:
         # A non-Gemini provider is a deliberate substitution from the
         # manifest-pinned contract, so it surfaces as an approved drift.
         self.allow_fallback = allow_fallback
+        # Provenance observed at call time; never copied from config.
+        self.provider = "fish"
+        self.observed_provenances: list[TtsProvenance] = []
 
     def _request(self, text: str, reference_id: str) -> bytes:
         """One TTS request: injected client in tests, stdlib HTTP otherwise."""
@@ -513,6 +526,11 @@ class FishAudioTtsAdapter:
         prompt = script
         wav = self._synthesize_audio(prompt, reference_id)
         duration_ms = _duration_ms(wav)
+        # Observed provenance comes from the request that actually ran (this
+        # adapter's single model + header), never from the pinned contract.
+        self.observed_provenances.append(
+            TtsProvenance(provider=self.provider, model=self.model, voices=(voice,))
+        )
         record = tts_block(
             script=script, model=self.model, voice=voice, style=style,
             audio=wav, duration_ms=duration_ms,
@@ -535,6 +553,7 @@ class FakeTtsAdapter:
         ms_per_char: int = 80,
         min_ms: int = 300,
         max_ms: int = 30_000,
+        provider: str = "fake",
     ) -> None:
         self.model = model
         self.voices = tuple(voices)
@@ -543,6 +562,9 @@ class FakeTtsAdapter:
         self.min_ms = min_ms
         self.max_ms = max_ms
         self.calls: list[dict[str, Any]] = []
+        # Provenance observed at call time; never copied from config.
+        self.provider = provider
+        self.observed_provenances: list[TtsProvenance] = []
 
     def preflight(self, expected: TtsPreflight) -> TtsPreflightResult:
         return TtsPreflightResult(
@@ -569,6 +591,9 @@ class FakeTtsAdapter:
             pcm += struct.pack("<h", stream[position] * 127)
             position += 1
         wav = _wav_bytes(bytes(pcm))
+        self.observed_provenances.append(
+            TtsProvenance(provider=self.provider, model=self.model, voices=(voice,))
+        )
         record = tts_block(
             script=script, model=self.model, voice=voice, style=style,
             audio=wav, duration_ms=duration_ms,
@@ -642,6 +667,22 @@ def render_commentary_audio(
         allow_fallback=getattr(adapter, "allow_fallback", False)
     )
     mapping = dict(voice_by_role or VOICE_BY_ROLE)
+    # Requested provenance is the manifest contract pinned BEFORE synthesis
+    # (the ``tts.requested`` section written by the builder).  Compared against
+    # observed below, it is what makes provider or model substitutions visible
+    # to a reviewer; adapters only ever fill in observed.
+    pinned = manifest["tts"].get("requested") if isinstance(manifest["tts"], Mapping) else None
+    if isinstance(pinned, Mapping) and pinned.get("provider") and pinned.get("model"):
+        requested = TtsProvenance(
+            provider=str(pinned["provider"]),
+            model=str(pinned["model"]),
+            voices=tuple(str(v) for v in pinned.get("voices") or mapping.values()),
+        )
+    else:
+        requested = TtsProvenance(
+            provider="gemini", model=expected.model,
+            voices=tuple(expected.voices) or tuple(mapping.values()),
+        )
     lines = list(manifest.get("commentary", ()))
     if any(line.get("voice_role") not in mapping for line in lines):
         raise TtsError("TTS_ROLE_UNMAPPED")
@@ -706,8 +747,25 @@ def render_commentary_audio(
         recap_start=sum(scene["duration_frames"] for scene in manifest["scenes"][:-1])
         if blocks[-1]["end_frame"]>recap_start: raise TtsError("COMMENTARY_OVERFLOW_AFTER_RENDER")
     blocks_hash = _digest([block["script_hash"] for block in blocks])
+    # Observed provenance: aggregated from the audio actually present.  Models
+    # come from every block record (sidecars included for resumed renders), so
+    # an approved fallback shows up as drift; voices keep first-seen order.
+    call_time = list(getattr(adapter, "observed_provenances", ()) or ())
+    providers = sorted({item.provider for item in call_time})
+    if len(providers) > 1:
+        raise TtsError(f"TTS_PROVIDER_MIXED: {providers}")
+    observed_provider = providers[0] if providers else str(getattr(adapter, "provider", "unknown"))
+    observed_models = sorted(models_used)
+    observed = TtsProvenance(
+        provider=observed_provider,
+        # A mixed-model episode (approved fallback chain) joins its models so
+        # the single-string field still shows every engine behind the audio.
+        model=",".join(observed_models),
+        voices=tuple(dict.fromkeys(str(block["voice"]) for block in blocks)),
+    )
     return {
         "expected": asdict(expected),
+        **tts_provenance_section(requested, observed),
         "voices": dict(mapping),
         "blocks": blocks,
         "block_count": len(blocks),

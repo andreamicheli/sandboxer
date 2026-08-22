@@ -45,7 +45,7 @@ from sandboxer_v0.tts import (
     parse_voice_spec,
     render_commentary_audio,
 )
-from sandboxer_v0.video import _digest
+from sandboxer_v0.video import _digest, validate_provenance
 
 ROOT = Path(__file__).resolve().parent.parent.parent / "artifacts"
 RATE = 24_000
@@ -145,6 +145,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     print(f"rendered {section['block_count']} blocks (hash {section['blocks_hash'][:12]}, "
           f"models_used={section['models_used']})")
+
+    # Rewrite the manifest TTS section with the requested/observed provenance
+    # pair plus the drift flag, so the artifact records which provider really
+    # produced the audio (not just what was pinned before synthesis).
+    manifest["tts"]["requested"] = section["requested"]
+    manifest["tts"]["observed"] = section["observed"]
+    manifest["tts"]["tts_provider_drift"] = section["tts_provider_drift"]
+    problems = validate_provenance(manifest)
+    if problems:
+        print(f"TTS_PROVENANCE_INVALID: {', '.join(problems)}", file=sys.stderr)
+        return 2
+    print(f"tts provenance: requested={section['requested']['provider']}/{section['requested']['model']} "
+          f"observed={section['observed']['provider']}/{section['observed']['model']} "
+          f"drift={section['tts_provider_drift']}")
 
     # Persist the actual-duration-packed schedule back into the manifest so
     # captions and the Remotion caption bar stay in sync with the audio.
