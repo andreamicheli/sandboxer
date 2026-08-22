@@ -11,6 +11,7 @@ import {
   useVideoConfig,
 } from 'remotion';
 import { ArenaVisual, type ArenaPlan } from './arena';
+import { accentOf } from './logos';
 
 /* ------------------------------------------------------------------ */
 /* Brand: deep navy-black, electric cobalt, monospace, CRT texture.    */
@@ -21,17 +22,10 @@ const NAVY_2 = '#050b18';
 const PANEL = '#071b35';
 const COBALT = '#4d9cff';
 const AMBER = '#f1782c';
-const VIOLET = '#9a65e8';
-const MUSE_BLUE = '#58a9ff';
 const INK = '#f0eee7';
 const DIM = '#8a97ad';
 const RED = '#ff4d5e';
 const CYAN = '#38e1c8';
-
-const ACCENTS: Record<string, string> = {
-  'Laguna S 2.1': VIOLET,
-  'Muse Spark 1.2': MUSE_BLUE,
-};
 
 const MONO =
   "'JetBrains Mono', 'Fira Code', 'SFMono-Regular', 'Consolas', 'Courier New', monospace";
@@ -69,6 +63,12 @@ type CommentaryLine = {
   provenance?: string;
 };
 
+type InterviewEntry = {
+  competitor: string;
+  text: string;
+  event_ids: string[];
+};
+
 type Manifest = {
   schema: string;
   fps: number;
@@ -77,6 +77,7 @@ type Manifest = {
   scenes: Scene[];
   commentary: CommentaryLine[];
   terminal?: TerminalEvent[];
+  interviews?: InterviewEntry[];
   arena_visuals?: ArenaPlan | null;
 };
 
@@ -201,6 +202,42 @@ const ColdOpen: React.FC = () => {
 };
 
 /* ------------------------------------------------------------------ */
+/* Phase cards: brief centered title cards between editorial blocks     */
+/* ------------------------------------------------------------------ */
+
+const PhaseCard: React.FC<{ label: string }> = ({ label }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const inP = spring({ frame, fps, config: { damping: 14 } });
+  const outP = interpolate(frame, [fps * 2.2 - 14, fps * 2.2], [1, 0], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
+  return (
+    <AbsoluteFill style={{ background: NAVY }}>
+      <Grid />
+      <Chrome showTimestamp={false} />
+      <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center', textAlign: 'center' }}>
+        <div
+          style={{
+            color: INK,
+            fontFamily: MONO,
+            fontWeight: 700,
+            fontSize: 54,
+            letterSpacing: 10,
+            textShadow: `0 0 30px ${COBALT}, 0 0 6px ${COBALT}`,
+            opacity: inP * outP,
+            transform: `translateY(${interpolate(inP, [0, 1], [30, 0])}px)`,
+          }}
+        >
+          // {label} //
+        </div>
+      </AbsoluteFill>
+    </AbsoluteFill>
+  );
+};
+
+/* ------------------------------------------------------------------ */
 /* Scene 2: model cards + rules                                        */
 /* ------------------------------------------------------------------ */
 
@@ -221,29 +258,14 @@ const BenchmarkBars: React.FC<{ scene: Scene }> = ({ scene }) => {
               {row.benchmark}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div
-                style={{
-                  height: 10,
-                  flex: 1,
-                  background: 'rgba(255,255,255,0.06)',
-                  borderRadius: 2,
-                  overflow: 'hidden',
-                }}
-              >
-                <div
-                  style={{
-                    width: `${lv * 100 * grow}%`,
-                    height: '100%',
-                    background: ACCENTS[left] ?? COBALT,
-                    boxShadow: `0 0 10px ${ACCENTS[left] ?? COBALT}`,
-                  }}
-                />
-              </div>
               <span style={{ color: INK, fontFamily: MONO, fontSize: 14, width: 42, textAlign: 'right' }}>
                 {Math.round(lv * 100)}%
               </span>
+              {/* Single center axis at the 50% mark: left model grows leftward
+                  from center, right model grows rightward from center. */}
               <div
                 style={{
+                  position: 'relative',
                   height: 10,
                   flex: 1,
                   background: 'rgba(255,255,255,0.06)',
@@ -253,11 +275,36 @@ const BenchmarkBars: React.FC<{ scene: Scene }> = ({ scene }) => {
               >
                 <div
                   style={{
+                    position: 'absolute',
+                    left: '50%',
+                    top: 0,
+                    bottom: 0,
+                    width: 1,
+                    background: 'rgba(240,238,231,0.35)',
+                  }}
+                />
+                <div
+                  style={{
+                    position: 'absolute',
+                    right: '50%',
+                    top: 0,
+                    bottom: 0,
+                    width: `${lv * 100 * grow}%`,
+                    transformOrigin: 'right',
+                    background: accentOf(left, COBALT),
+                    boxShadow: `0 0 10px ${accentOf(left, COBALT)}`,
+                  }}
+                />
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: '50%',
+                    top: 0,
+                    bottom: 0,
                     width: `${rv * 100 * grow}%`,
-                    height: '100%',
-                    background: ACCENTS[right] ?? AMBER,
-                    boxShadow: `0 0 10px ${ACCENTS[right] ?? AMBER}`,
-                    marginLeft: 'auto',
+                    transformOrigin: 'left',
+                    background: accentOf(right, AMBER),
+                    boxShadow: `0 0 10px ${accentOf(right, AMBER)}`,
                   }}
                 />
               </div>
@@ -327,8 +374,8 @@ const ModelCardsAndRules: React.FC<{ scene: Scene }> = ({ scene }) => {
           // COMPETITORS
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <ModelCard name={a} meta={scene.metadata?.[a] ?? {}} accent={ACCENTS[a] ?? COBALT} side="left" />
-          <ModelCard name={b} meta={scene.metadata?.[b] ?? {}} accent={ACCENTS[b] ?? AMBER} side="right" />
+          <ModelCard name={a} meta={scene.metadata?.[a] ?? {}} accent={accentOf(a, COBALT)} side="left" />
+          <ModelCard name={b} meta={scene.metadata?.[b] ?? {}} accent={accentOf(b, AMBER)} side="right" />
         </div>
         <BenchmarkBars scene={scene} />
         <div
@@ -442,7 +489,7 @@ const CaptionBar: React.FC<{ manifest: Manifest; localBase: number; bottom?: num
         opacity: p,
       }}
     >
-      <span style={{ color: ACCENTS[line.model] ?? COBALT, marginRight: 10 }}>{line.voice_role === 'analyst' ? '△' : '▸'}</span>
+      <span style={{ color: accentOf(line.model, COBALT), marginRight: 10 }}>{line.voice_role === 'analyst' ? '△' : '▸'}</span>
       {line.text}
     </div>
   );
@@ -484,9 +531,9 @@ const MatchScene: React.FC<{ manifest: Manifest; scene: Scene; localBase: number
         {redActive ? '● RED PHASE — ATTACK' : '◉ BLUE PHASE — DEFENSE'}
       </div>
       <div style={{ position: 'absolute', top: 46, left: 0, right: 0, bottom: arenaHeight, display: 'flex', flexDirection: 'row' }}>
-        <TerminalPane name={a} accent={ACCENTS[a] ?? COBALT} events={left} localBase={localBase} />
+        <TerminalPane name={a} accent={accentOf(a, COBALT)} events={left} localBase={localBase} />
         <div style={{ width: 2, background: 'rgba(77,156,255,0.25)' }} />
-        <TerminalPane name={b} accent={ACCENTS[b] ?? AMBER} events={right} localBase={localBase} />
+        <TerminalPane name={b} accent={accentOf(b, AMBER)} events={right} localBase={localBase} />
       </div>
       {arena && (
         <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: arenaHeight, zIndex: 3 }}>
@@ -510,6 +557,59 @@ const MatchScene: React.FC<{ manifest: Manifest; scene: Scene; localBase: number
 };
 
 /* ------------------------------------------------------------------ */
+/* Scene: fullscreen post-match interviews                              */
+/* ------------------------------------------------------------------ */
+
+const InterviewScreen: React.FC<{ manifest: Manifest; scene: Scene }> = ({ manifest, scene }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const entries = (manifest.interviews ?? []).filter((entry) =>
+    entry.event_ids.some((id) => scene.event_ids.includes(id)),
+  );
+  if (entries.length === 0) return null;
+  const slotFrames = Math.max(fps * 4, Math.floor(scene.duration_frames / entries.length));
+  const index = Math.min(entries.length - 1, Math.floor(frame / slotFrames));
+  const { competitor, text } = entries[index];
+  const accent = accentOf(competitor, COBALT);
+  const inP = spring({ frame: frame - index * slotFrames, fps, config: { damping: 16 } });
+  return (
+    <AbsoluteFill style={{ background: NAVY }}>
+      <Grid />
+      <Chrome />
+      <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center' }}>
+        <div
+          style={{
+            width: '100%',
+            maxWidth: 1200,
+            padding: '56px 64px',
+            background: PANEL,
+            border: `1px solid ${accent}44`,
+            boxShadow: `0 0 44px ${accent}22, inset 0 0 30px ${accent}0d`,
+            opacity: inP,
+          }}
+        >
+          <div style={{ color: accent, fontFamily: MONO, fontSize: 16, letterSpacing: 4, marginBottom: 14 }}>
+            ▣ POST-MATCH INTERVIEW · {competitor}
+          </div>
+          <div
+            style={{
+              color: INK,
+              fontFamily: MONO,
+              fontWeight: 600,
+              fontSize: 36,
+              lineHeight: 1.7,
+              textShadow: `0 0 18px ${accent}55`,
+            }}
+          >
+            “{text}”
+          </div>
+        </div>
+      </AbsoluteFill>
+    </AbsoluteFill>
+  );
+};
+
+/* ------------------------------------------------------------------ */
 /* Scene 4: factual recap                                              */
 /* ------------------------------------------------------------------ */
 
@@ -517,7 +617,7 @@ const FactualRecap: React.FC<{ scene: Scene; manifest: Manifest }> = ({ scene, m
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const winner = scene.winner;
-  const accent = winner ? ACCENTS[winner] ?? COBALT : COBALT;
+  const accent = winner ? accentOf(winner, COBALT) : COBALT;
   const inP = spring({ frame, fps, config: { damping: 14 } });
   const basis = scene.outcome_basis ?? '';
   return (
@@ -567,11 +667,16 @@ const FactualRecap: React.FC<{ scene: Scene; manifest: Manifest }> = ({ scene, m
 
 export const SeriesVideo: React.FC<{ manifest: Manifest }> = ({ manifest }) => {
   const frame = useCurrentFrame();
-  const coldOpenFrames = manifest.scenes[0]?.duration_frames ?? 0;
-  const modelCardsFrames = manifest.scenes[1]?.duration_frames ?? 0;
-  const matchStart = coldOpenFrames + modelCardsFrames;
   const arenaHeight = manifest.arena_visuals ? 280 : 0;
-  const captionBottom = frame >= matchStart ? arenaHeight + 16 : 64;
+  // Captions hug the terminals during match action; everywhere else (cards,
+  // fullscreen interviews, recap) they sit at the standard bottom bar.
+  let cursor = 0;
+  let inMatch = false;
+  for (const scene of manifest.scenes) {
+    if (frame >= cursor && frame < cursor + scene.duration_frames) inMatch = scene.type === 'match';
+    cursor += scene.duration_frames;
+  }
+  const captionBottom = inMatch ? arenaHeight + 16 : 64;
   let at = 0;
   return (
     <AbsoluteFill style={{ background: NAVY }}>
@@ -582,6 +687,9 @@ export const SeriesVideo: React.FC<{ manifest: Manifest }> = ({ manifest }) => {
           <Sequence key={`${scene.type}-${index}`} from={from} durationInFrames={scene.duration_frames}>
             {scene.type === 'cold_open' && <ColdOpen />}
             {scene.type === 'model_cards_and_rules' && <ModelCardsAndRules scene={scene} />}
+            {scene.type === 'interview_card' && <PhaseCard label="POST-MATCH INTERVIEWS" />}
+            {scene.type === 'red_phase_card' && <PhaseCard label="RED PHASE — ATTACK ROUND" />}
+            {scene.type === 'interviews' && <InterviewScreen manifest={manifest} scene={scene} />}
             {scene.type === 'match' && <MatchScene manifest={manifest} scene={scene} localBase={from} />}
             {scene.type === 'factual_recap' && <FactualRecap scene={scene} manifest={manifest} />}
             {scene.type === 'intermission' && (

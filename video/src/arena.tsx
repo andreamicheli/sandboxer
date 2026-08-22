@@ -78,11 +78,34 @@ const WIN_K = 0.4;
 const WIN_FLOOR = 0.06;
 const WIN_CEIL = 0.94;
 
-const SLOT_X = (index: number, side: 'left' | 'right') =>
-  side === 'left' ? 480 + index * 130 : 1440 - index * 130;
+/* ---- per-side defense layout -------------------------------------- */
+/* Defenses are laid out per side from the count of artifacts plus the
+ * avatar home: slots start near the center line and march toward the
+ * avatar at a fixed full-size pitch.  When that row would overrun the
+ * span between the center line (960) and the avatar home (180 / 1740),
+ * the whole arena content is scaled down by a deterministic factor so
+ * everything shrinks instead of overlapping. */
+const CANVAS_W = 1920;
+const CENTER_X = CANVAS_W / 2;
+const HOME_X = { left: 180, right: 1740 };
+const SIDE_SPAN = CENTER_X - HOME_X.left; // 780px on both sides
+const SHAPE_BASE = 96;
+const HALF_SHAPE = SHAPE_BASE / 2;
+const DEFENSE_STEP = 150; // pitch between neighbouring defense centers
+const FIRST_SLOT_OFFSET = 140; // first slot distance from the center line
+const AVATAR_CLEARANCE = 72; // breathing room before the avatar badge
 
-const shapeStyle = (shape: string, color: string): React.CSSProperties => {
-  const base: React.CSSProperties = { width: 96, height: 96, background: color, border: `1px solid ${color}` };
+const slotX = (index: number, side: 'left' | 'right') => {
+  const dist = FIRST_SLOT_OFFSET + index * DEFENSE_STEP;
+  return side === 'left' ? CENTER_X - dist : CENTER_X + dist;
+};
+
+/* Span from the center line toward the avatar home needed by n defenses. */
+const spanNeeded = (count: number) =>
+  count > 0 ? FIRST_SLOT_OFFSET + (count - 1) * DEFENSE_STEP + HALF_SHAPE + AVATAR_CLEARANCE : 0;
+
+const shapeStyle = (shape: string, color: string, size = SHAPE_BASE): React.CSSProperties => {
+  const base: React.CSSProperties = { width: size, height: size, background: color, border: `1px solid ${color}` };
   switch (shape) {
     case 'sphere':
       return { ...base, borderRadius: '50%', background: `radial-gradient(circle at 35% 30%, ${color}cc, ${color}55)` };
@@ -144,6 +167,13 @@ export const ArenaVisual: React.FC<{
   const accentB = accentOf(b, '#58a9ff');
 
   const defensesFor = (name: string) => plan.defenses.filter((d) => d.competitor === name);
+
+  /* Global zoom-out factor: the tighter side dictates how much the whole
+   * arena shrinks (1 = natural size).  Deterministic in the defense counts. */
+  const fitScale = Math.min(
+    1,
+    SIDE_SPAN / Math.max(spanNeeded(defensesFor(a).length), spanNeeded(defensesFor(b).length), 1),
+  );
 
   const localTime = (beat: { event_ids?: string[]; start_frame: number }) => {
     if (beat.event_ids?.length) {
@@ -217,10 +247,10 @@ export const ArenaVisual: React.FC<{
 
   const targetPosition = (attack: ArenaBeat) => {
     const target = plan.defenses.find((d) => d.id === attack.target);
-    if (!target) return { x: 0, y: midY };
+    if (!target) return { x: CENTER_X, y: midY };
     const side = attack.attacker === a ? 'right' : 'left';
     const tIndex = defensesFor(target.competitor).findIndex((d) => d.id === target.id);
-    return { x: SLOT_X(Math.max(tIndex, 0), side), y: midY };
+    return { x: slotX(Math.max(tIndex, 0), side), y: midY };
   };
 
   /* ---- avatar (logo badge, with legacy shape fallback) ---- */
@@ -305,7 +335,8 @@ export const ArenaVisual: React.FC<{
 
   /* ---- defense artifact ---- */
   const renderDefense = (d: ArenaDefense, side: 'left' | 'right', index: number) => {
-    const x = SLOT_X(index, side);
+    const x = slotX(index, side);
+    const size = SHAPE_BASE * fitScale;
     const built = buildTime(d);
     const p = spring({ frame: frame - built, fps, config: { damping: 13, mass: 0.7, stiffness: 120 } });
     const isTarget = activeAttack?.target === d.id;
@@ -329,8 +360,8 @@ export const ArenaVisual: React.FC<{
         key={d.id}
         style={{
           position: 'absolute',
-          left: x - 48,
-          top: midY - 48,
+          left: x - size / 2,
+          top: midY - size / 2,
           opacity: p,
           transform: `scale(${p}) translateX(${shake}px)`,
           display: 'flex',
@@ -338,7 +369,7 @@ export const ArenaVisual: React.FC<{
           alignItems: 'center',
         }}
       >
-        <div style={{ ...shapeStyle(d.shape, color), boxShadow: isTarget ? `0 0 26px ${flash}` : undefined }} />
+        <div style={{ ...shapeStyle(d.shape, color, size), boxShadow: isTarget ? `0 0 26px ${flash}` : undefined }} />
         <div style={{ color: DIM, fontFamily: MONO, fontSize: 13, marginTop: 10, letterSpacing: 1 }}>{d.label}</div>
       </div>
     );
@@ -434,17 +465,29 @@ export const ArenaVisual: React.FC<{
         overflow: 'hidden',
       }}
     >
-      <svg width="1920" height={H} style={{ position: 'absolute', inset: 0 }}>
-        <line x1={960} y1={20} x2={960} y2={H - 20} stroke="rgba(77,156,255,0.18)" strokeDasharray="3 6" />
-      </svg>
-      <div style={{ position: 'absolute', top: 10, left: 20, color: DIM, fontFamily: MONO, fontSize: 12, letterSpacing: 3 }}>
-        ARENA · {a.toUpperCase()} <span style={{ color: accentA }}>◈</span> vs <span style={{ color: accentB }}>◈</span> {b.toUpperCase()}
+      {/* Arena content scales down uniformly (origin = canvas centre) when
+          either side's defense row outgrows its span; the win bar below
+          stays unscaled. */}
+      <div
+        style={{
+          position: 'absolute',
+          inset: 0,
+          transform: `scale(${fitScale})`,
+          transformOrigin: '50% 50%',
+        }}
+      >
+        <svg width="1920" height={H} style={{ position: 'absolute', inset: 0 }}>
+          <line x1={960} y1={20} x2={960} y2={H - 20} stroke="rgba(77,156,255,0.18)" strokeDasharray="3 6" />
+        </svg>
+        <div style={{ position: 'absolute', top: 10, left: 20, color: DIM, fontFamily: MONO, fontSize: 12, letterSpacing: 3 }}>
+          ARENA · {a.toUpperCase()} <span style={{ color: accentA }}>◈</span> vs <span style={{ color: accentB }}>◈</span> {b.toUpperCase()}
+        </div>
+        {renderAvatar(a, HOME.left, accentA)}
+        {renderAvatar(b, HOME.right, accentB)}
+        {defensesFor(a).map((d, i) => renderDefense(d, 'left', i))}
+        {defensesFor(b).map((d, i) => renderDefense(d, 'right', i))}
+        {renderAttack()}
       </div>
-      {renderAvatar(a, HOME.left, accentA)}
-      {renderAvatar(b, HOME.right, accentB)}
-      {defensesFor(a).map((d, i) => renderDefense(d, 'left', i))}
-      {defensesFor(b).map((d, i) => renderDefense(d, 'right', i))}
-      {renderAttack()}
       {/* ---- win-probability bar (starts 50/50, tracks momentum) ---- */}
       <div
         style={{

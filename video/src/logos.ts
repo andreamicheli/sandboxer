@@ -64,5 +64,13 @@ export const logoOf = (identity: string): LogoSpec | null => {
   return brand ? LOGOS[brand] ?? null : null;
 };
 
+/**
+ * Brand accent colour for a competitor identity, taken straight from the
+ * LOGOS registry so every scene (cards, bars, captions, arena) shares one
+ * source of truth.  Unknown identities fall back to the caller's colour.
+ */
+export const accentOf = (identity: string | undefined, fallback: string): string =>
+  (identity ? logoOf(identity)?.accent : null) ?? fallback;
+
 /** Resolve a static-file path for a logo (safe for the Remotion bundler). */
 export const logoFile = (spec: LogoSpec): string => staticFile(spec.file);

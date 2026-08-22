@@ -47,6 +47,13 @@ def test_fake_drafter_produces_valid_plan():
             assert beat["attacker"] != plan["defenses"][0]["competitor"] or beat["target"] != plan["defenses"][0]["id"]
 
 
+def test_fake_drafter_colors_defenses_by_pane_identity():
+    plan = draft_arena_plan(_replay(), _report(), drafter=FakeArenaVisualDrafter())
+    colors = {d["competitor"]: d["color"] for d in plan["defenses"]}
+    assert colors[IDENTITIES[0]] == "#9a65e8"
+    assert colors[IDENTITIES[1]] == "#58a9ff"
+
+
 def test_validate_rejects_unknown_competitor():
     plan = draft_arena_plan(_replay(), _report(), drafter=FakeArenaVisualDrafter())
     plan["avatars"][0]["competitor"] = "Nope"

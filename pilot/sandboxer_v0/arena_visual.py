@@ -159,7 +159,7 @@ class FakeArenaVisualDrafter:
                     "competitor": competitor,
                     "label": label,
                     "shape": self.SHAPES[len(defenses) % len(self.SHAPES)],
-                    "color": "#4d9cff" if frame.get("pane", 0) == 0 else "#58a9ff",
+                    "color": "#9a65e8" if frame.get("pane", 0) == 0 else "#58a9ff",
                     "event_ids": [str(frame["event_id"])],
                 }
             )
