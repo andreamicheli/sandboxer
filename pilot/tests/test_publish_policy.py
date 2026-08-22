@@ -209,6 +209,20 @@ def test_publish_broadcast_indexes_before_upload_and_fills_video_url_after(tmp_p
         return dict(UPLOADED)
 
     uploader.upload.side_effect = recording_upload
+    # The default intro-cover extraction is stubbed so this ordering test
+    # stays hermetic; the extraction itself is covered in its own tests.
+    auto_cover = tmp_path / "thumbnail.jpg"
+
+    def stub_extract(intro_path, output_path):
+        output_path.write_bytes(b"\xff\xd8\xffstub")
+        return output_path
+
+    monkeypatch.setattr(pb, "extract_intro_cover", stub_extract)
+    uploader.set_thumbnail.return_value = {
+        "video_id": UPLOADED["video_id"],
+        "url": f"https://i.ytimg.com/vi/{UPLOADED['video_id']}/hqdefault.jpg",
+        "dry_run": False,
+    }
     monkeypatch.setattr(pb, "YoutubeUploader", mock.MagicMock(return_value=uploader))
 
     exit_code = pb.main([
@@ -216,6 +230,7 @@ def test_publish_broadcast_indexes_before_upload_and_fills_video_url_after(tmp_p
         "--video", str(video),
         "--tts", "fake",
         "--youtube", "real",
+        "--no-bgm",
         "--out", str(out),
         "--bundle", str(bundle_file),
         "--site-root", str(site_root),
@@ -248,6 +263,9 @@ def test_publish_broadcast_indexes_before_upload_and_fills_video_url_after(tmp_p
     assert record["youtube"]["publish_public"] is None
     assert record["publication"]["indexed"] is True
     assert record["publication"]["slug"] == "publish-policy-fixture"
+
+    # The auto-extracted intro cover is set on the uploaded video.
+    uploader.set_thumbnail.assert_called_once_with(UPLOADED["video_id"], auto_cover)
 
 
 # --- The hard publication gate keeps blocking when the report is missing.

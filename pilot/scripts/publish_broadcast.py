@@ -15,7 +15,10 @@ Making an episode public afterwards is a separate explicit human decision —
 ``--publish-public`` with a non-empty approval token (``--approval-token`` or
 ``SANDBOXER_PUBLISH_APPROVAL``) flips the uploaded unlisted video to public.
 Pass ``--manual`` to re-enable the human gate (``--approved-by`` plus an
-interactive confirmation).
+interactive confirmation).  Without an explicit ``--thumb``, the first frame
+of the custom intro asset (``video/public/assets/custom-intro.mp4``) is
+extracted as the cover thumbnail; a missing intro asset skips the thumbnail
+(best-effort) and an explicit ``--thumb`` always wins.
 
     uv run python scripts/publish_broadcast.py \\
         --manifest ../artifacts/video-manifest.json \\
@@ -49,6 +52,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -85,7 +89,37 @@ from sandboxer_v0.youtube import (
     YoutubeUploader,
     youtube_metadata,
 )
-from sandboxer_v0.video import validate_provenance
+from sandboxer_v0.video import (
+    _digest,
+    bgm_provenance_section,
+    ffmpeg_delivery_commands,
+    validate_provenance,
+)
+
+# Shipped looped background-music bed, mixed far under the narration voices.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BGM_ASSET = REPO_ROOT / "video" / "public" / "assets" / "background-track.m4a"
+
+# Default cover source: the first frame of the custom intro asset.
+DEFAULT_INTRO_ASSET = REPO_ROOT / "video" / "public" / "assets" / "custom-intro.mp4"
+AUTO_THUMBNAIL_NAME = "thumbnail.jpg"
+
+
+def extract_intro_cover(intro_path: Path, output_path: Path) -> Path:
+    """Extract the first frame of the custom intro asset as the cover JPEG."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        ("ffmpeg", "-y", "-i", str(intro_path), "-frames:v", "1", "-q:v", "2", str(output_path)),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0 or not output_path.is_file():
+        raise RuntimeError(
+            f"INTRO_COVER_EXTRACTION_FAILED: "
+            + "\n".join(result.stderr.splitlines()[-20:])
+        )
+    return output_path
 
 
 def _confirm(action: str, yes: bool) -> None:
@@ -118,6 +152,66 @@ def _load(path: Path | None, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise SystemExit(f"{label} must be a JSON object: {path}")
     return value
+
+
+def _ffprobe_duration(path: Path) -> float:
+    """Media duration in seconds via ffprobe; fails closed when unavailable."""
+    try:
+        completed = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=60, check=True,
+        )
+        duration = float(json.loads(completed.stdout)["format"]["duration"])
+    except (OSError, subprocess.SubprocessError, KeyError, TypeError, ValueError) as error:
+        raise SystemExit(f"BGM_DURATION_UNAVAILABLE: {path}") from error
+    if duration <= 0:
+        raise SystemExit(f"BGM_DURATION_UNAVAILABLE: {path}")
+    return duration
+
+
+def _run_bgm_delivery(args: argparse.Namespace) -> Path:
+    """Encode the BGM-underlaid delivery video and return its path.
+
+    Runs the deterministic probe → voice loudnorm → looped/trimmed bed →
+    amix mux → delivery encode pipeline from
+    ``sandboxer_v0.video.ffmpeg_delivery_commands`` with the shipped asset.
+    """
+    if not BGM_ASSET.is_file():
+        raise SystemExit(f"BGM_ASSET_MISSING: {BGM_ASSET}")
+    master = args.video.with_name(f"{args.video.stem}-bgm.master.mov")
+    delivery = args.video.with_name(f"{args.video.stem}-bgm.mp4")
+    commands = ffmpeg_delivery_commands(
+        video_input=str(args.video),
+        audio_input=str(args.voice_track),
+        master_output=str(master),
+        delivery_output=str(delivery),
+        background_input=str(BGM_ASSET),
+        video_duration_seconds=_ffprobe_duration(args.video),
+    )
+    for command in commands:
+        try:
+            subprocess.run(command, check=True)
+        except (OSError, subprocess.SubprocessError) as error:
+            raise SystemExit(f"BGM_DELIVERY_FAILED: {' '.join(command[:4])}") from error
+    if not delivery.is_file() or delivery.stat().st_size == 0:
+        raise SystemExit(f"BGM_DELIVERY_OUTPUT_MISSING: {delivery}")
+    return delivery
+
+
+def _apply_bgm_provenance(manifest: dict[str, Any]) -> None:
+    """Record the enabled bgm contract in the manifest composition section.
+
+    Mirrors the render script's post-hoc provenance write: the section is
+    added and the manifest hash is recomputed over the same content so the
+    published record stays verifiable.
+    """
+    composition = manifest.get("composition")
+    if not isinstance(composition, dict):
+        composition = {}
+        manifest["composition"] = composition
+    composition["bgm"] = bgm_provenance_section()
+    manifest.pop("manifest_hash", None)
+    manifest["manifest_hash"] = _digest(manifest)
 
 
 def _tts_adapter(mode: str, manifest: Mapping[str, Any]) -> Any:
@@ -250,9 +344,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--report", type=Path, default=None)
     parser.add_argument("--video", type=Path, required=True)
     parser.add_argument("--captions", type=Path, default=None)
-    parser.add_argument("--thumb", type=Path, default=None)
+    parser.add_argument("--thumb", type=Path, default=None,
+                        help="explicit cover image; default: first frame of --intro-asset when it exists")
+    parser.add_argument("--intro-asset", type=Path, default=DEFAULT_INTRO_ASSET,
+                        help="custom intro mp4 whose first frame is extracted as the default thumbnail")
     parser.add_argument("--out", type=Path, default=Path("broadcast-record.json"))
     parser.add_argument("--audio-dir", type=Path, default=None)
+    parser.add_argument("--voice-track", type=Path, default=None,
+                        help="full-length narration WAV mixed under the BGM "
+                             "(default: commentary-full.wav next to the audio dir)")
+    parser.add_argument("--no-bgm", action="store_true",
+                        help="disable the looped background-music underlay "
+                             "(default: mix the shipped assets/background-track.m4a bed)")
     parser.add_argument("--tts", choices=("real", "fake", "fish"), default="fish",
                         help="TTS provider (default: fish; 'real' is the explicit Gemini override)")
     parser.add_argument("--youtube", choices=("real", "fake", "dry-run"), default="dry-run")
@@ -319,7 +422,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     if site_report["slug"]:
         print(f"staged site report: {site_report['report_url']}", file=sys.stderr)
 
-    # 3. Index the publication BEFORE the upload: the hard publish gate
+    # 3. Background-music underlay (looped bed at -28 LUFS, weight 0.18 under
+    #    the voices): re-encodes the delivery video through
+    #    ffmpeg_delivery_commands() and uploads that result.  --no-bgm keeps
+    #    the legacy behaviour of uploading --video untouched.
+    upload_video: Path = args.video
+    record_bgm: dict[str, Any] = {"enabled": False}
+    if not args.no_bgm:
+        args.voice_track = args.voice_track or audio_dir.parent / "commentary-full.wav"
+        if not args.voice_track.is_file():
+            raise SystemExit(f"BGM_VOICE_TRACK_MISSING: {args.voice_track}")
+        upload_video = _run_bgm_delivery(args)
+        _apply_bgm_provenance(manifest)
+        record_bgm = {**bgm_provenance_section(),
+                      "voice_track": str(args.voice_track),
+                      "delivery": str(upload_video)}
+        print(f"bgm underlay mixed: {upload_video}", file=sys.stderr)
+
+    # 4. Index the publication BEFORE the upload: the hard publish gate
     #    refuses a real upload whose slug is not already listed in
     #    publications.json, so the entry must exist first; ``video_url`` is
     #    filled in after the upload completes.
@@ -335,7 +455,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise SystemExit(f"PUBLICATION_INDEX_FAILED: {error}") from error
         print(f"indexed site publication: {publication_entry['id']} (pre-upload, video_url pending)", file=sys.stderr)
 
-    # 4. YouTube handoff (metadata, resumable unlisted upload, captions, thumbnail).
+    # 5. Thumbnail cover: an explicit --thumb always wins; otherwise the
+    #    first frame of the custom intro asset is extracted BEFORE the upload
+    #    so the cover is ready when set_thumbnail runs.  A missing intro
+    #    asset (or a failed extraction) is best-effort: the upload proceeds
+    #    without a thumbnail rather than losing the video.
+    thumb_source: Path | None = args.thumb
+    if thumb_source is None:
+        if args.intro_asset.is_file():
+            auto_thumb = args.out.parent / AUTO_THUMBNAIL_NAME
+            try:
+                extract_intro_cover(args.intro_asset, auto_thumb)
+                thumb_source = auto_thumb
+                print(f"extracted intro cover thumbnail: {auto_thumb}", file=sys.stderr)
+            except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+                print(f"intro cover extraction failed ({error}); continuing without a thumbnail", file=sys.stderr)
+        else:
+            print(f"no --thumb given and intro asset missing ({args.intro_asset}); skipping thumbnail", file=sys.stderr)
+
+    # 6. YouTube handoff (metadata, resumable unlisted upload, captions, thumbnail).
     try:
         metadata = youtube_metadata(
             manifest,
@@ -366,9 +504,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "report_url": site_report["report_url"],
                 "publications_index": publications_index_path,
             }
-        preflight = uploader.preflight(video_path=args.video)
+        preflight = uploader.preflight(video_path=upload_video)
         uploaded = uploader.upload(
-            args.video,
+            upload_video,
             title=metadata["snippet"]["title"],
             description=metadata["snippet"]["description"],
             tags=metadata["snippet"]["tags"],
@@ -377,13 +515,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             approved=args.approved_by is not None or rehearsal,
             **gate_inputs,
         )
-        thumbnail = _best_effort(lambda: uploader.set_thumbnail(uploaded["video_id"], args.thumb)) if args.thumb else None
+        thumbnail = _best_effort(lambda: uploader.set_thumbnail(uploaded["video_id"], thumb_source)) if thumb_source else None
         captions = _best_effort(lambda: uploader.upload_captions(uploaded["video_id"], args.captions)) if args.captions else None
         playlist = _best_effort(lambda: uploader.add_to_playlist(args.playlist, uploaded["video_id"])) if args.playlist else None
     except YoutubeError as error:
         raise SystemExit(f"YOUTUBE_FAILED: {error}") from error
 
-    # 5. Fill the uploaded video_url into the pre-upload index entry.
+    # 7. Fill the uploaded video_url into the pre-upload index entry.
     if publication_entry is not None:
         publication_entry = dict(publication_entry)
         publication_entry["video_url"] = uploaded["url"]
@@ -392,7 +530,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except PublicationIndexError as error:
             raise SystemExit(f"PUBLICATION_INDEX_FAILED: {error}") from error
 
-    # 6. Public visibility is a separate explicit human decision, never part
+    # 8. Public visibility is a separate explicit human decision, never part
     #    of the upload: --publish-public flips the unlisted episode only with
     #    a non-empty approval token (--approval-token or env).
     published_public = None
@@ -438,6 +576,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "thumbnail": thumbnail,
         "captions": captions,
         "playlist": playlist,
+        "bgm": record_bgm,
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(record, sort_keys=True, separators=(",", ":"), indent=2), encoding="utf-8")
