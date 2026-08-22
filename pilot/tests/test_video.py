@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from sandboxer_v0.video import TtsPreflight, VideoError, _scene_budgets, build_video_manifest, ffmpeg_delivery_commands, tts_block, validate_video_qa
+from sandboxer_v0.video import TtsPreflight, VideoError, _scene_budgets, bgm_provenance_section, build_video_manifest, ffmpeg_delivery_commands, tts_block, validate_video_qa
 
 
 def _replay():
@@ -61,6 +61,63 @@ def test_ffmpeg_pipeline_is_argv_only_and_covers_probe_normalize_mux_delivery():
     assert [command[0] for command in commands]==["ffprobe","ffmpeg","ffmpeg","ffmpeg"]
     assert "loudnorm=I=-16:LRA=7:TP=-1.5" in commands[1] and "+faststart" in commands[3]
     assert all("sh" not in command[:1] for command in commands)
+
+
+def test_ffmpeg_delivery_without_background_is_byte_identical_to_legacy_output():
+    commands=ffmpeg_delivery_commands(video_input="render.mov",audio_input="voice.wav",master_output="master.mov",delivery_output="delivery.mp4")
+    assert commands==(
+        ("ffprobe","-v","error","-show_streams","-of","json","render.mov"),
+        ("ffmpeg","-nostdin","-i","voice.wav","-af","loudnorm=I=-16:LRA=7:TP=-1.5","-c:a","pcm_s24le","voice.wav.normalized.wav"),
+        ("ffmpeg","-nostdin","-i","render.mov","-i","voice.wav.normalized.wav","-map","0:v:0","-map","1:a:0","-c:v","copy","-c:a","aac","-b:a","320k","master.mov"),
+        ("ffmpeg","-nostdin","-i","master.mov","-c:v","libx264","-crf","18","-pix_fmt","yuv420p","-c:a","aac","-movflags","+faststart","delivery.mp4"),
+    )
+
+
+def test_ffmpeg_delivery_with_background_loops_trims_and_mixes_the_bed_under_the_voices():
+    bgm="../video/public/assets/background-track.m4a"
+    commands=ffmpeg_delivery_commands(video_input="render.mov",audio_input="voice.wav",master_output="master.mov",delivery_output="delivery.mp4",
+                                      background_input=bgm,video_duration_seconds=181.025)
+    assert [command[0] for command in commands]==["ffprobe","ffmpeg","ffmpeg","ffmpeg","ffmpeg"]
+    # The bed is looped forever, trimmed to the video duration, and normalized
+    # to -28 LUFS with a -20 dBTP ceiling before the mux.
+    bed=commands[2]
+    assert bed[bed.index("-stream_loop")+1]=="-1"
+    assert bed[bed.index("-i")+1]==bgm and bed[-1]==f"{bgm}.underlay.wav"
+    assert bed[bed.index("-t")+1]=="181.025000"
+    assert "loudnorm=I=-28:LRA=7:TP=-9" in bed
+    # 3-input mux: video (0), normalized voices (1), bed (2); the amix keeps
+    # the mix as long as the voice track and the music at weight 0.18.
+    mux=commands[3]
+    assert [mux[mux.index("-i")+offset] for offset in (1,3,5)]==["render.mov","voice.wav.normalized.wav",f"{bgm}.underlay.wav"]
+    graph=mux[mux.index("-filter_complex")+1]
+    assert graph=="[1:a][2:a]amix=inputs=2:duration=first:weights='1 0.18'[aout]"
+    assert mux[mux.index("-map")+1]=="0:v:0" and mux[mux.index("-map")+3]=="[aout]"
+    assert mux[mux.index("-c:v")+1]=="copy"
+    # The delivery encode stays unchanged.
+    assert commands[4]==("ffmpeg","-nostdin","-i","master.mov","-c:v","libx264","-crf","18","-pix_fmt","yuv420p","-c:a","aac","-movflags","+faststart","delivery.mp4")
+
+
+def test_ffmpeg_delivery_rejects_invalid_background_paths_and_durations():
+    valid=dict(video_input="v.mp4",audio_input="a.wav",master_output="m.mov",delivery_output="d.mp4")
+    for background in ("","   ","-loop"):
+        with pytest.raises(VideoError,match="FFMPEG_PATH_INVALID"):
+            ffmpeg_delivery_commands(**valid,background_input=background,video_duration_seconds=10)
+    with pytest.raises(VideoError,match="FFMPEG_DURATION_INVALID"):
+        ffmpeg_delivery_commands(**valid,background_input="bg.m4a")
+    for duration in (0,-1,float("nan"),float("inf"),"42"):
+        with pytest.raises(VideoError,match="FFMPEG_DURATION_INVALID"):
+            ffmpeg_delivery_commands(**valid,background_input="bg.m4a",video_duration_seconds=duration)
+
+
+def test_manifest_records_bgm_provenance_only_when_enabled_and_changes_hash():
+    kwargs=dict(report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={})
+    plain=build_video_manifest(_replay(),**kwargs)
+    assert "bgm" not in plain["composition"]
+    bgm=build_video_manifest(_replay(),**kwargs,bgm=bgm_provenance_section())
+    assert bgm["composition"]["bgm"]=={"enabled":True,"source":"assets/background-track.m4a","target_loudness_lufs":-28,"mix_weight":0.18}
+    assert bgm["manifest_hash"]!=plain["manifest_hash"]
+    # Deterministic: the same section always produces the same hash.
+    assert build_video_manifest(_replay(),**kwargs,bgm=bgm_provenance_section())["manifest_hash"]==bgm["manifest_hash"]
 
 
 def test_video_manifest_schedules_drafted_commentary():

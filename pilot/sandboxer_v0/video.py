@@ -39,6 +39,18 @@ DEFAULT_TTS_MODEL = "s2.1-pro-free"
 DEFAULT_TTS_VOICES = ("Kore", "Charon")
 DEFAULT_TTS_SETTINGS_VERSION = "fish-audio-v1"
 
+# Looped background-music underlay contract: the shipped asset is trimmed to
+# the video length, loudness-normalized to -28 LUFS (ceiling -20 dBTP) and
+# mixed at weight 0.18 under the narration voices.
+BGM_SOURCE = "assets/background-track.m4a"
+BGM_TARGET_LUFS = -28
+BGM_MIX_WEIGHT = 0.18
+
+
+def bgm_provenance_section()->dict[str,Any]:
+    """Canonical manifest/broadcast ``bgm`` provenance for an enabled underlay."""
+    return {"enabled":True,"source":BGM_SOURCE,"target_loudness_lufs":BGM_TARGET_LUFS,"mix_weight":BGM_MIX_WEIGHT}
+
 
 @dataclass(frozen=True)
 class TtsPreflight:
@@ -148,13 +160,35 @@ def ffmpeg_preflight(executable:str="ffmpeg",*,required_major:int=7)->dict[str,A
     return {"executable":executable,"major":required_major,"version_line":completed.stdout.splitlines()[0],"version_hash":hashlib.sha256(completed.stdout.splitlines()[0].encode()).hexdigest()}
 
 
-def ffmpeg_delivery_commands(*,video_input:str,audio_input:str,master_output:str,delivery_output:str)->tuple[tuple[str,...],...]:
+def ffmpeg_delivery_commands(*,video_input:str,audio_input:str,master_output:str,delivery_output:str,background_input:str|None=None,video_duration_seconds:float|None=None)->tuple[tuple[str,...],...]:
     paths=(video_input,audio_input,master_output,delivery_output)
     if any(not item or item.startswith("-") for item in paths): raise VideoError("FFMPEG_PATH_INVALID")
+    if background_input is None:
+        return (
+            ("ffprobe","-v","error","-show_streams","-of","json",video_input),
+            ("ffmpeg","-nostdin","-i",audio_input,"-af","loudnorm=I=-16:LRA=7:TP=-1.5","-c:a","pcm_s24le",f"{audio_input}.normalized.wav"),
+            ("ffmpeg","-nostdin","-i",video_input,"-i",f"{audio_input}.normalized.wav","-map","0:v:0","-map","1:a:0","-c:v","copy","-c:a","aac","-b:a","320k",master_output),
+            ("ffmpeg","-nostdin","-i",master_output,"-c:v","libx264","-crf","18","-pix_fmt","yuv420p","-c:a","aac","-movflags","+faststart",delivery_output),
+        )
+    if not background_input.strip() or background_input.startswith("-"): raise VideoError("FFMPEG_PATH_INVALID")
+    if (isinstance(video_duration_seconds,bool) or not isinstance(video_duration_seconds,(int,float))
+            or not math.isfinite(video_duration_seconds) or video_duration_seconds<=0):
+        raise VideoError("FFMPEG_DURATION_INVALID")
+    underlay=f"{background_input}.underlay.wav"
     return (
         ("ffprobe","-v","error","-show_streams","-of","json",video_input),
         ("ffmpeg","-nostdin","-i",audio_input,"-af","loudnorm=I=-16:LRA=7:TP=-1.5","-c:a","pcm_s24le",f"{audio_input}.normalized.wav"),
-        ("ffmpeg","-nostdin","-i",video_input,"-i",f"{audio_input}.normalized.wav","-map","0:v:0","-map","1:a:0","-c:v","copy","-c:a","aac","-b:a","320k",master_output),
+        # Looped music bed trimmed to the video length and pushed far under
+        # broadcast voice level (-28 LUFS integrated).  loudnorm's TP option
+        # only accepts [-9, 0] dBTP, so -9 is the enforceable peak ceiling.
+        ("ffmpeg","-nostdin","-stream_loop","-1","-i",background_input,"-t",f"{float(video_duration_seconds):.6f}",
+         "-af","loudnorm=I=-28:LRA=7:TP=-9","-c:a","pcm_s24le",underlay),
+        # 3-input mux: video from input 0, voices (1) mixed with the bed (2);
+        # duration=first ends the mix with the voice track, weights keep the
+        # music well under the narration.
+        ("ffmpeg","-nostdin","-i",video_input,"-i",f"{audio_input}.normalized.wav","-i",underlay,
+         "-filter_complex","[1:a][2:a]amix=inputs=2:duration=first:weights='1 0.18'[aout]",
+         "-map","0:v:0","-map","[aout]","-c:v","copy","-c:a","aac","-b:a","320k",master_output),
         ("ffmpeg","-nostdin","-i",master_output,"-c:v","libx264","-crf","18","-pix_fmt","yuv420p","-c:a","aac","-movflags","+faststart",delivery_output),
     )
 
@@ -285,7 +319,7 @@ def _schedule_intro_commentary(intro:Sequence[Mapping[str,Any]],budgets:Mapping[
     return [line for line in _blocks_to_lines(packed,scene_starts,fps) if not line["event_ids"]]
 
 
-def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model_metadata:Mapping[str,Any],benchmark_snapshot:Mapping[str,Any],fps:int=30,commentary:Sequence[Mapping[str,Any]]|None=None,arena_visuals:Mapping[str,Any]|None=None,intro_commentary:Sequence[Mapping[str,Any]]|None=None)->dict[str,Any]:
+def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model_metadata:Mapping[str,Any],benchmark_snapshot:Mapping[str,Any],fps:int=30,commentary:Sequence[Mapping[str,Any]]|None=None,arena_visuals:Mapping[str,Any]|None=None,intro_commentary:Sequence[Mapping[str,Any]]|None=None,bgm:Mapping[str,Any]|None=None)->dict[str,Any]:
     if replay.get("schema_version")!="sandboxer.replay.v1" or fps<24: raise VideoError("VIDEO_INPUT_INVALID")
     panes=replay.get("panes",())
     if not isinstance(panes,(list,tuple)) or len(panes)!=2: raise VideoError("VIDEO_IDENTITIES_INVALID")
@@ -421,4 +455,5 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
     intro_lines=_schedule_intro_commentary(intro_commentary or (),budgets,scene_starts,fps,identities)
     scheduled=sorted(match_lines+intro_lines,key=lambda item:(item["start_frame"],item["end_frame"]))
     manifest={"schema":"sandboxer.video-manifest.v1","fps":fps,"identities":identities,"source_bundle_hash":replay.get("source_bundle_hash"),"layout":{"split":{"left":.5,"right":.5,"permanent":True}},"timeline":timeline,"terminal":terminal,"scenes":scenes,"commentary":scheduled,"interviews":interviews,"arena_visuals":dict(arena_visuals) if arena_visuals else None,"silence_allowed":True,"tts":{"expected":asdict(TtsPreflight(DEFAULT_TTS_MODEL,DEFAULT_TTS_VOICES,DEFAULT_TTS_SETTINGS_VERSION)),"requested":asdict(TtsProvenance(DEFAULT_TTS_PROVIDER,DEFAULT_TTS_MODEL,DEFAULT_TTS_VOICES)),"observed":None,"tts_provider_drift":False,"blocks":"bounded-and-hashed"},"qa":{"required":["alignment","clipping","noise","speaker_swaps","silence","pronunciation","factual_traceability","accessibility","licensing","decisive_cue_audibility"]},"composition":{"engine":"remotion","ffmpeg":["probe","loudness-normalize","mux","delivery-encode"]}}
+    if bgm: manifest["composition"]["bgm"]=dict(bgm)
     manifest["manifest_hash"]=_digest(manifest);return manifest
