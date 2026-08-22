@@ -2,17 +2,21 @@
 
 The broadcast and report layers draft prose and structured JSON (commentary,
 arena choreography, narrative, intro, review) with the locally-installed coding
-agents — ``codex``, ``cmd`` and ``agy`` — invoked as headless subprocesses.
-Each adapter is a thin, fail-closed seam: no native tools cross it (only the
-final text/JSON answer is returned), timeouts / non-zero exits / empty output
-raise a stable ``HeadlessAgentError`` reason code, and callers keep a
-deterministic fallback so a failed draft never blocks publication.
+agents — ``opencode``, ``codex``, ``cmd``, ``agy`` and ``hermes`` — invoked as
+headless subprocesses.  Each adapter is a thin, fail-closed seam: no native
+tools cross it (only the final text/JSON answer is returned), timeouts /
+non-zero exits / empty output raise a stable ``HeadlessAgentError`` reason
+code, and callers keep a deterministic fallback so a failed draft never blocks
+publication.
 
 Selection is env-driven per phase (``SANDBOXER_<PHASE>_AGENT``); defaults live
-in ``PHASE_DEFAULTS``.  ``agy`` (Antigravity Gemini) is implemented for
-completeness but is geo-blocked on hosts that return "User location is not
-supported for the API use"; such phases fall back to ``cmd`` or ``codex``, or
-to their deterministic drafters.
+in ``PHASE_DEFAULTS``.  OpenCode is the primary headless coding-agent engine
+for all editorial phases, running ox-alpha (catalog id
+``opencode/x-preview-f-free``).  ``codex``, ``cmd``, ``agy`` and ``hermes``
+remain available but are opt-in via ``SANDBOXER_<PHASE>_AGENT``.  ``agy``
+(Antigravity Gemini) is additionally geo-blocked on hosts that return "User
+location is not supported for the API use"; overridden phases on such hosts
+fall back to their deterministic drafters.
 """
 
 from __future__ import annotations
@@ -29,10 +33,13 @@ from typing import Any, Protocol, Sequence
 DEFAULT_TIMEOUT_SECONDS = 240.0
 
 # Explicit default models per agent kind (verified against the live catalogs):
+#   opencode -> opencode/x-preview-f-free  (this IS ox-alpha on the opencode
+#              catalog — the primary SandBoxer authoring model)
 #   codex -> gpt-5.6-luna  ("Luna 5.6", OpenAI)
 #   cmd   -> meta/muse-spark-1.2-contributor  (Muse Spark Contributor)
 # Override per phase via SANDBOXER_<PHASE>_MODEL, or per kind via the
 # adapter's ``model`` argument.
+OPENCODE_DEFAULT_MODEL = "opencode/x-preview-f-free"
 CODEX_DEFAULT_MODEL = "gpt-5.6-luna"
 CMD_DEFAULT_MODEL = "meta/muse-spark-1.2-contributor"
 
@@ -246,6 +253,43 @@ class AgyAdapter:
         return text.strip()
 
 
+class OpencodeAdapter:
+    """OpenCode headless CLI (``opencode run -m <model> <prompt>``).
+
+    The ``run`` subcommand takes the prompt as a positional argument and
+    ``-m/--model`` selects the model; the model's final message is printed on
+    stdout, which we capture and strip.  The default model
+    ``opencode/x-preview-f-free`` IS ox-alpha on the opencode catalog — the
+    primary authoring model for SandBoxer editorial phases.
+
+    ``executable`` must be an absolute path: the ``opencode`` binary is
+    installed under ``~/.opencode/bin`` and is NOT on PATH.
+    """
+
+    def __init__(
+        self,
+        *,
+        model: str = OPENCODE_DEFAULT_MODEL,
+        executable: Sequence[str] = ("/home/ubuntu/.opencode/bin/opencode",),
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    ) -> None:
+        self.model = model
+        self._executable = tuple(executable)
+        self._timeout = timeout_seconds
+
+    def complete(self, prompt: str) -> str:
+        if not prompt.strip():
+            raise HeadlessAgentError("OPENCODE_EMPTY_PROMPT")
+        command: list[str] = [*self._executable, "run", "-m", self.model, prompt]
+        proc = _run(command, binary_kind="OPENCODE", timeout_seconds=self._timeout)
+        if proc.returncode != 0:
+            raise HeadlessAgentError("OPENCODE_FAILED", detail=(proc.stderr or "")[-400:].strip())
+        text = proc.stdout.strip()
+        if not text:
+            raise HeadlessAgentError("OPENCODE_EMPTY")
+        return text
+
+
 class HermesAdapter:
     """Hermes CLI (Nous Research) in headless single-query mode.
 
@@ -306,31 +350,35 @@ class HermesAdapter:
         return "\n".join(lines).strip()
 
 
-AGENT_KINDS = ("codex", "cmd", "agy", "hermes")
+AGENT_KINDS = ("opencode", "codex", "cmd", "agy", "hermes")
 
-# Phase → default agent kind.  ``agy`` (Antigravity Gemini, default model
-# gemini-3.7-flash-high) is the preferred backend for prose phases — intro and
-# report narrative — per the editorial brief.  It is geo-blocked on some hosts
-# ("User location is not supported"); the deterministc drafters then take
-# over, so a geo-block never blocks publication.
+# Phase → default agent kind.  All four editorial phases run on OpenCode
+# (ox-alpha via ``opencode/x-preview-f-free``).  ``codex``/``cmd``/``agy``/
+# ``hermes`` remain selectable per phase via SANDBOXER_<PHASE>_AGENT; ``agy``
+# (Antigravity Gemini, default model gemini-3.7-flash-high) is geo-blocked on
+# some hosts ("User location is not supported"), in which case the
+# deterministic drafters take over so publication is never blocked.
 PHASE_DEFAULTS = {
-    "commentary": "codex",
-    "arena": "cmd",
-    "report_narrative": "agy",
-    "intro": "agy",
+    "commentary": "opencode",
+    "arena": "opencode",
+    "report_narrative": "opencode",
+    "intro": "opencode",
 }
 
 
 def resolve_adapter(kind: str, *, model: str | None = None) -> HeadlessAgentAdapter:
-    """Resolve an agent kind (``codex``/``cmd``/``agy``) to an adapter.
+    """Resolve an agent kind (``opencode``/``codex``/``cmd``/``agy``) to an adapter.
 
-    A ``None`` model leaves the adapter's own default in place (e.g. codex
-    defaults to ``gpt-5.6-luna``, cmd to Muse Spark Contributor), so an
-    explicit value is only passed through when one is given.
+    A ``None`` model leaves the adapter's own default in place (e.g. opencode
+    defaults to ox-alpha via ``opencode/x-preview-f-free``, codex to
+    ``gpt-5.6-luna``, cmd to Muse Spark Contributor), so an explicit value is
+    only passed through when one is given.
     """
     normalized = (kind or "").strip().lower()
     # Only pass an explicit model through; None keeps the adapter's own default
-    # (codex -> gpt-5.6-luna, cmd -> Muse Spark Contributor).
+    # (opencode -> ox-alpha, codex -> gpt-5.6-luna, cmd -> Muse Spark Contributor).
+    if normalized == "opencode":
+        return OpencodeAdapter(model=model) if model else OpencodeAdapter()
     if normalized == "codex":
         return CodexAdapter(model=model) if model else CodexAdapter()
     if normalized == "cmd":
@@ -367,6 +415,8 @@ __all__ = [
     "HeadlessAgentAdapter",
     "HeadlessAgentError",
     "HermesAdapter",
+    "OPENCODE_DEFAULT_MODEL",
+    "OpencodeAdapter",
     "PHASE_DEFAULTS",
     "phase_adapter",
     "resolve_adapter",

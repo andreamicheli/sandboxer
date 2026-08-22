@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -13,10 +14,18 @@ class ReviewPipelineError(ValueError): pass
 
 
 STAGES=("gemini_evidence_triage","luna_source_discovery","sonnet_behavioral_analysis","terra_skeptical_review","sol_final_synthesis")
-MODEL_ROLE={"gemini_evidence_triage":"gemini","luna_source_discovery":"luna","sonnet_behavioral_analysis":"sonnet","terra_skeptical_review":"terra","sol_final_synthesis":"sol"}
+# Reviewer-independence tokens: the recorded model name must CONTAIN the stage's
+# role token (record() raises REVIEW_MODEL_ROLE_INVALID otherwise).  Tokens are
+# distinctive substrings of the pinned STAGE_MODEL names below.
+MODEL_ROLE={"gemini_evidence_triage":"nemotron-3-ultra","luna_source_discovery":"muse-spark","sonnet_behavioral_analysis":"hy3","terra_skeptical_review":"big-pickle","sol_final_synthesis":"lightning"}
 # Which headless coding agent executes each stage (see sandboxer_v0/agents.py).
-# Overridable per stage via SANDBOXER_REVIEW_<STAGE>_AGENT.
-STAGE_AGENT={"gemini_evidence_triage":"agy","luna_source_discovery":"codex","sonnet_behavioral_analysis":"cmd","terra_skeptical_review":"agy","sol_final_synthesis":"codex"}
+# All stages run on OpenCode; overridable per stage via
+# SANDBOXER_REVIEW_<STAGE>_AGENT.
+STAGE_AGENT={"gemini_evidence_triage":"opencode","luna_source_discovery":"opencode","sonnet_behavioral_analysis":"opencode","terra_skeptical_review":"opencode","sol_final_synthesis":"opencode"}
+# Pinned reviewer model per stage — five DISTINCT models so no reviewer model
+# checks its own work.  x-preview-f (the ox-alpha authoring model) is
+# deliberately excluded from review duty.
+STAGE_MODEL={"gemini_evidence_triage":"opencode/nemotron-3-ultra-free","luna_source_discovery":"opencode/muse-spark-1.2-contributor-free","sonnet_behavioral_analysis":"opencode/hy3-free","terra_skeptical_review":"opencode/big-pickle","sol_final_synthesis":"opencode/nemotron-3.5-lightning-free"}
 BLOCKING_CLAIM_REASONS=frozenset({"UNSUPPORTED","CONTRADICTORY","ANTHROPOMORPHIC","OVER_GENERALIZED"})
 REFERENCES=(
     {"name":"EnIGMA","scope":"methodology-and-editorial-only","may_validate_sandboxer_claims":False},
@@ -25,6 +34,11 @@ REFERENCES=(
 
 
 def _digest(value:object)->str: return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
+
+
+def _stage_agent(stage:str)->str:
+    """Effective agent for a stage: env override or the STAGE_AGENT default."""
+    return os.environ.get(f"SANDBOXER_REVIEW_{stage.upper()}_AGENT") or STAGE_AGENT[stage]
 
 
 class ReviewPipeline:
@@ -46,10 +60,10 @@ class ReviewPipeline:
     def record(self,*,stage:str,model:str,version:str,prompt:str,input_hashes:Sequence[str],output:Mapping[str,Any],disagreement:Sequence[str]=(),escalation_reason:str|None=None,context_id:str|None=None,agent:str|None=None)->str:
         if stage!=self.next_stage: raise ReviewPipelineError("REVIEW_STAGE_ORDER_INVALID")
         if MODEL_ROLE[stage] not in model.lower(): raise ReviewPipelineError("REVIEW_MODEL_ROLE_INVALID")
-        if agent is not None and agent!=STAGE_AGENT[stage]: raise ReviewPipelineError("REVIEW_AGENT_INVALID")
+        if agent is not None and agent!=_stage_agent(stage): raise ReviewPipelineError("REVIEW_AGENT_INVALID")
         if not model or not version or not prompt or self._state["deterministic_evidence_hash"] not in input_hashes: raise ReviewPipelineError("REVIEW_INVOCATION_INCOMPLETE")
         number=len(self._state["invocations"])+1; invocation_id=f"review-{number:02d}"
-        record={"invocation_id":invocation_id,"context_id":context_id or invocation_id,"stage":stage,"agent":agent or STAGE_AGENT[stage],"model":model,"version":version,"prompt":prompt,"input_hashes":list(input_hashes),"structured_output":dict(output),"disagreement":list(disagreement),"escalation_reason":escalation_reason}
+        record={"invocation_id":invocation_id,"context_id":context_id or invocation_id,"stage":stage,"agent":agent or _stage_agent(stage),"model":model,"version":version,"prompt":prompt,"input_hashes":list(input_hashes),"structured_output":dict(output),"disagreement":list(disagreement),"escalation_reason":escalation_reason}
         record["record_hash"]=_digest(record); self._state["invocations"].append(record); self._write(); return invocation_id
     def discover_source(self,*,source_id:str,url:str,title:str,version:str,access_date:str,archive_hash:str,primary:bool,claim_ids:Sequence[str],invocation_id:str)->None:
         invocation=self.invocation(invocation_id)
