@@ -8,6 +8,7 @@ from sandboxer_v0.blue_briefs import select_blue_briefs
 from sandboxer_v0.command_code import CommandCodeError
 from sandboxer_v0.runner_tool_server import RunnerToolServer
 from scripts.run_command_code_match import (
+    MAX_PROVIDER_RETRIES,
     _blue_prompt,
     _cleanup_socket_root,
     _frame_monitor,
@@ -157,6 +158,57 @@ def test_runner_tools_and_denials_are_not_misclassified_as_native_tool_rejection
 
     assert any(kind == "provider_tool_denied" and fields.get("tool_name") == "shell_command" for kind, fields in emitted)
     assert not any(kind == "provider_tool_rejected" for kind, fields in emitted)
+
+
+def test_consecutive_retries_above_threshold_raise_capacity_unavailable():
+    """Regression: a provider stuck retrying must abort with an explicit
+    capacity reason instead of surfacing an opaque end-of-stream error that
+    the classifier once misread as a tool-boundary violation."""
+    emitted = []
+    monitor = _frame_monitor("test-model", "blue", emit=lambda kind, **fields: emitted.append((kind, fields)))
+    retry_frame = {"type": "event", "event": {"type": "api_retry"}}
+
+    with pytest.raises(CommandCodeError) as raised:
+        for _ in range(MAX_PROVIDER_RETRIES + 1):
+            monitor(retry_frame)
+
+    assert raised.value.reason_code == "COMMAND_CODE_CAPACITY_UNAVAILABLE"
+    assert raised.value.model_id == "test-model"
+    assert any(
+        kind == "provider_capacity_unavailable" and fields.get("consecutive_retries") == MAX_PROVIDER_RETRIES + 1
+        for kind, fields in emitted
+    )
+
+
+def test_retries_below_threshold_do_not_abort_and_counter_stays_consecutive():
+    emitted = []
+    monitor = _frame_monitor("test-model", "blue", emit=lambda kind, **fields: emitted.append((kind, fields)))
+    retry_frame = {"type": "event", "event": {"type": "api_retry"}}
+    progress_frame = {"type": "event", "event": {"type": "model_request_start", "model": "test-model"}}
+
+    for _ in range(MAX_PROVIDER_RETRIES):
+        monitor(retry_frame)
+    monitor(progress_frame)
+    for _ in range(MAX_PROVIDER_RETRIES - 1):
+        monitor(retry_frame)
+    monitor(progress_frame)
+
+    assert not any(kind == "provider_capacity_unavailable" for kind, _ in emitted)
+
+
+def test_retry_threshold_is_tracked_per_model():
+    monitor_a = _frame_monitor("model-a", "blue")
+    monitor_b = _frame_monitor("model-b", "blue")
+    retry_frame = {"type": "event", "event": {"type": "api_retry"}}
+
+    for _ in range(MAX_PROVIDER_RETRIES - 2):
+        monitor_a(retry_frame)
+        monitor_b(retry_frame)
+    for _ in range(2):
+        monitor_b(retry_frame)
+    with pytest.raises(CommandCodeError, match="COMMAND_CODE_CAPACITY_UNAVAILABLE"):
+        monitor_b(retry_frame)
+    monitor_a(retry_frame)
 
 
 def test_command_code_match_parser_configures_symmetric_tool_ceilings():

@@ -13,6 +13,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+_TRANSPORT_FAILURE_TOKENS = (
+    "overloaded", "unavailable", "timeout", "timed out", "connection", "network",
+    "5xx", "bad gateway", "service error", "server error", "internal server error",
+)
+
 
 class CommandCodeError(RuntimeError):
     """A stable, non-sensitive Command Code boundary failure."""
@@ -344,7 +349,7 @@ class CommandCodeAdapter:
             message = str(result.get("error", "")).lower()
             if any(token in message for token in ("auth", "login", "authenticated")): code = "COMMAND_CODE_AUTH_REQUIRED"
             elif any(token in message for token in ("credit", "balance", "quota")): code = "COMMAND_CODE_CREDITS_INSUFFICIENT"
-            elif any(token in message for token in ("rate", "concurrency", "too many")): code = "COMMAND_CODE_CAPACITY_UNAVAILABLE"
+            elif any(token in message for token in ("rate", "concurrency", "too many") + _TRANSPORT_FAILURE_TOKENS): code = "COMMAND_CODE_CAPACITY_UNAVAILABLE"
             elif any(token in message for token in ("mcp", "tool", "server")): code = "COMMAND_CODE_TOOL_BOUNDARY_FAILURE"
             elif any(token in message for token in ("turn", "max turns")): code = "COMMAND_CODE_TURN_LIMIT"
             else: code = "COMMAND_CODE_PROVIDER_FAILURE"

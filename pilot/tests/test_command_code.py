@@ -60,6 +60,19 @@ def test_default_runner_bridge_is_an_absolute_executable_script(tmp_path, monkey
 def test_command_code_failures_have_stable_codes(mode,reason):
     with pytest.raises(CommandCodeError,match=reason): run(mode)
 
+def result_error(message):
+    return CommandCodeAdapter._result([{"type":"result","subtype":"error","error":message}],3,"example/model",10)
+
+@pytest.mark.parametrize("message",["provider overloaded","upstream unavailable","request timeout","request timed out","connection reset while reading response","network unreachable","gateway returned 5xx","bad gateway from upstream","service error at provider","server error 500","internal server error"])
+def test_transport_failure_classifies_as_capacity_not_tool_boundary(message):
+    with pytest.raises(CommandCodeError) as raised: result_error(message)
+    assert raised.value.reason_code=="COMMAND_CODE_CAPACITY_UNAVAILABLE"
+    assert raised.value.reason_code!="COMMAND_CODE_TOOL_BOUNDARY_FAILURE"
+
+def test_mcp_disconnect_still_classifies_as_genuine_tool_boundary_failure():
+    with pytest.raises(CommandCodeError) as raised: result_error("mcp server disconnected")
+    assert raised.value.reason_code=="COMMAND_CODE_TOOL_BOUNDARY_FAILURE"
+
 def test_preflight_rejects_catalog_drift_and_missing_exact_models():
     controls=("no_session","no_update","no_skills","skip_onboarding","dont_ask")
     preflight=CommandCodePreflight("v1","a"*64,"1.15.1","acct-redacted","b"*64,("deepseek/v4","xiaomi/mimo"),("inputTokens","outputTokens","cacheReadTokens","cacheWriteTokens"),2,10,True,("deepseek/v4","xiaomi/mimo"),controls,("deepseek/v4","xiaomi/mimo"))

@@ -8,8 +8,8 @@ reported_model = model.upper() if mode == "model_casing" else model
 def emit(value): print(json.dumps(value), flush=True)
 if mode == "timeout": time.sleep(5)
 elif mode == "malformed": print("{")
-elif mode in {"auth","credits","rate"}:
-    messages={"auth":"not authenticated: private account","credits":"credit balance exhausted","rate":"rate limit reached"}
+elif mode in {"auth","credits","rate","server_error","mcp_disconnect"}:
+    messages={"auth":"not authenticated: private account","credits":"credit balance exhausted","rate":"rate limit reached","server_error":"request failed after 8 retries: server error 500","mcp_disconnect":"mcp server disconnected"}
     emit({"type":"result","subtype":"error","error":messages[mode]})
     raise SystemExit(3)
 else:

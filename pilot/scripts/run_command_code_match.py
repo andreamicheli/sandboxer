@@ -31,6 +31,7 @@ PHASE_TOOLS = {
     "blue": ("inspect_service", "deploy_service", "request_own_service", "finish_phase"),
     "red": ("inspect_service", "describe_target_service", "http_request", "submit_flag", "finish_phase"),
 }
+MAX_PROVIDER_RETRIES = 8
 
 
 class MatchCalibrationError(RuntimeError):
@@ -120,13 +121,25 @@ def _frame_monitor(
     emit: object = None,
     stop_path: Path | None = None,
 ):
+    consecutive_retries = 0
+
     def on_frame(frame: dict[str, object]) -> None:
+        nonlocal consecutive_retries
         if stop_path is not None and stop_path.exists():
             raise CommandCodeError("AUDITOR_STOP")
         event = frame.get("event") if frame.get("type") == "event" else None
         safe: dict[str, object] = {"model": model, "phase": current_phase, "frame_type": frame.get("type")}
         if isinstance(event, dict):
             safe["event_type"] = event.get("type")
+            if event.get("type") == "api_retry":
+                consecutive_retries += 1
+                if consecutive_retries > MAX_PROVIDER_RETRIES:
+                    if callable(emit):
+                        emit("provider_capacity_unavailable", model=model, phase=current_phase,
+                             consecutive_retries=consecutive_retries)
+                    raise CommandCodeError("COMMAND_CODE_CAPACITY_UNAVAILABLE", model_id=model)
+            else:
+                consecutive_retries = 0
             for key in ("toolName", "turnNumber", "model"):
                 if isinstance(event.get(key), (str, int)):
                     safe[key] = event[key]
