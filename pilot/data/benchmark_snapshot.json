@@ -1,0 +1,104 @@
+{
+  "schema": "sandboxer.benchmark-snapshot.v1",
+  "pairs": {
+    "Laguna S 2.1 vs Muse Spark 1.2": {
+      "benchmarks": [
+        {"benchmark": "Terminal-Bench 2.1", "values": {"Laguna S 2.1": 0.702, "Muse Spark 1.2": 0.829}, "source": "poolside.ai/blog/introducing-laguna-s-2-1; aireleasetracker.com/model/meta/muse-spark-1.2", "harness_note": ""},
+        {"benchmark": "SWE-Bench Pro", "values": {"Laguna S 2.1": 0.594, "Muse Spark 1.2": 0.55}, "source": "poolside.ai/blog/introducing-laguna-s-2-1; aireleasetracker.com/model/meta/muse-spark-1.2", "harness_note": ""},
+        {"benchmark": "DeepSWE 1.1", "values": {"Laguna S 2.1": 0.404, "Muse Spark 1.2": 0.593}, "source": "poolside.ai/blog/introducing-laguna-s-2-1; artificialanalysis.ai/articles/muse-spark-1-2", "harness_note": ""},
+        {"benchmark": "Toolathlon Verified", "values": {"Laguna S 2.1": 0.497, "Muse Spark 1.2": 0.494}, "source": "poolside.ai/blog/introducing-laguna-s-2-1; aireleasetracker.com/model/meta/muse-spark-1.2", "harness_note": ""},
+        {"benchmark": "Arena Elo (Code)", "values": {"Laguna S 2.1": 0.74, "Muse Spark 1.2": 0.77}, "source": "artificialanalysis.ai/articles/muse-spark-1-2", "harness_note": "Elo rescaled 1200-1600 -> 0-1"}
+      ]
+    },
+    "Laguna S 2.1 vs Tencent Hy3": {
+      "benchmarks": [
+        {"benchmark": "Terminal-Bench", "values": {"Laguna S 2.1": 0.702, "Tencent Hy3": 0.644}, "source": "poolside.ai/blog/introducing-laguna-s-2-1; commandcode.ai", "harness_note": "TB version differs"}
+      ]
+    },
+    "Laguna S 2.1 vs DeepSeek V4 Flash": {
+      "benchmarks": [
+        {"benchmark": "Terminal-Bench 2.1", "values": {"Laguna S 2.1": 0.702, "DeepSeek V4 Flash": 0.827}, "source": "poolside.ai/blog/introducing-laguna-s-2-1; aireleasetracker.com", "harness_note": ""},
+        {"benchmark": "SWE-Bench Pro", "values": {"Laguna S 2.1": 0.594, "DeepSeek V4 Flash": 0.526}, "source": "poolside.ai/blog/introducing-laguna-s-2-1; aireleasetracker.com", "harness_note": ""},
+        {"benchmark": "DeepSWE 1.1", "values": {"Laguna S 2.1": 0.404, "DeepSeek V4 Flash": 0.544}, "source": "poolside.ai/blog/introducing-laguna-s-2-1; aireleasetracker.com", "harness_note": ""},
+        {"benchmark": "MCP Atlas", "values": {"Laguna S 2.1": 0.742, "DeepSeek V4 Flash": 0.674}, "source": "poolside.ai/blog/introducing-laguna-s-2-1; aireleasetracker.com", "harness_note": ""}
+      ]
+    },
+    "Laguna S 2.1 vs DeepSeek V4 Pro": {
+      "benchmarks": [
+        {"benchmark": "Terminal-Bench 2.1", "values": {"Laguna S 2.1": 0.702, "DeepSeek V4 Pro": 0.879}, "source": "aireleasetracker.com", "harness_note": "vendor-reported; independent ~0.787"},
+        {"benchmark": "SWE-Bench Pro", "values": {"Laguna S 2.1": 0.594, "DeepSeek V4 Pro": 0.554}, "source": "poolside.ai/blog/introducing-laguna-s-2-1; aireleasetracker.com", "harness_note": ""},
+        {"benchmark": "DeepSWE 1.1", "values": {"Laguna S 2.1": 0.404, "DeepSeek V4 Pro": 0.627}, "source": "poolside.ai/blog/introducing-laguna-s-2-1; aireleasetracker.com", "harness_note": ""},
+        {"benchmark": "Toolathlon Verified", "values": {"Laguna S 2.1": 0.497, "DeepSeek V4 Pro": 0.741}, "source": "poolside.ai/blog/introducing-laguna-s-2-1; aireleasetracker.com", "harness_note": "vendor-reported (DeepSeek harness)"}
+      ]
+    },
+    "Laguna S 2.1 vs Step 3.7 Flash": {
+      "benchmarks": [
+        {"benchmark": "SWE-Bench Pro", "values": {"Laguna S 2.1": 0.594, "Step 3.7 Flash": 0.563}, "source": "poolside.ai/blog/introducing-laguna-s-2-1; static.stepfun.com", "harness_note": ""},
+        {"benchmark": "Terminal-Bench 2.1", "values": {"Laguna S 2.1": 0.702, "Step 3.7 Flash": 0.595}, "source": "static.stepfun.com", "harness_note": ""}
+      ]
+    },
+    "Laguna S 2.1 vs Qwen 3.7 Max": {
+      "benchmarks": [
+        {"benchmark": "SWE-Bench Pro", "values": {"Laguna S 2.1": 0.594, "Qwen 3.7 Max": 0.606}, "source": "poolside.ai/blog/introducing-laguna-s-2-1; aireleasetracker.com", "harness_note": ""},
+        {"benchmark": "Terminal-Bench", "values": {"Laguna S 2.1": 0.702, "Qwen 3.7 Max": 0.697}, "source": "aireleasetracker.com", "harness_note": "qwen TB 2.0-Terminus"},
+        {"benchmark": "MCP Atlas", "values": {"Laguna S 2.1": 0.742, "Qwen 3.7 Max": 0.764}, "source": "poolside.ai/blog/introducing-laguna-s-2-1; aireleasetracker.com", "harness_note": ""}
+      ]
+    },
+    "Muse Spark 1.2 vs Tencent Hy3": {
+      "benchmarks": [
+        {"benchmark": "Terminal-Bench", "values": {"Muse Spark 1.2": 0.829, "Tencent Hy3": 0.644}, "source": "aireleasetracker.com/model/meta/muse-spark-1.2; commandcode.ai", "harness_note": "TB version differs"},
+        {"benchmark": "SciCode", "values": {"Muse Spark 1.2": 0.56, "Tencent Hy3": 0.476}, "source": "aireleasetracker.com/model/meta/muse-spark-1.2", "harness_note": ""}
+      ]
+    },
+    "Muse Spark 1.2 vs DeepSeek V4 Flash": {
+      "benchmarks": [
+        {"benchmark": "Terminal-Bench 2.1", "values": {"Muse Spark 1.2": 0.829, "DeepSeek V4 Flash": 0.827}, "source": "aireleasetracker.com/model/meta/muse-spark-1.2", "harness_note": ""},
+        {"benchmark": "DeepSWE 1.1", "values": {"Muse Spark 1.2": 0.593, "DeepSeek V4 Flash": 0.544}, "source": "artificialanalysis.ai/articles/muse-spark-1-2", "harness_note": ""}
+      ]
+    },
+    "Muse Spark 1.2 vs DeepSeek V4 Pro": {
+      "benchmarks": [
+        {"benchmark": "Terminal-Bench 2.1", "values": {"Muse Spark 1.2": 0.829, "DeepSeek V4 Pro": 0.879}, "source": "aireleasetracker.com/model/meta/muse-spark-1.2", "harness_note": "vendor-reported; independent ~0.787"},
+        {"benchmark": "DeepSWE 1.1", "values": {"Muse Spark 1.2": 0.593, "DeepSeek V4 Pro": 0.627}, "source": "artificialanalysis.ai/articles/muse-spark-1-2", "harness_note": ""},
+        {"benchmark": "SWE-Bench Pro", "values": {"Muse Spark 1.2": 0.55, "DeepSeek V4 Pro": 0.554}, "source": "aireleasetracker.com/model/meta/muse-spark-1.2", "harness_note": ""}
+      ]
+    },
+    "Muse Spark 1.2 vs Step 3.7 Flash": {
+      "benchmarks": [
+        {"benchmark": "Terminal-Bench 2.1", "values": {"Muse Spark 1.2": 0.829, "Step 3.7 Flash": 0.595}, "source": "aireleasetracker.com/model/meta/muse-spark-1.2; static.stepfun.com", "harness_note": ""},
+        {"benchmark": "SWE-Bench Pro", "values": {"Muse Spark 1.2": 0.55, "Step 3.7 Flash": 0.563}, "source": "aireleasetracker.com/model/meta/muse-spark-1.2; static.stepfun.com", "harness_note": ""}
+      ]
+    },
+    "Muse Spark 1.2 vs Qwen 3.7 Max": {
+      "benchmarks": [
+        {"benchmark": "SWE-Bench Pro", "values": {"Muse Spark 1.2": 0.55, "Qwen 3.7 Max": 0.606}, "source": "aireleasetracker.com/model/meta/muse-spark-1.2", "harness_note": ""},
+        {"benchmark": "Terminal-Bench", "values": {"Muse Spark 1.2": 0.829, "Qwen 3.7 Max": 0.697}, "source": "aireleasetracker.com/model/meta/muse-spark-1.2", "harness_note": "qwen TB 2.0-Terminus"}
+      ]
+    },
+    "Tencent Hy3 vs DeepSeek V4 Flash": {
+      "benchmarks": [
+        {"benchmark": "Terminal-Bench", "values": {"Tencent Hy3": 0.644, "DeepSeek V4 Flash": 0.827}, "source": "commandcode.ai", "harness_note": "TB version differs"},
+        {"benchmark": "AA Intelligence Index", "values": {"Tencent Hy3": 0.42, "DeepSeek V4 Flash": 0.5}, "source": "artificialanalysis.ai", "harness_note": ""}
+      ]
+    },
+    "Tencent Hy3 vs DeepSeek V4 Pro": {
+      "benchmarks": [
+        {"benchmark": "Terminal-Bench", "values": {"Tencent Hy3": 0.644, "DeepSeek V4 Pro": 0.879}, "source": "commandcode.ai", "harness_note": "TB version differs; deepseek vendor-reported"},
+        {"benchmark": "AA Intelligence Index", "values": {"Tencent Hy3": 0.42, "DeepSeek V4 Pro": 0.53}, "source": "artificialanalysis.ai", "harness_note": ""}
+      ]
+    },
+    "DeepSeek V4 Flash vs Step 3.7 Flash": {
+      "benchmarks": [
+        {"benchmark": "Terminal-Bench 2.1", "values": {"DeepSeek V4 Flash": 0.827, "Step 3.7 Flash": 0.595}, "source": "static.stepfun.com", "harness_note": ""},
+        {"benchmark": "SWE-Bench Pro", "values": {"DeepSeek V4 Flash": 0.526, "Step 3.7 Flash": 0.563}, "source": "static.stepfun.com; aireleasetracker.com", "harness_note": ""},
+        {"benchmark": "AA Intelligence Index", "values": {"DeepSeek V4 Flash": 0.5, "Step 3.7 Flash": 0.3}, "source": "artificialanalysis.ai", "harness_note": ""}
+      ]
+    },
+    "Qwen 3.7 Max vs DeepSeek V4 Pro": {
+      "benchmarks": [
+        {"benchmark": "SWE-Bench Pro", "values": {"Qwen 3.7 Max": 0.606, "DeepSeek V4 Pro": 0.554}, "source": "aireleasetracker.com", "harness_note": ""},
+        {"benchmark": "MCP Atlas", "values": {"Qwen 3.7 Max": 0.764, "DeepSeek V4 Pro": 0.736}, "source": "aireleasetracker.com", "harness_note": ""}
+      ]
+    }
+  }
+}

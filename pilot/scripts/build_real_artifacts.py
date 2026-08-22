@@ -25,6 +25,10 @@ to isolate outputs under ``<artifacts-root>/runs/<run-id>/`` using
 ``sandboxer_v0.run_layout`` canonical names plus a ``run-manifest.json``;
 without those flags the legacy flat layout is unchanged.
 
+Head-to-head benchmark rows come from a dataset file (default
+``pilot/data/benchmark_snapshot.json``, override with ``--benchmark-data``);
+the section matching this match's two identities is selected automatically.
+
 Then render TTS + video as usual (Fish Audio is the default TTS provider):
 
     python scripts/render_commentary_audio.py
@@ -37,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -54,9 +59,62 @@ from sandboxer_v0.artifact_converter import (
 from sandboxer_v0.arena_visual import FakeArenaVisualDrafter, draft_arena_plan
 from sandboxer_v0.commentary import HeadlessIntroCommentaryDrafter, draft_intro_commentary, draft_commentary
 from sandboxer_v0.run_layout import get_run_layout, run_artifact_path, write_run_manifest
-from sandboxer_v0.video import _digest, build_video_manifest
+from sandboxer_v0.video import build_video_manifest
 
 ROOT = Path(__file__).resolve().parent.parent.parent / "artifacts"
+
+# Head-to-head benchmark rows live in a versioned data file (one section per
+# pair, dual-published values only — see docs/benchmark-dataset-series001.md).
+DEFAULT_BENCHMARK_DATA = PILOT_ROOT / "data" / "benchmark_snapshot.json"
+
+
+class BenchmarkDataError(RuntimeError):
+    """The benchmark dataset is missing or unreadable."""
+
+
+def _pair_slug(name: str) -> str:
+    """Normalize an identity or pair key so display names and slugs match."""
+    return re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
+
+
+def load_benchmark_snapshot(path: Path, identity_a: str, identity_b: str) -> dict[str, dict[str, float]]:
+    """Select this match's pair section from the benchmark dataset file.
+
+    Returns ``{benchmark: {identity_a: value, identity_b: value}}`` — the same
+    shape the hardcoded snapshot used to have.  Pair keys match by identity
+    names in either order (slug-normalized); an unknown pair yields an empty
+    snapshot so a missing section can never silently borrow another pair's
+    numbers.  Rows without a published score for both competitors are skipped.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise BenchmarkDataError(f"benchmark data file not found: {path}") from error
+    except json.JSONDecodeError as error:
+        raise BenchmarkDataError(f"benchmark data file is not valid JSON ({path}): {error}") from error
+    pairs = data.get("pairs") if isinstance(data, dict) else None
+    if not isinstance(pairs, dict):
+        return {}
+    wanted = {_pair_slug(f"{identity_a} vs {identity_b}"),
+              _pair_slug(f"{identity_b} vs {identity_a}")}
+    section = next((entry for key, entry in pairs.items()
+                    if isinstance(key, str) and _pair_slug(key) in wanted and isinstance(entry, dict)),
+                   None)
+    if section is None:
+        return {}
+    snapshot: dict[str, dict[str, float]] = {}
+    for row in section.get("benchmarks") or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("benchmark", "")).strip()
+        values = row.get("values")
+        if not name or not isinstance(values, dict):
+            continue
+        value_a, value_b = values.get(identity_a), values.get(identity_b)
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in (value_a, value_b)):
+            continue  # dual-published rows only
+        snapshot[name] = {identity_a: float(value_a), identity_b: float(value_b)}
+    return snapshot
 
 
 def build_report(result: dict) -> dict:
@@ -96,6 +154,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="isolate outputs under <artifacts-root>/runs/<run-id>/ (sandboxer_v0.run_layout)")
     parser.add_argument("--artifacts-root", type=Path, default=None,
                         help="artifacts root for --run-id; defaults to --out-dir")
+    parser.add_argument("--benchmark-data", type=Path, default=DEFAULT_BENCHMARK_DATA,
+                        help=f"benchmark snapshot dataset JSON (default: {DEFAULT_BENCHMARK_DATA})")
     args = parser.parse_args(argv)
 
     layout = None
@@ -119,10 +179,9 @@ def main(argv: list[str] | None = None) -> int:
         IDENTITY_A: {"producer": "Poolside", "architecture": "Mixture-of-Experts", "context_length": 128_000},
         IDENTITY_B: {"producer": "Meta", "architecture": "Mixture-of-Experts", "context_length": 128_000},
     }
-    benchmark_snapshot = {
-        "CTF-Bench": {IDENTITY_A: 0.71, IDENTITY_B: 0.68},
-        "Terminal Reasoning": {IDENTITY_A: 0.83, IDENTITY_B: 0.80},
-    }
+    benchmark_snapshot = load_benchmark_snapshot(args.benchmark_data, IDENTITY_A, IDENTITY_B)
+    print(f"benchmarks: {len(benchmark_snapshot)} dual-published rows "
+          f"from {args.benchmark_data}", file=sys.stderr)
 
     # Arena choreography.  This is kept deterministic on purpose: the
     # renderer reproduces the same geometry/timing from the same replay, so
@@ -196,29 +255,10 @@ def main(argv: list[str] | None = None) -> int:
         intro_commentary=intro,
     )
 
-    # Renderer-side terminal sidecar (same convention as build_synthetic_artifacts).
-    start_ns = int(replay["frames"][0]["at_monotonic_ns"])
-    match_start = min(int(f["at_monotonic_ns"]) for f in replay["frames"])
-    scene_offsets: dict[int, int] = {}
-    cursor = manifest["scenes"][0]["duration_frames"] + manifest["scenes"][1]["duration_frames"]
-    for scene in manifest["scenes"][2:]:
-        if scene["type"] == "match":
-            scene_offsets[scene["match_number"]] = cursor
-        cursor += scene["duration_frames"]
-    terminals = []
-    for frame in replay["frames"]:
-        at_frame = scene_offsets[1] + round((int(frame["at_monotonic_ns"]) - match_start) / 1_000_000_000 * 30)
-        terminals.append({
-            "at_frame": at_frame,
-            "pane": frame["pane"],
-            "phase": frame["phase"],
-            "event_type": frame["event_type"],
-            "text": frame["text"],
-            "event_id": frame["event_id"],
-        })
-    manifest["terminal"] = terminals
-    manifest["manifest_hash"] = _digest(manifest)
-
+    # The manifest's own terminal feed is already scene-aligned (each frame
+    # carries the absolute at_frame of its owning scene segment), so no
+    # renderer-side recomputation happens here and the manifest hash recorded
+    # inside build_video_manifest stays authoritative.
     out_dir.mkdir(parents=True, exist_ok=True)
     replay_path = run_artifact_path(out_dir, "replay") if layout else out_dir / "replay.json"
     report_path = run_artifact_path(out_dir, "report") if layout else out_dir / "report.json"
