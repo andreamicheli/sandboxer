@@ -202,8 +202,18 @@ def _scene_budgets(scenes:Sequence[Mapping[str,Any]],fps:int)->dict[str,LineBudg
         elif kind=="match":
             # Match windows run the full scene: drafted lines anchor deep inside
             # the action, and the next scene boundary itself is the hard stop.
-            budgets[f"match:{int(scene['match_number'])}"]=LineBudget(
-                max_lines=10,max_words_per_line=25,max_total_words=220,
+            # Coverage scales with duration — a fixed cap dropped every line
+            # past ~10 on long matches, leaving over half the video without
+            # narration — while the floor keeps short matches bounded.
+            max_lines=min(40,max(6,round(duration_s/12)))
+            budgets[str(scene["scene_key"])]=LineBudget(
+                max_lines=max_lines,max_words_per_line=25,max_total_words=max_lines*20,
+                window_start_s=0.0,window_end_s=max(1e-6,duration_s))
+        elif kind=="interviews":
+            # Analyst reactions over the fullscreen interview block: at most a
+            # few short lines, anchored to the interview event ids.
+            budgets[str(scene["scene_key"])]=LineBudget(
+                max_lines=3,max_words_per_line=25,max_total_words=70,
                 window_start_s=0.0,window_end_s=max(1e-6,duration_s))
     return budgets
 
@@ -287,10 +297,6 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
     if not frames: raise VideoError("VIDEO_TIMELINE_EMPTY")
     start=int(frames[0]["at_monotonic_ns"])
     timeline=[{"at_frame":round((int(frame["at_monotonic_ns"])-start)/1_000_000_000*fps),"event_ids":[frame["event_id"]],"visual":"terminal_event","caption":frame.get("text","")} for frame in frames]
-    # Per-pane terminal feed for the Remotion composition: the timeline carries
-    # editorial captions, the terminal carries raw per-runner events (pane,
-    # phase, text) so each split terminal shows its own live activity.
-    terminal=[{"at_frame":round((int(frame["at_monotonic_ns"])-start)/1_000_000_000*fps),"event_id":frame["event_id"],"event_type":frame.get("event_type",""),"phase":frame.get("phase",""),"pane":int(frame.get("pane",0) or 0),"text":frame.get("text","")} for frame in frames]
     rule=f"Sandboxer is a simulated capture-the-flag. First, {identities[0]} and {identities[1]} defend their own service. Then they attack until both capture the flag or one exhausts its declared budget."
     scenes=[
         {"type":"cold_open","duration_frames":8*fps,"event_ids":[frames[-1]["event_id"]]},
@@ -298,33 +304,89 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
     ]
     matches:dict[int,list[Mapping[str,Any]]]={}
     for frame in frames: matches.setdefault(frame.get("match_number") or 1,[]).append(frame)
+    def _is_interview(frame:Mapping[str,Any])->bool:
+        return str(frame.get("phase",""))=="interview" or str(frame.get("event_type",""))=="INTERVIEW_RECORDED"
+    # Per-match editorial flow: telemetry phases {blue, interview, red} become
+    # blue action up to the first interview event, an interview title card, a
+    # fullscreen interview block, then a red-phase title card before attack
+    # action resumes.  Each segment is its own top-level scene so terminal
+    # filtering by localBase window stays exact; replays without interview or
+    # red events keep the single uncut match scene.  ``scene_key`` is the
+    # packing key shared by scene_starts, budgets and scheduled blocks — it
+    # must be unique per scene instance now that one match can span several
+    # match scenes.  ``anchor_windows`` maps each frame timestamp onto its
+    # owning scene (ns-low inclusive, ns-high exclusive, packing key).
+    anchor_windows:dict[int,list[tuple[int,int,str]]]={}
     for position,(number,match_frames) in enumerate(sorted(matches.items())):
-        duration=max(1,round((int(match_frames[-1]["at_monotonic_ns"])-int(match_frames[0]["at_monotonic_ns"]))/1_000_000_000*fps))
-        scenes.append({"type":"match","match_number":number,"duration_frames":duration,"editing":"uncut","event_ids":[frame["event_id"] for frame in match_frames]})
+        first_ns=int(match_frames[0]["at_monotonic_ns"]); last_ns=int(match_frames[-1]["at_monotonic_ns"])
+        interview_frames=[frame for frame in match_frames if _is_interview(frame)]
+        t_iv=int(interview_frames[0]["at_monotonic_ns"]) if interview_frames else None
+        red_frames=[frame for frame in match_frames if str(frame.get("phase",""))=="red" and (t_iv is None or int(frame["at_monotonic_ns"])>=t_iv)]
+        t_red=int(red_frames[0]["at_monotonic_ns"]) if red_frames else None
+        segments:list[dict[str,Any]]=[]; windows:list[tuple[int,int,str]]=[]
+        parts=0
+        def _match_segment(lo_ns:int,hi_ns:int,frames_slice:list[Mapping[str,Any]])->None:
+            nonlocal parts
+            parts+=1
+            key=f"match:{number}" if parts==1 else f"match:{number}:{parts}"
+            segments.append({"type":"match","scene_key":key,"match_number":number,
+                             "duration_frames":max(1,round((hi_ns-lo_ns)/1_000_000_000*fps)),
+                             "editing":"uncut","event_ids":[frame["event_id"] for frame in frames_slice]})
+            windows.append((lo_ns,hi_ns,key))
+        cut=t_iv if t_iv is not None else t_red
+        if cut is not None:
+            pre=[frame for frame in match_frames if int(frame["at_monotonic_ns"])<cut]
+            if pre: _match_segment(first_ns,cut,pre)
+        else:
+            _match_segment(first_ns,last_ns+1,list(match_frames))
+        if t_iv is not None:
+            iv_end=t_red if t_red is not None else last_ns+1
+            iv_duration=min(45*fps,max(8*fps,round((iv_end-t_iv)/1_000_000_000*fps)))
+            segments.append({"type":"interview_card","match_number":number,"duration_frames":4*fps,"event_ids":[interview_frames[0]["event_id"]]})
+            segments.append({"type":"interviews","scene_key":f"interviews:{number}","match_number":number,
+                             "duration_frames":iv_duration,"editing":"fullscreen",
+                             "event_ids":[frame["event_id"] for frame in interview_frames]})
+            windows.append((t_iv,iv_end,f"interviews:{number}"))
+        if t_red is not None:
+            segments.append({"type":"red_phase_card","match_number":number,"duration_frames":3*fps,"event_ids":[red_frames[0]["event_id"]]})
+            post=[frame for frame in match_frames if int(frame["at_monotonic_ns"])>=t_red]
+            if post: _match_segment(t_red,last_ns+1,post)
+        scenes.extend(segments)
+        anchor_windows[number]=windows
         if position<len(matches)-1: scenes.append({"type":"intermission","duration_frames":60*fps,"target_seconds":60,"event_ids":[match_frames[-1]["event_id"]]})
     scenes.append({"type":"factual_recap","duration_frames":12*fps,"winner":report.get("outcome",{}).get("winner"),"outcome_basis":report.get("outcome",{}).get("basis",""),"report_link":report.get("report_url"),"event_ids":[frames[-1]["event_id"]]})
     cursor=scenes[0]["duration_frames"]+scenes[1]["duration_frames"]
-    scene_offset={}; running=cursor
+    running=cursor
     scene_starts:dict[str,int]={"cold_open":0,"model_cards_and_rules":int(scenes[1]["duration_frames"])}
-    match_spans:list[tuple[str,int,int]]=[]
+    narrated_spans:list[tuple[str,int,int]]=[]  # (packing key, absolute start frame, duration) of every scene that can carry narration
     for scene in scenes[2:]:
-        if scene["type"]=="match":
-            key=f"match:{int(scene['match_number'])}"
-            scene_offset[scene["match_number"]]=running
+        if "scene_key" in scene:
+            key=str(scene["scene_key"])
             scene_starts[key]=running
-            match_spans.append((key,running,int(scene["duration_frames"])))
+            narrated_spans.append((key,running,int(scene["duration_frames"])))
         running+=scene["duration_frames"]
+    # Per-pane terminal feed for the Remotion composition: raw per-runner events
+    # (pane, phase, text) placed at their owning scene's absolute window so the
+    # renderer's localBase filtering selects exactly the events of each scene.
     event_frame={str(frame["event_id"]):frame for frame in frames}
     def _anchor(frame:Mapping[str,Any])->int:
-        match_number=frame.get("match_number") or 1
-        match_start=min(int(item["at_monotonic_ns"]) for item in matches[match_number])
-        return scene_offset[match_number]+round((int(frame["at_monotonic_ns"])-match_start)/1_000_000_000*fps)
+        """Absolute manifest frame of a replay frame inside its owning scene."""
+        ns=int(frame["at_monotonic_ns"])
+        windows=anchor_windows[frame.get("match_number") or 1]
+        for lo_ns,hi_ns,key in windows:
+            if ns<hi_ns: return scene_starts[key]+max(0,round((ns-lo_ns)/1_000_000_000*fps))
+        lo_ns,_,key=windows[-1]
+        return scene_starts[key]+max(0,round((ns-lo_ns)/1_000_000_000*fps))
     def _locate(at_frame:int)->tuple[str,float]:
-        """Map an absolute frame onto its owning match scene (key, seconds-in)."""
-        for key,start,duration in match_spans:
+        """Map an absolute frame onto its owning narrated scene (key, seconds-in)."""
+        for key,start,duration in narrated_spans:
             if at_frame<start+duration: return key,max(0.0,(at_frame-start)/fps)
-        key,start,duration=match_spans[-1]
+        key,start,duration=narrated_spans[-1]
         return key,max(0.0,min((at_frame-start)/fps,duration/fps))
+    terminal=[{"at_frame":_anchor(frame),"event_id":frame["event_id"],"event_type":frame.get("event_type",""),"phase":frame.get("phase",""),"pane":int(frame.get("pane",0) or 0),"text":frame.get("text","")} for frame in frames]
+    interviews=[{"competitor":str(frame.get("competitor") or identities[min(max(int(frame.get("pane",0) or 0),0),len(identities)-1)]),
+                 "text":str(frame.get("text","")),"event_ids":[str(frame["event_id"])]}
+                for frame in frames if _is_interview(frame)]
     def _narration()->list[dict[str,Any]]:
         # Deterministic fallback: narrate the terminal events verbatim.  Real
         # episodes pass a drafted two-voice commentary instead (see
@@ -360,5 +422,5 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
     match_lines=_schedule_commentary(commentary,budgets,scene_starts,fps,candidates,_narration())
     intro_lines=_schedule_intro_commentary(intro_commentary or (),budgets,scene_starts,fps,identities)
     scheduled=sorted(match_lines+intro_lines,key=lambda item:(item["start_frame"],item["end_frame"]))
-    manifest={"schema":"sandboxer.video-manifest.v1","fps":fps,"identities":identities,"source_bundle_hash":replay.get("source_bundle_hash"),"layout":{"split":{"left":.5,"right":.5,"permanent":True}},"timeline":timeline,"terminal":terminal,"scenes":scenes,"commentary":scheduled,"arena_visuals":dict(arena_visuals) if arena_visuals else None,"silence_allowed":True,"tts":{"expected":asdict(TtsPreflight(DEFAULT_TTS_MODEL,DEFAULT_TTS_VOICES,DEFAULT_TTS_SETTINGS_VERSION)),"requested":asdict(TtsProvenance(DEFAULT_TTS_PROVIDER,DEFAULT_TTS_MODEL,DEFAULT_TTS_VOICES)),"observed":None,"tts_provider_drift":False,"blocks":"bounded-and-hashed"},"qa":{"required":["alignment","clipping","noise","speaker_swaps","silence","pronunciation","factual_traceability","accessibility","licensing","decisive_cue_audibility"]},"composition":{"engine":"remotion","ffmpeg":["probe","loudness-normalize","mux","delivery-encode"]}}
+    manifest={"schema":"sandboxer.video-manifest.v1","fps":fps,"identities":identities,"source_bundle_hash":replay.get("source_bundle_hash"),"layout":{"split":{"left":.5,"right":.5,"permanent":True}},"timeline":timeline,"terminal":terminal,"scenes":scenes,"commentary":scheduled,"interviews":interviews,"arena_visuals":dict(arena_visuals) if arena_visuals else None,"silence_allowed":True,"tts":{"expected":asdict(TtsPreflight(DEFAULT_TTS_MODEL,DEFAULT_TTS_VOICES,DEFAULT_TTS_SETTINGS_VERSION)),"requested":asdict(TtsProvenance(DEFAULT_TTS_PROVIDER,DEFAULT_TTS_MODEL,DEFAULT_TTS_VOICES)),"observed":None,"tts_provider_drift":False,"blocks":"bounded-and-hashed"},"qa":{"required":["alignment","clipping","noise","speaker_swaps","silence","pronunciation","factual_traceability","accessibility","licensing","decisive_cue_audibility"]},"composition":{"engine":"remotion","ffmpeg":["probe","loudness-normalize","mux","delivery-encode"]}}
     manifest["manifest_hash"]=_digest(manifest);return manifest

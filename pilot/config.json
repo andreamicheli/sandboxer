@@ -23,5 +23,10 @@
     "meta/muse-spark-1.2-contributor"
   ],
   "allow_provider_calls": true,
-  "publication_enabled": false
+  "publication_enabled": false,
+  "challenges_per_match": {
+    "_doc": "Non-enforced editorial policy note while Sandboxer is on trial runs: one challenge per competitor per match, with the best-of-3 format reserved for serious content runs. Run logic still follows the fixed canonical best-of-3 match policy and ignores this field.",
+    "mode": "single",
+    "serious_content_mode": "best_of_3"
+  }
 }

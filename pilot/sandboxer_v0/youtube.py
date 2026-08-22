@@ -122,6 +122,9 @@ def youtube_metadata(
             "cold_open": "Cold open",
             "model_cards_and_rules": "Models and rules",
             "match": f"Match {scene.get('match_number', '?')}",
+            "interview_card": "Post-match interviews",
+            "interviews": f"Interviews — Match {scene.get('match_number', '?')}",
+            "red_phase_card": "Red phase",
             "intermission": "Intermission",
             "factual_recap": "Recap and report",
         }.get(kind, kind)

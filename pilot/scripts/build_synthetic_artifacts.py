@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sandboxer_v0.arena_visual import FakeArenaVisualDrafter, HeadlessArenaVisualDrafter, draft_arena_plan
 from sandboxer_v0.commentary import HeadlessIntroCommentaryDrafter, draft_intro_commentary
-from sandboxer_v0.video import _digest, build_video_manifest
+from sandboxer_v0.video import build_video_manifest
 
 ROOT = Path(__file__).resolve().parent.parent.parent / "artifacts"
 IDENTITY_A = "Laguna S 2.1"
@@ -181,32 +181,10 @@ def main() -> int:
         arena_visuals=arena,
         intro_commentary=intro,
     )
-    # Enrich with per-pane terminal data for the Remotion composition. The
-    # editorial manifest itself stays authoritative; this is a renderer-side
-    # sidecar kept consistent by recomputing the manifest hash afterwards.
-    start = int(replay["frames"][0]["at_monotonic_ns"])
-    match_start = min(int(f["at_monotonic_ns"]) for f in replay["frames"] if f.get("match_number") == 1)
-    scene_offsets: dict[int, int] = {}
-    cursor = manifest["scenes"][0]["duration_frames"] + manifest["scenes"][1]["duration_frames"]
-    for scene in manifest["scenes"][2:]:
-        if scene["type"] == "match":
-            scene_offsets[scene["match_number"]] = cursor
-        cursor += scene["duration_frames"]
-    terminals = []
-    for frame in replay["frames"]:
-        at_frame = scene_offsets[1] + round((int(frame["at_monotonic_ns"]) - match_start) / 1_000_000_000 * 30)
-        terminals.append(
-            {
-                "at_frame": at_frame,
-                "pane": frame["pane"],
-                "phase": frame["phase"],
-                "event_type": frame["event_type"],
-                "text": frame.get("text", ""),
-                "event_id": frame["event_id"],
-            }
-        )
-    manifest["terminal"] = terminals
-    manifest["manifest_hash"] = _digest(manifest)
+    # The manifest's own terminal feed is already scene-aligned (each frame
+    # carries the absolute at_frame of its owning scene segment), so no
+    # renderer-side recomputation happens here and the manifest hash recorded
+    # inside build_video_manifest stays authoritative.
     (ROOT / "replay.json").write_text(json.dumps(replay, indent=2), encoding="utf-8")
     (ROOT / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     (ROOT / "video-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
