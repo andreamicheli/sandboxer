@@ -365,16 +365,19 @@ def test_render_commentary_resumes_streaming_wav_blocks(tmp_path):
 
 
 def test_render_commentary_preserves_scene_anchored_intro_start(tmp_path):
-    intro = [{"voice_role": "play_by_play", "line_type": "editorial", "scene": "cold_open", "offset_seconds": 4.0, "text": "Welcome back."}]
+    # custom_intro (8s) replaced cold_open, so intro lines anchor to
+    # model_cards_and_rules; at 30fps that scene starts at frame 240, so
+    # offset 4s lands at 240 + 120 = 360 frames.
+    intro = [{"voice_role": "play_by_play", "line_type": "editorial", "scene": "model_cards_and_rules", "offset_seconds": 4.0, "text": "Welcome back."}]
     manifest = build_video_manifest(
         _replay(), report={"report_url": "r", "outcome": {"winner": "DeepSeek V4 Pro"}},
         model_metadata={}, benchmark_snapshot={}, intro_commentary=intro,
     )
     rendered = render_commentary_audio(manifest, FakeTtsAdapter(), out_dir=tmp_path)
     blocks = rendered["blocks"]
-    # The intro block keeps its scene-anchored start (4s = frame 120) and the
+    # The intro block keeps its scene-anchored start (frame 360) and the
     # match block is NOT pulled earlier than its event anchor (frame 840).
-    assert blocks[0]["start_frame"] == 120
+    assert blocks[0]["start_frame"] == 360
     assert blocks[1]["start_frame"] == 840
 
 

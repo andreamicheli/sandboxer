@@ -159,10 +159,10 @@ def test_video_manifest_never_lets_intro_lines_bleed_into_match_scenes():
                   {"sequence": 1, "at_monotonic_ns": 0, "event_id": "e1", "event_type": "MATCH_STARTED",
                    "phase": "blue", "pane": 0, "text": "defend"}]}
     intro = [
-        {"voice_role": "play_by_play", "line_type": "editorial", "scene": "cold_open",
-         "offset_seconds": 120.0, "text": "an offset that pretends to be absolute"},
+        {"voice_role": "play_by_play", "line_type": "editorial", "scene": "model_cards_and_rules",
+         "offset_seconds": 12.0, "text": "an offset that pretends to be absolute"},
         {"voice_role": "analyst", "line_type": "editorial", "scene": "model_cards_and_rules",
-         "offset_seconds": 45.0, "text": "another absolute-looking offset"},
+         "offset_seconds": 16.0, "text": "another absolute-looking offset"},
     ]
     manifest = build_video_manifest(replay, report={"report_url": "r", "outcome": {}},
                                     model_metadata={}, benchmark_snapshot={}, intro_commentary=intro)

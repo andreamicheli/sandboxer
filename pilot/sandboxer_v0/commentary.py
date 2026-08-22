@@ -69,7 +69,7 @@ def fallback_intro_commentary(identities: Sequence[str]) -> list[dict[str, Any]]
         {
             "voice_role": "play_by_play",
             "line_type": "editorial",
-            "scene": "cold_open",
+            "scene": "model_cards_and_rules",
             "offset_seconds": 2.0,
             "text": f"Welcome to Sandboxer: {first} against {second}.",
         },
@@ -86,7 +86,7 @@ def fallback_intro_commentary(identities: Sequence[str]) -> list[dict[str, Any]]
 COMMENTARY_LINE_TYPES = frozenset({"observed", "interpreted", "editorial"})
 COMMENTARY_ROLES = frozenset({"play_by_play", "analyst"})
 # Intro/greeting lines anchor to named scenes instead of event IDs.
-INTRO_SCENES = frozenset({"cold_open", "model_cards_and_rules"})
+INTRO_SCENES = frozenset({"model_cards_and_rules"})
 # Hedge markers keep interpreted lines recognisably interpretive (issue #2).
 HEDGE_MARKERS = (
     "appear", "seem", "looks like", "probably", "maybe", "likely",
@@ -300,8 +300,8 @@ class HeadlessIntroCommentaryDrafter:
                     "voice_roles": ["play_by_play", "analyst"],
                     "line_types": ["observed", "interpreted", "editorial"],
                     "hedging": "interpreted lines must use 'seems', 'we expect', 'likely', or similar",
-                    "offset_seconds": "non-negative float, RELATIVE TO THE START of its scene; cold_open spans 0-8s and model_cards_and_rules spans 0-20s; place the greeting near the end of cold_open",
-                    "length": "produce at most 6 lines total (1-2 in cold_open, 4-5 in model_cards_and_rules); keep each line under 20 words",
+                    "offset_seconds": "non-negative float, RELATIVE TO THE START of its scene; model_cards_and_rules spans 0-20s",
+                    "length": "produce at most 6 lines total in model_cards_and_rules; keep each line under 20 words",
                 },
                 "identities": [str(item) for item in identities],
                 "facts": facts,

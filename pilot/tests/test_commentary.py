@@ -121,7 +121,7 @@ def _intro_line(**overrides):
     line = {
         "voice_role": "play_by_play",
         "line_type": "editorial",
-        "scene": "cold_open",
+        "scene": "model_cards_and_rules",
         "offset_seconds": 3.0,
         "text": "Welcome back to Sandboxer.",
     }
@@ -144,12 +144,12 @@ def test_validate_intro_commentary_rejects_bad_scene_and_hedge():
 
 def test_intro_drafter_parses_fenced_json_list():
     payload = [
-        {"voice_role": "play_by_play", "line_type": "editorial", "scene": "cold_open", "offset_seconds": 4.0, "text": "Welcome."},
+        {"voice_role": "play_by_play", "line_type": "editorial", "scene": "model_cards_and_rules", "offset_seconds": 4.0, "text": "Welcome."},
         {"voice_role": "analyst", "line_type": "interpreted", "scene": "model_cards_and_rules", "offset_seconds": 1.0, "text": "It seems Muse moves fast.", "model": "Muse Spark 1.2"},
     ]
     adapter = _FakeAdapter("```json\n" + __import__("json").dumps(payload) + "\n```")
     lines = HeadlessIntroCommentaryDrafter(adapter=adapter).draft(["Laguna S 2.1", "Muse Spark 1.2"], {})
-    assert [line["scene"] for line in lines] == ["cold_open", "model_cards_and_rules"]
+    assert [line["scene"] for line in lines] == ["model_cards_and_rules", "model_cards_and_rules"]
     assert lines[1]["model"] == "Muse Spark 1.2"
 
 
