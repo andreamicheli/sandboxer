@@ -45,6 +45,13 @@ from .auditor import (
 )
 from .evidence import EvidenceBundle, EvidenceFreezeError, EvidenceVersionStore, freeze_evidence_bundle, verify_evidence_bundle
 from .replay import ReplayError, ReplayRenderer, build_replay, render_replay, sanitize_terminal_text
+from .artifact_converter import (
+    CanonicalEvidence,
+    CanonicalReplay,
+    convert,
+    validate_artifacts,
+    write_artifacts,
+)
 from .report import ReportModel, ResultReport, ResultReportError, build_result_report, generate_result_report, render_report_html, render_report_pdf
 from .local_kvm import LocalKvmConfig, LocalKvmRunnerProvider, SubprocessLocalKvmHost
 from .runner_backend import ProvisioningFailed
@@ -105,6 +112,11 @@ __all__ = [
     "build_replay",
     "render_replay",
     "sanitize_terminal_text",
+    "CanonicalEvidence",
+    "CanonicalReplay",
+    "convert",
+    "validate_artifacts",
+    "write_artifacts",
     "ResultReport",
     "ReportModel",
     "ResultReportError",
