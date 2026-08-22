@@ -3,8 +3,10 @@
 The uploader talks to the YouTube Data API v3 with an OAuth refresh token
 stored in the control plane (never in a Runner).  Uploads default to
 ``unlisted`` so a human can review before the episode becomes public; every
-real upload requires explicit approval.  ``dry_run`` and the fake service keep
-the credential-free rehearsal path deterministic.
+real upload requires explicit approval and must clear the hard publication
+gate (``publish_gate``) unless ``allow_ungated=True`` is passed explicitly.
+``dry_run`` and the fake service keep the credential-free rehearsal path
+deterministic.
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+from sandboxer_v0.publish_gate import PublishGateError, check_publish_gate
 
 DEFAULT_CATEGORY_ID = "28"  # Science & Technology
 DEFAULT_PRIVACY_STATUS = "unlisted"
@@ -265,6 +269,38 @@ class YoutubeUploader:
         digest = hashlib.sha256(video_path.read_bytes()).hexdigest()[:10]
         return f"sbx-dryrun-{digest}"
 
+    def _enforce_publish_gate(
+        self,
+        *,
+        bundle_path: Path | str | None,
+        report_url: str | None,
+        publications_index: Any,
+        require_http: bool,
+        allow_ungated: bool,
+    ) -> None:
+        """Refuse real uploads that would repeat the ungated-report incident.
+
+        A genuine upload (no injected service, no dry run) must carry gate
+        evidence and pass every rule; ``allow_ungated=True`` is the only
+        bypass.  Rehearsal paths (dry run, fake service) stay ungated unless
+        the caller supplies gate inputs, which are then still validated.
+        """
+        if allow_ungated:
+            return
+        gated_upload = not self.dry_run and self._service is None
+        inputs_given = any(value is not None for value in (bundle_path, report_url, publications_index))
+        if not gated_upload and not inputs_given:
+            return
+        if gated_upload and not inputs_given:
+            raise PublishGateError(
+                "PUBLISH_GATE_INPUTS_REQUIRED:"
+                "real uploads need bundle_path, report_url and publications_index;"
+                "pass allow_ungated=True to bypass deliberately"
+            )
+        failures = check_publish_gate(bundle_path, report_url, publications_index, require_http=require_http)
+        if failures:
+            raise PublishGateError("PUBLISH_GATE_BLOCKED:" + ",".join(failures))
+
     def upload(
         self,
         video_path: Path | str,
@@ -277,6 +313,11 @@ class YoutubeUploader:
         made_for_kids: bool = False,
         publish_at: str | None = None,
         approved: bool = False,
+        bundle_path: Path | str | None = None,
+        report_url: str | None = None,
+        publications_index: Any | None = None,
+        require_http: bool = True,
+        allow_ungated: bool = False,
     ) -> dict[str, Any]:
         video = self._require_file(video_path, "VIDEO")
         if privacy_status not in {"private", "unlisted", "public"}:
@@ -285,6 +326,13 @@ class YoutubeUploader:
             raise YoutubeError("YOUTUBE_METADATA_INVALID")
         if not self.dry_run and not approved:
             raise YoutubeError("YOUTUBE_NOT_APPROVED")
+        self._enforce_publish_gate(
+            bundle_path=bundle_path,
+            report_url=report_url,
+            publications_index=publications_index,
+            require_http=require_http,
+            allow_ungated=allow_ungated,
+        )
         body = {
             "snippet": {
                 "title": title,
