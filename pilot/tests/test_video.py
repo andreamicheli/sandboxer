@@ -72,9 +72,11 @@ def test_video_manifest_schedules_drafted_commentary():
     assert all(left["end_frame"]<=right["start_frame"] for left,right in zip(lines,lines[1:]))
 
 
-def test_video_manifest_rejects_ungrounded_draft():
-    with pytest.raises(VideoError,match="COMMENTARY_INVALID"):
-        build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},commentary=[{"voice_role":"play_by_play","line_type":"observed","event_ids":["ghost"],"text":"hi"}])
+def test_video_manifest_falls_back_when_draft_is_ungrounded():
+    manifest=build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},commentary=[{"voice_role":"play_by_play","line_type":"observed","event_ids":["ghost"],"text":"hi"}])
+    lines=manifest["commentary"]
+    assert all(line["text"]!="hi" for line in lines)
+    assert lines and all(line["provenance"]=="deterministic_fallback" for line in lines)
 
 
 def test_video_manifest_packs_drafted_commentary_into_a_flowing_dialogue():
@@ -91,9 +93,11 @@ def test_video_manifest_packs_drafted_commentary_into_a_flowing_dialogue():
     assert all(line["end_frame"]-line["start_frame"]>=45 for line in lines)
 
 
-def test_video_manifest_rejects_drafted_commentary_that_overflows_the_match():
-    with pytest.raises(VideoError,match="COMMENTARY_OVERFLOW"):
-        build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},commentary=[{"voice_role":"play_by_play","line_type":"observed","event_ids":["e1"],"text":" ".join(["word"]*100)}])
+def test_video_manifest_drops_drafted_commentary_that_overflows_the_match():
+    manifest=build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},commentary=[{"voice_role":"play_by_play","line_type":"observed","event_ids":["e1"],"text":" ".join(["word"]*100)}])
+    lines=manifest["commentary"]
+    assert all(len(line["text"].split())<=25 for line in lines)
+    assert lines and all(line["provenance"]=="deterministic_fallback" for line in lines)
 
 
 def test_video_manifest_schedules_intro_commentary_before_the_match():
@@ -111,8 +115,18 @@ def test_video_manifest_schedules_intro_commentary_before_the_match():
     assert all(left["end_frame"]<=right["start_frame"] for left,right in zip(lines,lines[1:]))
 
 
-def test_video_manifest_rejects_bad_intro_commentary():
-    with pytest.raises(VideoError,match="INTRO_COMMENTARY_INVALID"):
-        build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},intro_commentary=[{"voice_role":"play_by_play","line_type":"editorial","scene":"recap","offset_seconds":1.0,"text":"hi"}])
-    with pytest.raises(VideoError,match="INTRO_COMMENTARY_INVALID"):
-        build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},intro_commentary=[{"voice_role":"play_by_play","line_type":"interpreted","scene":"cold_open","offset_seconds":1.0,"text":"Muse will win."}])
+def test_video_manifest_falls_back_when_intro_scene_is_unknown():
+    manifest=build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},intro_commentary=[{"voice_role":"play_by_play","line_type":"editorial","scene":"recap","offset_seconds":1.0,"text":"hi"}])
+    intro_lines=[line for line in manifest["commentary"] if not line["event_ids"]]
+    assert intro_lines and all(line["provenance"]=="deterministic_fallback" for line in intro_lines)
+
+
+def test_video_manifest_downgrades_unhedged_interpreted_intro_inside_its_window():
+    manifest=build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},intro_commentary=[{"voice_role":"analyst","line_type":"interpreted","scene":"cold_open","offset_seconds":1.0,"text":"Muse will win."}])
+    intro_lines=[line for line in manifest["commentary"] if not line["event_ids"]]
+    assert [line["text"] for line in intro_lines]==["Muse will win."]
+    assert intro_lines[0]["line_type"]=="editorial"
+    cold_open_end=intro_lines[0]["start_frame"]
+    match_start=manifest["scenes"][0]["duration_frames"]+manifest["scenes"][1]["duration_frames"]
+    assert cold_open_end<match_start
+    assert intro_lines[0]["provenance"]=="model_draft"

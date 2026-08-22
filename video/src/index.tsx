@@ -66,6 +66,7 @@ type CommentaryLine = {
   end_frame: number;
   text: string;
   event_ids: string[];
+  provenance?: string;
 };
 
 type Manifest = {
@@ -502,7 +503,7 @@ const MatchScene: React.FC<{ manifest: Manifest; scene: Scene; localBase: number
           fontSize: 13,
         }}
       >
-        MATCH 1 · UNCUT · {fps}fps
+        MATCH {scene.match_number ?? '—'} · UNCUT · {fps}fps
       </div>
     </AbsoluteFill>
   );
@@ -538,7 +539,7 @@ const FactualRecap: React.FC<{ scene: Scene; manifest: Manifest }> = ({ scene, m
           }}
         >
           <span style={{ color: accent, textShadow: `0 0 24px ${accent}` }}>{winner}</span>
-          {basis ? ` · ${basis}` : ' exhausted its declared budget first.'}
+          {basis ? ` · ${basis}` : ''}
         </div>
         <div
           style={{

@@ -10,7 +10,20 @@ import subprocess
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
-from .commentary import HEDGE_MARKERS, validate_commentary
+from .commentary import (
+    COMMENTARY_LINE_TYPES,
+    COMMENTARY_ROLES,
+    INTRO_SCENES,
+    fallback_intro_commentary,
+    repair_line_types,
+)
+from .schedule import (
+    LineBudget,
+    PackedSchedule,
+    PROVENANCE_FALLBACK,
+    PROVENANCE_MODEL_DRAFT,
+    validate_and_pack,
+)
 
 
 class VideoError(ValueError): pass
@@ -71,62 +84,101 @@ def _benchmarks(snapshot:Mapping[str,Any],identities:tuple[str,str])->list[dict[
     return rows
 
 
-_WORDS_PER_SECOND = 2.6   # measured speaking rate for the pinned voices
-_LEAD_TAIL_SECONDS = 0.3  # per-block lead-in/tail margin
+# Editorial scheduling policy.  All placement authority lives in
+# ``schedule.validate_and_pack``; these are only the per-scene budget shapes
+# and the flow gaps used when packing dialogue vs. verbatim narration.
+_TAIL_MARGIN_SECONDS = 0.75   # keep intro speech clear of the next scene cut
+_DIALOGUE_GAP_SECONDS = 0.4   # natural pause between drafted dialogue lines
+_NARRATION_GAP_SECONDS = 0.35 # pause between fallback narration blocks
 
 
-def _line_length(text:str,fps:int)->int:
-    """Frames a commentary line needs at a conservative speaking rate.
+def _scene_budgets(scenes:Sequence[Mapping[str,Any]],fps:int)->dict[str,LineBudget]:
+    """Per-scene line budgets; windows are seconds relative to each scene start."""
+    budgets:dict[str,LineBudget]={}
+    for scene in scenes:
+        kind=str(scene["type"]); duration_s=int(scene["duration_frames"])/fps
+        if kind=="cold_open":
+            budgets["cold_open"]=LineBudget(max_lines=3,max_words_per_line=20,max_total_words=60,
+                                            window_start_s=0.0,window_end_s=max(1e-6,duration_s-_TAIL_MARGIN_SECONDS))
+        elif kind=="model_cards_and_rules":
+            budgets["model_cards_and_rules"]=LineBudget(max_lines=5,max_words_per_line=20,max_total_words=100,
+                                                        window_start_s=0.0,window_end_s=max(1e-6,duration_s-_TAIL_MARGIN_SECONDS))
+        elif kind=="match":
+            # Match windows run the full scene: drafted lines anchor deep inside
+            # the action, and the next scene boundary itself is the hard stop.
+            budgets[f"match:{int(scene['match_number'])}"]=LineBudget(
+                max_lines=10,max_words_per_line=25,max_total_words=220,
+                window_start_s=0.0,window_end_s=max(1e-6,duration_s))
+    return budgets
 
-    Word-based rather than character-based: reading time tracks the word count
-    (the voices speak ~2.5-3 words/second), plus a fixed lead-in/tail margin.
-    This is the *planning* budget and overflow guard; the final audio schedule
-    is packed from actual rendered durations after TTS.
+
+def _blocks_to_lines(packed:PackedSchedule,scene_starts:Mapping[str,int],fps:int)->list[dict[str,Any]]:
+    """Convert packed second-based blocks into manifest frame-based lines."""
+    lines:list[dict[str,Any]]=[]
+    for block in packed.blocks:
+        base=scene_starts.get(str(block.get("scene")))
+        if base is None: continue
+        start=base+round(float(block["offset_seconds"])*fps)
+        duration=max(1,round((float(block["end_seconds"])-float(block["offset_seconds"]))*fps))
+        lines.append({"voice_role":str(block.get("voice_role") or "play_by_play"),
+                      "model":str(block.get("model") or ""),
+                      "start_frame":start,"end_frame":start+duration,
+                      "text":str(block.get("text","")),
+                      "event_ids":[str(item) for item in block.get("event_ids",())],
+                      "line_type":str(block.get("line_type") or "observed"),
+                      "provenance":str(block.get("provenance") or PROVENANCE_MODEL_DRAFT)})
+    lines.sort(key=lambda item:(item["start_frame"],item["end_frame"]))
+    return lines
+
+
+def _schedule_commentary(commentary:Sequence[Mapping[str,Any]]|None,budgets:Mapping[str,LineBudget],scene_starts:Mapping[str,int],fps:int,candidates:"list[dict[str,Any]]",narration:"list[dict[str,Any]]")->list[dict[str,Any]]:
+    """Pack match commentary through the schedule authority — never raises on a bad draft.
+
+    ``candidates`` are content-conforming scene-anchored drafts (possibly empty);
+    ``narration`` is the deterministic verbatim-terminal rundown used whole when
+    no draft was requested and as fallback when every draft line is rejected.
     """
-    words=max(1,len(text.split()))
-    seconds=words/_WORDS_PER_SECOND+_LEAD_TAIL_SECONDS
-    return min(10*fps,max(int(1.5*fps),round(seconds*fps)))
+    if commentary is None:
+        packed=validate_and_pack(narration,budgets,gap_s=_NARRATION_GAP_SECONDS)
+        for block in packed.blocks: block["provenance"]=PROVENANCE_FALLBACK
+    elif candidates:
+        packed=validate_and_pack(candidates,budgets,gap_s=_DIALOGUE_GAP_SECONDS,fallback=narration)
+    else:
+        packed=validate_and_pack(narration,budgets,gap_s=_NARRATION_GAP_SECONDS)
+        for block in packed.blocks: block["provenance"]=PROVENANCE_FALLBACK
+    return _blocks_to_lines(packed,scene_starts,fps)
 
 
-def _schedule_intro_commentary(intro:Sequence[Mapping[str,Any]],scenes:Sequence[Mapping[str,Any]],fps:int)->list[dict[str,Any]]:
-    """Schedule scene-anchored greeting/model-intro commentary lines.
+def _schedule_intro_commentary(intro:Sequence[Mapping[str,Any]],budgets:Mapping[str,LineBudget],scene_starts:Mapping[str,int],fps:int,identities:Sequence[str])->list[dict[str,Any]]:
+    """Pack intro commentary through the schedule authority.
 
-    Intro lines are placed at their ``offset_seconds`` within ``cold_open`` or
-    ``model_cards_and_rules`` (they are not event-grounded, so ``event_ids``
-    stays empty).  Validation is fail-closed and mirrors the match commentary:
-    known roles/types, non-empty text, and a hedge marker on interpreted lines.
+    Intro lines can never be scheduled after their scene window ends, so a
+    malformed draft can never bleed offsets into the match scenes: out-of-window
+    offsets are clamped, non-conforming lines dropped, and an all-rejected draft
+    falls back to :func:`fallback_intro_commentary` with every block marked
+    ``deterministic_fallback``.
     """
     if not intro: return []
-    cold_dur=int(scenes[0]["duration_frames"]); model_dur=int(scenes[1]["duration_frames"])
-    scene_start={"cold_open":0,"model_cards_and_rules":cold_dur}
-    scene_dur={"cold_open":cold_dur,"model_cards_and_rules":model_dur}
-    lines:list[dict[str,Any]]=[]
-    for index,line in enumerate(intro):
-        voice_role=str(line.get("voice_role","")); line_type=str(line.get("line_type","editorial"))
-        scene=str(line.get("scene","")); text=str(line.get("text","")).strip(); offset=line.get("offset_seconds",0.0)
-        if voice_role not in {"play_by_play","analyst"}: raise VideoError(f"INTRO_COMMENTARY_INVALID: bad voice_role at {index}")
-        if line_type not in {"observed","interpreted","editorial"}: raise VideoError(f"INTRO_COMMENTARY_INVALID: bad line_type at {index}")
-        if not text: raise VideoError(f"INTRO_COMMENTARY_INVALID: empty text at {index}")
-        if scene not in scene_start: raise VideoError(f"INTRO_COMMENTARY_INVALID: bad scene {scene!r} at {index}")
-        if not isinstance(offset,(int,float)) or isinstance(offset,bool) or offset<0: raise VideoError(f"INTRO_COMMENTARY_INVALID: bad offset at {index}")
-        if line_type=="interpreted" and not any(marker in text.lower() for marker in HEDGE_MARKERS): raise VideoError(f"INTRO_COMMENTARY_INVALID: interpreted without hedge at {index}")
-        # Backends occasionally treat offset as absolute-from-video-start or
-        # cumulative; clamp it to the scene so intro lines never spill into the
-        # match.  The remaining offset still preserves scene-relative ordering.
-        offset=min(float(offset),max(0.0,scene_dur[scene]/fps-1.0))
-        start_frame=scene_start[scene]+round(offset*fps); length=_line_length(text,fps)
-        lines.append({"voice_role":voice_role,"model":str(line.get("model","")),"start_frame":start_frame,"end_frame":start_frame+length,"text":text,"event_ids":[],"line_type":line_type})
-    # Flow back-to-back with a natural pause so intro lines never overlap audio
-    # (the full-track assembly overwrites overlapping blocks).  This mirrors the
-    # drafted match-commentary flow and keeps the greeting conversational.
-    lines.sort(key=lambda item:item["start_frame"])
-    gap=round(.4*fps); at=lines[0]["start_frame"]
-    for line in lines:
-        duration=line["end_frame"]-line["start_frame"]
-        line["start_frame"]=at; line["end_frame"]=at+duration; at=line["end_frame"]+gap
-    intro_end=cold_dur+model_dur
-    if lines[-1]["end_frame"]>intro_end: raise VideoError("INTRO_COMMENTARY_OVERFLOW")
-    return lines
+    intro_budgets={scene:budget for scene,budget in budgets.items() if scene in INTRO_SCENES}
+    known={str(item) for item in identities}
+    candidates:list[dict[str,Any]]=[]
+    for line in repair_line_types([dict(item) for item in intro]):
+        text=str(line.get("text","")).strip()
+        role=line.get("voice_role"); line_type=str(line.get("line_type","editorial"))
+        model=line.get("model"); offset=line.get("offset_seconds")
+        if role not in COMMENTARY_ROLES or line_type not in COMMENTARY_LINE_TYPES or not text: continue
+        if model not in (None,"") and str(model) not in known: continue
+        if isinstance(offset,bool) or not isinstance(offset,(int,float)): continue
+        candidates.append({"scene":str(line.get("scene")),"offset_seconds":float(offset),
+                           "text":text,"voice_role":role,"line_type":line_type,
+                           "model":"" if model is None else str(model),"event_ids":[]})
+    if candidates:
+        packed=validate_and_pack(candidates,intro_budgets,gap_s=_DIALOGUE_GAP_SECONDS,
+                                 fallback=fallback_intro_commentary(identities))
+    else:
+        packed=validate_and_pack(fallback_intro_commentary(identities),intro_budgets,gap_s=_DIALOGUE_GAP_SECONDS)
+        for block in packed.blocks: block["provenance"]=PROVENANCE_FALLBACK
+    return [line for line in _blocks_to_lines(packed,scene_starts,fps) if not line["event_ids"]]
 
 
 def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model_metadata:Mapping[str,Any],benchmark_snapshot:Mapping[str,Any],fps:int=30,commentary:Sequence[Mapping[str,Any]]|None=None,arena_visuals:Mapping[str,Any]|None=None,intro_commentary:Sequence[Mapping[str,Any]]|None=None)->dict[str,Any]:
@@ -157,60 +209,60 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
     scenes.append({"type":"factual_recap","duration_frames":12*fps,"winner":report.get("outcome",{}).get("winner"),"outcome_basis":report.get("outcome",{}).get("basis",""),"report_link":report.get("report_url"),"event_ids":[frames[-1]["event_id"]]})
     cursor=scenes[0]["duration_frames"]+scenes[1]["duration_frames"]
     scene_offset={}; running=cursor
+    scene_starts:dict[str,int]={"cold_open":0,"model_cards_and_rules":int(scenes[1]["duration_frames"])}
+    match_spans:list[tuple[str,int,int]]=[]
     for scene in scenes[2:]:
-        if scene["type"]=="match": scene_offset[scene["match_number"]]=running
+        if scene["type"]=="match":
+            key=f"match:{int(scene['match_number'])}"
+            scene_offset[scene["match_number"]]=running
+            scene_starts[key]=running
+            match_spans.append((key,running,int(scene["duration_frames"])))
         running+=scene["duration_frames"]
     event_frame={str(frame["event_id"]):frame for frame in frames}
     def _anchor(frame:Mapping[str,Any])->int:
         match_number=frame.get("match_number") or 1
         match_start=min(int(item["at_monotonic_ns"]) for item in matches[match_number])
         return scene_offset[match_number]+round((int(frame["at_monotonic_ns"])-match_start)/1_000_000_000*fps)
-    if commentary is None:
+    def _locate(at_frame:int)->tuple[str,float]:
+        """Map an absolute frame onto its owning match scene (key, seconds-in)."""
+        for key,start,duration in match_spans:
+            if at_frame<start+duration: return key,max(0.0,(at_frame-start)/fps)
+        key,start,duration=match_spans[-1]
+        return key,max(0.0,min((at_frame-start)/fps,duration/fps))
+    def _narration()->list[dict[str,Any]]:
         # Deterministic fallback: narrate the terminal events verbatim.  Real
         # episodes pass a drafted two-voice commentary instead (see
         # ``sandboxer_v0/commentary.py``).
-        match_lines=[]
+        blocks=[]
         for index,frame in enumerate(frames):
-            if not frame.get("text") or index%2: continue
-            length=_line_length(str(frame["text"]),fps)
-            at=_anchor(frame)
-            match_lines.append({"voice_role":"analyst" if index and index%5==0 else "play_by_play","model":identities[frame.get("pane",0) or 0],"start_frame":at,"end_frame":at+length,"text":str(frame["text"]),"event_ids":[frame["event_id"]],"line_type":"observed"})
-    else:
-        failures=validate_commentary(commentary,frames)
-        if failures: raise VideoError("COMMENTARY_INVALID: "+"; ".join(failures))
-        match_lines=[]
-        for line in commentary:
+            text=str(frame.get("text","")).strip()
+            if not text or index%2: continue
+            scene,offset=_locate(_anchor(frame))
+            pane=min(max(int(frame.get("pane",0) or 0),0),len(identities)-1)
+            blocks.append({"scene":scene,"offset_seconds":offset,"text":text,
+                           "voice_role":"analyst" if index and index%5==0 else "play_by_play",
+                           "line_type":"observed","model":identities[pane],
+                           "event_ids":[str(frame["event_id"])]})
+        return blocks
+    candidates:list[dict[str,Any]]=[]
+    if commentary is not None:
+        for line in repair_line_types([dict(item) for item in commentary]):
+            text=str(line.get("text","")).strip()
             eids=[str(item) for item in line.get("event_ids",())]
-            anchors=[event_frame[item] for item in eids]
-            at=min(_anchor(frame) for frame in anchors)
-            length=_line_length(str(line.get("text","")),fps)
-            pane=int(anchors[0].get("pane",0) or 0)
-            match_lines.append({"voice_role":line["voice_role"],"model":str(line.get("model") or identities[pane]),"start_frame":at,"end_frame":at+length,"text":str(line["text"]),"event_ids":eids,"line_type":line.get("line_type","observed")})
-    match_lines.sort(key=lambda item:item["start_frame"])
-    if commentary is None:
-        # Verbatim fallback: keep event anchors, forbid overlap, preserve length.
-        for previous,current in zip(match_lines,match_lines[1:]):
-            duration=current["end_frame"]-current["start_frame"]
-            current["start_frame"]=max(current["start_frame"],previous["end_frame"]+round(.35*fps))
-            current["end_frame"]=current["start_frame"]+duration
-    else:
-        # Drafted dialogue: flow back-to-back with a short natural pause so the
-        # two voices sound like a conversation, not isolated event readings.
-        gap=round(.4*fps)
-        at=match_lines[0]["start_frame"]
-        for line in match_lines:
-            duration=line["end_frame"]-line["start_frame"]
-            line["start_frame"]=at
-            line["end_frame"]=at+duration
-            at=line["end_frame"]+gap
-        recap_start=sum(scene["duration_frames"] for scene in scenes[:-1])
-        if match_lines[-1]["end_frame"]>recap_start: raise VideoError("COMMENTARY_OVERFLOW")
-    intro_lines=_schedule_intro_commentary(intro_commentary,scenes,fps)
-    if intro_lines:
-        commentary=sorted(match_lines+intro_lines,key=lambda item:item["start_frame"])
-        recap_start=sum(scene["duration_frames"] for scene in scenes[:-1])
-        if commentary[-1]["end_frame"]>recap_start: raise VideoError("COMMENTARY_OVERFLOW")
-    else:
-        commentary=match_lines
-    manifest={"schema":"sandboxer.video-manifest.v1","fps":fps,"identities":identities,"source_bundle_hash":replay.get("source_bundle_hash"),"layout":{"split":{"left":.5,"right":.5,"permanent":True}},"timeline":timeline,"terminal":terminal,"scenes":scenes,"commentary":commentary,"arena_visuals":dict(arena_visuals) if arena_visuals else None,"silence_allowed":True,"tts":{"expected":asdict(TtsPreflight("gemini-3.1-flash-tts-preview",("Kore","Charon"),"settings-v1")),"blocks":"bounded-and-hashed"},"qa":{"required":["alignment","clipping","noise","speaker_swaps","silence","pronunciation","factual_traceability","accessibility","licensing","decisive_cue_audibility"]},"composition":{"engine":"remotion","ffmpeg":["probe","loudness-normalize","mux","delivery-encode"]}}
+            anchors=[event_frame[item] for item in eids if item in event_frame]
+            if (not text or len(anchors)!=len(eids)
+                    or line.get("voice_role") not in COMMENTARY_ROLES
+                    or str(line.get("line_type","observed")) not in COMMENTARY_LINE_TYPES): continue
+            pane=min(max(int(anchors[0].get("pane",0) or 0),0),len(identities)-1)
+            scene,offset=_locate(min(_anchor(frame) for frame in anchors))
+            candidates.append({"scene":scene,"offset_seconds":offset,"text":text,
+                               "voice_role":line["voice_role"],
+                               "line_type":str(line.get("line_type","observed")),
+                               "model":str(line.get("model") or identities[pane]),
+                               "event_ids":eids})
+    budgets=_scene_budgets(scenes,fps)
+    match_lines=_schedule_commentary(commentary,budgets,scene_starts,fps,candidates,_narration())
+    intro_lines=_schedule_intro_commentary(intro_commentary or (),budgets,scene_starts,fps,identities)
+    scheduled=sorted(match_lines+intro_lines,key=lambda item:(item["start_frame"],item["end_frame"]))
+    manifest={"schema":"sandboxer.video-manifest.v1","fps":fps,"identities":identities,"source_bundle_hash":replay.get("source_bundle_hash"),"layout":{"split":{"left":.5,"right":.5,"permanent":True}},"timeline":timeline,"terminal":terminal,"scenes":scenes,"commentary":scheduled,"arena_visuals":dict(arena_visuals) if arena_visuals else None,"silence_allowed":True,"tts":{"expected":asdict(TtsPreflight("gemini-3.1-flash-tts-preview",("Kore","Charon"),"settings-v1")),"blocks":"bounded-and-hashed"},"qa":{"required":["alignment","clipping","noise","speaker_swaps","silence","pronunciation","factual_traceability","accessibility","licensing","decisive_cue_audibility"]},"composition":{"engine":"remotion","ffmpeg":["probe","loudness-normalize","mux","delivery-encode"]}}
     manifest["manifest_hash"]=_digest(manifest);return manifest

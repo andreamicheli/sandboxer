@@ -15,6 +15,12 @@ interpretation:
   ("appears", "seems", …) so it stays recognisably interpretive.
 - ``editorial``     — a labelled metaphor or colour remark, grounded but not
   asserting a fact.
+
+This module drafts and content-validates; it deliberately holds no scheduling
+authority.  Placement, budgets, clamping and fallbacks are owned by
+``schedule.validate_and_pack`` and enforced on every consumption path in
+``video.build_video_manifest`` — draft ``offset_seconds`` values here are
+suggestions the scheduler may clamp or ignore.
 """
 
 from __future__ import annotations
@@ -43,6 +49,38 @@ def _repair_line_types(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ):
             line["line_type"] = "editorial"
     return lines
+
+
+# Public alias: every path that consumes an LLM draft (not just the drafter
+# parsers) applies this repair before scheduling, so the downgrade is
+# structural rather than prompt-dependent.
+repair_line_types = _repair_line_types
+
+
+def fallback_intro_commentary(identities: Sequence[str]) -> list[dict[str, Any]]:
+    """Deterministic greeting/model-intro rundown for when an LLM intro is unusable.
+
+    Authored here so the schedule authority can fall back to valid scene-anchored
+    content without ever trusting model output; every block it produces is marked
+    ``deterministic_fallback`` downstream.
+    """
+    first, second = (str(item) for item in identities[:2])
+    return [
+        {
+            "voice_role": "play_by_play",
+            "line_type": "editorial",
+            "scene": "cold_open",
+            "offset_seconds": 2.0,
+            "text": f"Welcome to Sandboxer: {first} against {second}.",
+        },
+        {
+            "voice_role": "analyst",
+            "line_type": "editorial",
+            "scene": "model_cards_and_rules",
+            "offset_seconds": 1.0,
+            "text": f"Two isolated models, one flag. On paper {first} and {second} look close.",
+        },
+    ]
 
 
 COMMENTARY_LINE_TYPES = frozenset({"observed", "interpreted", "editorial"})
@@ -321,6 +359,8 @@ __all__ = [
     "IntroCommentaryDrafter",
     "draft_commentary",
     "draft_intro_commentary",
+    "fallback_intro_commentary",
+    "repair_line_types",
     "validate_commentary",
     "validate_intro_commentary",
 ]
