@@ -10,6 +10,7 @@ import subprocess
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
+from .render_preflight import RenderPreflightPlan, preflight_render
 from .commentary import (
     COMMENTARY_LINE_TYPES,
     COMMENTARY_ROLES,
@@ -28,6 +29,15 @@ from .schedule import (
 
 class VideoError(ValueError): pass
 def _digest(value:object)->str:return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
+
+
+# Broadcast voice contract defaults: a run with no explicit TTS configuration
+# uses Fish Audio's free ``s2.1-pro-free`` tier (Kore = play-by-play, Charon =
+# analyst).  Gemini remains available only via an explicit provider override.
+DEFAULT_TTS_PROVIDER = "fish"
+DEFAULT_TTS_MODEL = "s2.1-pro-free"
+DEFAULT_TTS_VOICES = ("Kore", "Charon")
+DEFAULT_TTS_SETTINGS_VERSION = "fish-audio-v1"
 
 
 @dataclass(frozen=True)
@@ -116,6 +126,18 @@ def validate_provenance(manifest:Mapping[str,Any])->list[str]:
 def tts_block(*,script:str,model:str,voice:str,style:Mapping[str,Any],audio:bytes,duration_ms:int)->dict[str,Any]:
     if not script.strip() or not audio or not 1<=duration_ms<=30_000: raise VideoError("TTS_BLOCK_INVALID")
     return {"script":script,"model":model,"voice":voice,"style":dict(style),"duration_ms":duration_ms,"script_hash":_digest({"script":script,"model":model,"voice":voice,"style":style}),"audio_sha256":hashlib.sha256(audio).hexdigest()}
+
+
+def remotion_render_command(*,output:str,props:str,entry:str="src/index.tsx",composition_id:str="SandboxerSeries",plan:RenderPreflightPlan|None=None)->tuple[str,...]:
+    """``npx remotion render`` argv with a resource-safe ``--concurrency``.
+
+    The concurrency lane count comes from
+    :func:`sandboxer_v0.render_preflight.preflight_render` (RAM tier), so a
+    render can never OOM by spawning more Chromium lanes than the host
+    sustains.  Pass ``plan`` to reuse an already-computed plan.
+    """
+    if plan is None: plan=preflight_render()
+    return ("npx","remotion","render",entry,composition_id,output,f"--props={props}",f"--concurrency={plan.concurrency}")
 
 
 def ffmpeg_preflight(executable:str="ffmpeg",*,required_major:int=7)->dict[str,Any]:
@@ -338,5 +360,5 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
     match_lines=_schedule_commentary(commentary,budgets,scene_starts,fps,candidates,_narration())
     intro_lines=_schedule_intro_commentary(intro_commentary or (),budgets,scene_starts,fps,identities)
     scheduled=sorted(match_lines+intro_lines,key=lambda item:(item["start_frame"],item["end_frame"]))
-    manifest={"schema":"sandboxer.video-manifest.v1","fps":fps,"identities":identities,"source_bundle_hash":replay.get("source_bundle_hash"),"layout":{"split":{"left":.5,"right":.5,"permanent":True}},"timeline":timeline,"terminal":terminal,"scenes":scenes,"commentary":scheduled,"arena_visuals":dict(arena_visuals) if arena_visuals else None,"silence_allowed":True,"tts":{"expected":asdict(TtsPreflight("gemini-3.1-flash-tts-preview",("Kore","Charon"),"settings-v1")),"requested":asdict(TtsProvenance("gemini","gemini-3.1-flash-tts-preview",("Kore","Charon"))),"observed":None,"tts_provider_drift":False,"blocks":"bounded-and-hashed"},"qa":{"required":["alignment","clipping","noise","speaker_swaps","silence","pronunciation","factual_traceability","accessibility","licensing","decisive_cue_audibility"]},"composition":{"engine":"remotion","ffmpeg":["probe","loudness-normalize","mux","delivery-encode"]}}
+    manifest={"schema":"sandboxer.video-manifest.v1","fps":fps,"identities":identities,"source_bundle_hash":replay.get("source_bundle_hash"),"layout":{"split":{"left":.5,"right":.5,"permanent":True}},"timeline":timeline,"terminal":terminal,"scenes":scenes,"commentary":scheduled,"arena_visuals":dict(arena_visuals) if arena_visuals else None,"silence_allowed":True,"tts":{"expected":asdict(TtsPreflight(DEFAULT_TTS_MODEL,DEFAULT_TTS_VOICES,DEFAULT_TTS_SETTINGS_VERSION)),"requested":asdict(TtsProvenance(DEFAULT_TTS_PROVIDER,DEFAULT_TTS_MODEL,DEFAULT_TTS_VOICES)),"observed":None,"tts_provider_drift":False,"blocks":"bounded-and-hashed"},"qa":{"required":["alignment","clipping","noise","speaker_swaps","silence","pronunciation","factual_traceability","accessibility","licensing","decisive_cue_audibility"]},"composition":{"engine":"remotion","ffmpeg":["probe","loudness-normalize","mux","delivery-encode"]}}
     manifest["manifest_hash"]=_digest(manifest);return manifest
