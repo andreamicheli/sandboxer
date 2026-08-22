@@ -25,11 +25,12 @@ to isolate outputs under ``<artifacts-root>/runs/<run-id>/`` using
 ``sandboxer_v0.run_layout`` canonical names plus a ``run-manifest.json``;
 without those flags the legacy flat layout is unchanged.
 
-Then render TTS + video as usual:
+Then render TTS + video as usual (Fish Audio is the default TTS provider):
 
-    python scripts/render_commentary_audio.py --provider <gemini|fish>
+    python scripts/render_commentary_audio.py
     cd ../video && npx remotion render src/index.tsx SandboxerSeries \
-        ../artifacts/video-only.mp4 --props=../artifacts/remotion-props.json
+        ../artifacts/video-only.mp4 --props=../artifacts/remotion-props.json \
+        --concurrency="$(python3 -c 'import sys; sys.path.insert(0, "../pilot"); from sandboxer_v0.render_preflight import preflight_render; print(preflight_render().concurrency)')"
 """
 
 from __future__ import annotations

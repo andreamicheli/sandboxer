@@ -15,6 +15,7 @@ import wave
 
 from sandboxer_v0.tts import (
     DEFAULT_FISH_TTS_MODEL,
+    DEFAULT_GEMINI_TTS_MODEL,
     DEFAULT_TTS_MODEL,
     FakeTtsAdapter,
     FishAudioTtsAdapter,
@@ -22,6 +23,7 @@ from sandboxer_v0.tts import (
     render_commentary_audio,
 )
 from sandboxer_v0.video import (
+    DEFAULT_TTS_PROVIDER,
     TtsProvenance,
     build_video_manifest,
     provenance_drift,
@@ -82,8 +84,9 @@ class _GeminiClient:
 
 
 def test_requested_and_observed_both_present_with_drift_flag(tmp_path):
+    # The fake adapter emulates the default (Fish) provider exactly.
     rendered = render_commentary_audio(
-        _manifest(), FakeTtsAdapter(provider="gemini"), out_dir=tmp_path
+        _manifest(), FakeTtsAdapter(provider=DEFAULT_TTS_PROVIDER), out_dir=tmp_path
     )
     assert set(rendered["requested"]) == {"provider", "model", "voices"}
     assert set(rendered["observed"]) == {"provider", "model", "voices"}
@@ -92,12 +95,22 @@ def test_requested_and_observed_both_present_with_drift_flag(tmp_path):
 
 
 def test_drift_sets_flag_and_validate_reports_nothing(tmp_path):
-    # The incident: manifest pinned Gemini, Fish Audio actually produced audio.
+    # The incident: manifest pinned one contract, Fish Audio actually produced
+    # the audio.  With Fish now the default pin, drift is exercised via a
+    # Gemini-pinned requested section instead.
+    manifest = _manifest()
+    manifest["tts"]["expected"] = {
+        "model": DEFAULT_GEMINI_TTS_MODEL, "voices": ["Kore", "Charon"],
+        "settings_version": "settings-v1",
+    }
+    manifest["tts"]["requested"] = {
+        "provider": "gemini", "model": DEFAULT_GEMINI_TTS_MODEL, "voices": ["Kore", "Charon"],
+    }
     adapter = FishAudioTtsAdapter(
         client=_FishClient(_fish_wav()), reference_ids={"Kore": "ref-k", "Charon": "ref-c"}, probe=False
     )
-    rendered = render_commentary_audio(_manifest(), adapter, out_dir=tmp_path)
-    assert rendered["requested"] == {"provider": "gemini", "model": DEFAULT_TTS_MODEL, "voices": ("Kore", "Charon")}
+    rendered = render_commentary_audio(manifest, adapter, out_dir=tmp_path)
+    assert rendered["requested"] == {"provider": "gemini", "model": DEFAULT_GEMINI_TTS_MODEL, "voices": ("Kore", "Charon")}
     assert rendered["observed"]["provider"] == "fish"
     assert rendered["observed"]["model"] == DEFAULT_FISH_TTS_MODEL
     assert rendered["models_used"] == [DEFAULT_FISH_TTS_MODEL]
@@ -159,10 +172,10 @@ def test_unspoken_voice_is_not_drift_but_unrequested_voice_is():
 
 def test_consistent_case_passes_validation(tmp_path):
     rendered = render_commentary_audio(
-        _manifest(), FakeTtsAdapter(provider="gemini"), out_dir=tmp_path
+        _manifest(), FakeTtsAdapter(provider=DEFAULT_TTS_PROVIDER), out_dir=tmp_path
     )
-    assert rendered["requested"]["provider"] == "gemini"
-    assert rendered["observed"]["provider"] == "gemini"
+    assert rendered["requested"]["provider"] == "fish"
+    assert rendered["observed"]["provider"] == "fish"
     assert rendered["observed"]["model"] == DEFAULT_TTS_MODEL
     assert rendered["observed"]["voices"] == ("Kore",)
     assert rendered["tts_provider_drift"] is False
@@ -178,13 +191,13 @@ def test_json_round_trip_keeps_provenance_valid(tmp_path):
     reloaded = json.loads(json.dumps({"tts": rendered}))
     assert reloaded["tts"]["requested"]["voices"] == ["Kore", "Charon"]
     assert reloaded["tts"]["observed"]["model"] == DEFAULT_FISH_TTS_MODEL
-    assert reloaded["tts"]["tts_provider_drift"] is True
+    assert reloaded["tts"]["tts_provider_drift"] is False
     assert validate_provenance(reloaded) == []
 
 
 def test_manifest_carries_requested_before_synthesis():
     manifest = _manifest()
     assert manifest["tts"]["requested"] == {
-        "provider": "gemini", "model": DEFAULT_TTS_MODEL, "voices": ("Kore", "Charon"),
+        "provider": "fish", "model": DEFAULT_TTS_MODEL, "voices": ("Kore", "Charon"),
     }
     assert manifest["tts"]["observed"] is None

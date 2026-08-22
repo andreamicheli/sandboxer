@@ -60,6 +60,7 @@ from sandboxer_v0.report_narrative import (
 from sandboxer_v0.schedule import first_publication_date, parse_iso_date
 from sandboxer_v0.tts import (
     DEFAULT_FISH_TTS_MODEL,
+    DEFAULT_GEMINI_TTS_MODEL,
     DEFAULT_TTS_FALLBACK_MODELS,
     DEFAULT_TTS_MODEL,
     FakeTtsAdapter,
@@ -106,9 +107,10 @@ def _load(path: Path | None, label: str) -> dict[str, Any]:
 
 
 def _tts_adapter(mode: str, manifest: Mapping[str, Any]) -> Any:
-    model = manifest.get("tts", {}).get("expected", {}).get("model") or DEFAULT_TTS_MODEL
+    expected_model = str(manifest.get("tts", {}).get("expected", {}).get("model") or "")
+    pinned_provider = str(manifest.get("tts", {}).get("requested", {}).get("provider") or "")
     if mode == "fake":
-        return FakeTtsAdapter(model=model)
+        return FakeTtsAdapter(model=expected_model or DEFAULT_TTS_MODEL)
     if mode == "fish":
         fish_key = os.environ.get("FISH_API_KEY")
         if not fish_key:
@@ -123,11 +125,18 @@ def _tts_adapter(mode: str, manifest: Mapping[str, Any]) -> Any:
         )
     if mode != "real":
         raise SystemExit("TTS mode must be 'real', 'fake', or 'fish'")
+    # Explicit Gemini override: honor a Gemini model only when the manifest
+    # itself was built with an explicit Gemini pin.
+    model = expected_model if expected_model.startswith("gemini") else DEFAULT_GEMINI_TTS_MODEL
     # Free-tier quota is per model: an approved fallback chain lets an
     # exhausted primary continue on the next model, recorded via models_used.
     allow_fallback = os.environ.get("SANDBOXER_TTS_ALLOW_FALLBACK", "").strip().lower() in ("1", "true", "yes")
     fallback = os.environ.get("GEMINI_TTS_FALLBACK_MODELS", "").strip()
     fallback_models = tuple(m.strip() for m in fallback.split(",") if m.strip()) if fallback else DEFAULT_TTS_FALLBACK_MODELS
+    # A Gemini run against a manifest pinned to another provider (the default
+    # is Fish) is a deliberate substitution: approve it so the drift is
+    # recorded, never silent (and never a hard preflight failure).
+    allow_fallback = allow_fallback or (bool(pinned_provider) and pinned_provider != "gemini")
     return GeminiTtsAdapter(model=model, fallback_models=fallback_models, allow_fallback=allow_fallback)
 
 
@@ -230,7 +239,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--thumb", type=Path, default=None)
     parser.add_argument("--out", type=Path, default=Path("broadcast-record.json"))
     parser.add_argument("--audio-dir", type=Path, default=None)
-    parser.add_argument("--tts", choices=("real", "fake", "fish"), default="real")
+    parser.add_argument("--tts", choices=("real", "fake", "fish"), default="fish",
+                        help="TTS provider (default: fish; 'real' is the explicit Gemini override)")
     parser.add_argument("--youtube", choices=("real", "fake", "dry-run"), default="dry-run")
     parser.add_argument("--privacy", choices=("private", "unlisted", "public"), default="unlisted")
     parser.add_argument("--playlist", default=None)

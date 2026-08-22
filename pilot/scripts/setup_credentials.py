@@ -60,8 +60,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sandboxer_v0.tts import (
     DEFAULT_FISH_TTS_MODEL,
+    DEFAULT_GEMINI_TTS_MODEL,
     DEFAULT_SETTINGS_VERSION,
-    DEFAULT_TTS_MODEL,
     DEFAULT_VOICES,
     FishAudioTtsAdapter,
     GeminiTtsAdapter,
@@ -148,7 +148,7 @@ def _cmd_gemini(args: argparse.Namespace) -> int:
     print(f"Wrote GEMINI_API_KEY ({_mask(key)}) to {path}")
     if args.probe:
         adapter = GeminiTtsAdapter(api_key=key)
-        expected = TtsPreflight(DEFAULT_TTS_MODEL, DEFAULT_VOICES, DEFAULT_SETTINGS_VERSION)
+        expected = TtsPreflight(DEFAULT_GEMINI_TTS_MODEL, DEFAULT_VOICES, DEFAULT_SETTINGS_VERSION)
         try:
             result = adapter.preflight(expected)
             result.verify()

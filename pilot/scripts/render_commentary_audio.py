@@ -2,26 +2,27 @@
 
 This is the canonical entry point for the broadcast TTS step.  It reads
 ``artifacts/video-manifest.json``, synthesizes every commentary line through a
-provider adapter (Gemini by default; Fish Audio via ``--provider fish``), with
-resume of already-rendered blocks, then places each block into a full-length
-24 kHz mono track at its ``start_frame`` for muxing with the Remotion video.
+provider adapter (Fish Audio by default; Gemini via ``--provider gemini``),
+with resume of already-rendered blocks, then places each block into a
+full-length 24 kHz mono track at its ``start_frame`` for muxing with the
+Remotion video.
 
 Outputs:
     artifacts/broadcast.audio/block-XXXX.wav   per-line bounded blocks
     artifacts/broadcast.audio/block-XXXX.model sidecar (model that rendered)
     artifacts/commentary-full.wav              full-length aligned track
 
-Gemini usage:
+Fish Audio usage (free ``s2.1-pro-free`` developer tier — the default):
+    FISH_API_KEY=... FISH_TTS_VOICES="Kore=<ref>,Charon=<ref>" \\
+        python scripts/render_commentary_audio.py
+
+Gemini usage (explicit override):
     GEMINI_API_KEY=... SANDBOXER_TTS_ALLOW_FALLBACK=1 \\
-        python scripts/render_commentary_audio.py [--out-dir DIR] [--no-resume]
+        python scripts/render_commentary_audio.py --provider gemini [--out-dir DIR] [--no-resume]
 
 The Gemini fallback chain is configurable via GEMINI_TTS_FALLBACK_MODELS
 (comma-separated, in priority order) and defaults to the pinned primary plus
 Gemini 2.5 Flash preview TTS.
-
-Fish Audio usage (free ``s2.1-pro-free`` developer tier):
-    FISH_API_KEY=... FISH_TTS_VOICES="Kore=<ref>,Charon=<ref>" \\
-        python scripts/render_commentary_audio.py --provider fish
 """
 
 from __future__ import annotations
@@ -38,8 +39,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sandboxer_v0.tts import (
     DEFAULT_FISH_TTS_MODEL,
+    DEFAULT_GEMINI_TTS_MODEL,
     DEFAULT_TTS_FALLBACK_MODELS,
-    DEFAULT_TTS_MODEL,
     FishAudioTtsAdapter,
     GeminiTtsAdapter,
     parse_voice_spec,
@@ -61,9 +62,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--provider",
         choices=("gemini", "fish"),
-        default=os.environ.get("SANDBOXER_TTS_PROVIDER", "gemini"),
-        help="TTS provider (default from SANDBOXER_TTS_PROVIDER, else gemini; "
-        "fish uses FISH_API_KEY + FISH_TTS_VOICES)",
+        default=os.environ.get("SANDBOXER_TTS_PROVIDER", "fish"),
+        help="TTS provider (default from SANDBOXER_TTS_PROVIDER, else fish; "
+        "gemini is an explicit override using GEMINI_API_KEY)",
     )
     parser.add_argument(
         "--model",
@@ -119,10 +120,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not key:
             print("GEMINI_KEY_MISSING: set GEMINI_API_KEY", file=sys.stderr)
             return 2
-        allow_fallback = os.environ.get("SANDBOXER_TTS_ALLOW_FALLBACK", "").strip().lower() in ("1", "true", "yes")
+        # The manifest pins the default Fish contract; honor a Gemini model
+        # only when the manifest itself was built with an explicit Gemini pin.
+        expected_model = str(manifest.get("tts", {}).get("expected", {}).get("model") or "")
+        pinned_provider = str(manifest.get("tts", {}).get("requested", {}).get("provider") or "")
+        model = args.model or (expected_model if expected_model.startswith("gemini") else "") or DEFAULT_GEMINI_TTS_MODEL
+        env_fallback = os.environ.get("SANDBOXER_TTS_ALLOW_FALLBACK", "").strip().lower() in ("1", "true", "yes")
         fallback_env = os.environ.get("GEMINI_TTS_FALLBACK_MODELS", "").strip()
         fallback_models = tuple(m.strip() for m in fallback_env.split(",") if m.strip()) if fallback_env else DEFAULT_TTS_FALLBACK_MODELS
-        model = args.model or manifest.get("tts", {}).get("expected", {}).get("model") or DEFAULT_TTS_MODEL
+        # An explicit Gemini run against a manifest pinned to another provider
+        # is a deliberate substitution: approve it so the drift is recorded,
+        # never silent (and never a hard preflight failure).
+        allow_fallback = env_fallback or (bool(pinned_provider) and pinned_provider != "gemini")
 
         adapter = GeminiTtsAdapter(
             api_key=key,

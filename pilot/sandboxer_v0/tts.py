@@ -1,16 +1,18 @@
 """Replaceable speech-synthesis adapter for the Sandboxer broadcast layer.
 
 The editorial manifest pins a TTS contract (``TtsPreflight`` from
-``video.py``).  This module provides the two implementations of that
-contract:
+``video.py``).  This module provides the implementations of that contract:
 
+- ``FishAudioTtsAdapter`` is the default backend (Fish Audio's free
+  ``s2.1-pro-free`` tier): a run with no explicit TTS configuration uses Fish,
+  with Kore as the play-by-play voice and Charon as the analyst voice.
 - ``GeminiTtsAdapter`` calls the Gemini API ``interactions`` endpoint
-  (``gemini-3.1-flash-tts-preview`` by default) with a control-plane-only
-  API key; model or voice drift fails preflight instead of silently changing
-  the episode's sound.
+  (``DEFAULT_GEMINI_TTS_MODEL``) with a control-plane-only API key.  It is an
+  explicit override: model or voice drift fails preflight instead of silently
+  changing the episode's sound.
 - ``FakeTtsAdapter`` produces deterministic WAV bytes with no credentials,
   network, or SDK import, so tests and credential-free dry runs stay
-  reproducible.
+  reproducible against the default contract.
 
 ``render_commentary_audio`` turns the deterministic dialogue schedule in a
 video manifest into bounded, hashed audio blocks mapped to the pinned voices.
@@ -35,13 +37,27 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
-from .video import TtsPreflight, TtsProvenance, VideoError, tts_block, tts_provenance_section
+from .video import (
+    DEFAULT_TTS_MODEL,
+    DEFAULT_TTS_PROVIDER,
+    DEFAULT_TTS_SETTINGS_VERSION,
+    DEFAULT_TTS_VOICES,
+    TtsPreflight,
+    TtsProvenance,
+    VideoError,
+    tts_block,
+    tts_provenance_section,
+)
 
 PCM_RATE = 24_000
 PCM_CHANNELS = 1
 PCM_SAMPLE_WIDTH = 2
 
-DEFAULT_TTS_MODEL = "gemini-3.1-flash-tts-preview"
+# Provider-specific model ids.  The pipeline default (the manifest pin, and
+# ``DEFAULT_TTS_MODEL`` imported from ``video.py``) is Fish Audio's free tier;
+# Gemini stays available only through an explicit provider override.
+DEFAULT_FISH_TTS_MODEL = DEFAULT_TTS_MODEL
+DEFAULT_GEMINI_TTS_MODEL = "gemini-3.1-flash-tts-preview"
 # Ordered fallback chain for the Gemini TTS preview.  Free-tier quota is
 # enforced per model, so when the primary model's window is exhausted the
 # adapter can continue on the next model in the chain (only when explicitly
@@ -49,7 +65,7 @@ DEFAULT_TTS_MODEL = "gemini-3.1-flash-tts-preview"
 # free-tier quota ("limit: 0") so it is deliberately absent from the default;
 # add it via GEMINI_TTS_FALLBACK_MODELS on a paid tier.
 DEFAULT_TTS_FALLBACK_MODELS = ("gemini-2.5-flash-preview-tts",)
-DEFAULT_VOICES = ("Kore", "Charon")
+DEFAULT_VOICES = DEFAULT_TTS_VOICES
 DEFAULT_SETTINGS_VERSION = "settings-v1"
 VOICE_BY_ROLE = {"play_by_play": "Kore", "analyst": "Charon"}
 # Natural turn-taking pause between packed commentary blocks (milliseconds).
@@ -58,7 +74,6 @@ _PACK_GAP_MS = 400
 # Fish Audio (https://fish.audio) free developer tier: the `s2.1-pro-free`
 # model has no hard usage cap under Fair Use.  Voices are explicit
 # logical-label -> Fish voice-model `reference_id` mappings.
-DEFAULT_FISH_TTS_MODEL = "s2.1-pro-free"
 FISH_TTS_ENDPOINT = "https://api.fish.audio/v1/tts"
 FISH_SAMPLE_RATE = 24_000
 SUPPORTED_VOICES = frozenset(
@@ -231,7 +246,7 @@ class GeminiTtsAdapter:
         *,
         client: Any | None = None,
         api_key: str | None = None,
-        model: str = DEFAULT_TTS_MODEL,
+        model: str = DEFAULT_GEMINI_TTS_MODEL,
         fallback_models: Sequence[str] = DEFAULT_TTS_FALLBACK_MODELS,
         voices: Sequence[str] = DEFAULT_VOICES,
         settings_version: str = DEFAULT_SETTINGS_VERSION,
@@ -549,7 +564,7 @@ class FakeTtsAdapter:
         *,
         model: str = DEFAULT_TTS_MODEL,
         voices: Sequence[str] = DEFAULT_VOICES,
-        settings_version: str = DEFAULT_SETTINGS_VERSION,
+        settings_version: str = DEFAULT_TTS_SETTINGS_VERSION,
         ms_per_char: int = 80,
         min_ms: int = 300,
         max_ms: int = 30_000,
@@ -680,7 +695,7 @@ def render_commentary_audio(
         )
     else:
         requested = TtsProvenance(
-            provider="gemini", model=expected.model,
+            provider=DEFAULT_TTS_PROVIDER, model=expected.model,
             voices=tuple(expected.voices) or tuple(mapping.values()),
         )
     lines = list(manifest.get("commentary", ()))

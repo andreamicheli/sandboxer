@@ -111,17 +111,18 @@ Runner.
 The narrated Series video is derived from the frozen evidence bundle: the
 editorial manifest (`sandboxer_v0/video.py`) declares the TTS contract, then
 `sandboxer_v0/tts.py` renders the two-voice commentary as bounded, hashed audio
-blocks through a replaceable TTS adapter (Gemini
-`gemini-3.1-flash-tts-preview` with voices Kore/Charon by default; Fish Audio
-`s2.1-pro-free` as a free alternative), and `sandboxer_v0/youtube.py` performs
-the publication handoff to the YouTube Data API v3.
+blocks through a replaceable TTS adapter (Fish Audio `s2.1-pro-free` with
+voices Kore/Charon by default; Gemini `gemini-3.1-flash-tts-preview` remains
+available via an explicit provider override), and `sandboxer_v0/youtube.py`
+performs the publication handoff to the YouTube Data API v3.
 
 ### TTS adapter architecture
 
 `sandboxer_v0/tts.py` exposes a small `TtsAdapter` protocol (preflight +
 synthesize) so any backend can drive the deterministic commentary schedule.
-`GeminiTtsAdapter` is the real implementation; `FakeTtsAdapter` is
-deterministic and credential-free.  Key behaviors, all covered by tests:
+`FishAudioTtsAdapter` is the default implementation; `GeminiTtsAdapter` is the
+explicit override; `FakeTtsAdapter` is deterministic and credential-free.
+Key behaviors, all covered by tests:
 
 - **Contract drift fails closed.**  The manifest pins model + voices + settings
   (`TtsPreflight`); preflight probes the live endpoint and any mismatch raises
@@ -145,8 +146,8 @@ deterministic and credential-free.  Key behaviors, all covered by tests:
   vocabulary: Google's prompt classifier rejects inputs like "SQLi payload"
   with `content_blocked` (HTTP 400).  The synthetic fixtures use neutral
   wording; a 400 is treated as permanent and never retried or masked.
-- **Fish Audio adapter (`s2.1-pro-free`).**  `FishAudioTtsAdapter` hits the
-  single `POST /v1/tts` endpoint with stdlib `urllib` (no SDK) and maps
+- **Fish Audio adapter (`s2.1-pro-free`, the default).**  `FishAudioTtsAdapter`
+  hits the single `POST /v1/tts` endpoint with stdlib `urllib` (no SDK) and maps
   logical role voices to Fish voice-model `reference_id`s via
   `FISH_TTS_VOICES=Kore=<ref>,Charon=<ref>`.  The free developer tier has no
   hard usage cap under Fair Use, so there is no fallback chain; transient

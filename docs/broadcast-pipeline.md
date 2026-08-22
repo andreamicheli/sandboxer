@@ -21,6 +21,12 @@ speech backend.
    assembles a full-length `commentary-full.wav`.
 5. **Video render** — Remotion (`video/src/index.tsx`) renders `video-only.mp4`
    from `remotion-props.json` (`{"manifest": <video-manifest.json>}`).
+   `sandboxer_v0/video.py:remotion_render_command()` builds the argv and passes
+   a resource-safe `--concurrency` computed by
+   `sandboxer_v0/render_preflight.py:preflight_render()` (RAM decides the lane
+   count: 1 under 6 GiB, 2 under 12 GiB, else 4; a tmpfs or nearly-full TMPDIR
+   is swapped for a persistent dir under `pilot/logs/render-tmp`, with
+   warnings).
 6. **Mux** — `ffmpeg_delivery_commands()` in `video.py` (probe → loudness
    normalize → mux → delivery encode) produces `delivery.mp4`.
 7. **Publish** — `pilot/scripts/publish_broadcast.py` uploads to YouTube
@@ -122,7 +128,7 @@ Copy `FishAudioTtsAdapter` and adapt. The steps:
 |---|---|
 | Gemini | `GEMINI_API_KEY`, `GEMINI_TTS_FALLBACK_MODELS`, `SANDBOXER_TTS_ALLOW_FALLBACK` |
 | Fish | `FISH_API_KEY`, `FISH_TTS_VOICES=Kore=<ref>,Charon=<ref>`, `FISH_TTS_MODEL` |
-| Default provider | `SANDBOXER_TTS_PROVIDER=gemini|fish` |
+| Default provider | `SANDBOXER_TTS_PROVIDER` (default `fish`; set `gemini` for the explicit override) |
 | Content agents | `SANDBOXER_COMMENTARY_AGENT`, `SANDBOXER_ARENA_AGENT`, `SANDBOXER_REPORT_NARRATIVE_AGENT`, `SANDBOXER_INTRO_AGENT` (each `codex|cmd|agy`) |
 | Review agents | `SANDBOXER_REVIEW_<STAGE>_AGENT` per review stage |
 | YouTube | `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN` |
@@ -139,17 +145,22 @@ uv run python scripts/setup_credentials.py youtube --flow manual --client-id <id
 # 2. (Rehearsal) rebuild replay/report/manifest incl. drafted commentary
 uv run python scripts/build_synthetic_artifacts.py
 
-# 3. TTS commentary -> artifacts/commentary-full.wav (resumable).  Packs the
-#    blocks by their actual rendered durations (no overlap, natural turn gaps)
-#    and writes that final schedule back into video-manifest.json.
-uv run python scripts/render_commentary_audio.py --provider fish --no-resume
+# 3. TTS commentary -> artifacts/commentary-full.wav (resumable).  Fish Audio
+#    is the default provider; pass --provider gemini for the explicit Gemini
+#    override.  Packs the blocks by their actual rendered durations (no
+#    overlap, natural turn gaps) and writes that schedule back into the manifest.
+uv run python scripts/render_commentary_audio.py --no-resume
 
 # 4. Regenerate renderer props + captions from the packed schedule
 python3 -c "import json; json.dump({'manifest': json.load(open('artifacts/video-manifest.json'))}, open('artifacts/remotion-props.json','w'), indent=2)"
 uv run python scripts/build_captions.py
 
-# 5. Video -> artifacts/video-only.mp4 (Remotion)
-cd ../video && npx remotion render src/index.tsx SandboxerSeries ../artifacts/video-only.mp4 --props=../artifacts/remotion-props.json && cd ../pilot
+# 5. Video -> artifacts/video-only.mp4 (Remotion).  --concurrency comes from
+#    sandboxer_v0.render_preflight.preflight_render(): RAM decides the lane
+#    count and a tmpfs/full TMPDIR is swapped for pilot/logs/render-tmp.
+cd ../video && npx remotion render src/index.tsx SandboxerSeries ../artifacts/video-only.mp4 \
+    --props=../artifacts/remotion-props.json \
+    --concurrency="$(cd ../pilot && uv run python -c 'from sandboxer_v0.render_preflight import preflight_render; print(preflight_render().concurrency)')" && cd ../pilot
 
 # 6. Mux -> artifacts/delivery.mp4 (probe -> loudnorm -> mux -> delivery)
 ffmpeg -y -nostdin -i artifacts/commentary-full.wav -af "loudnorm=I=-16:LRA=7:TP=-1.5" -c:a pcm_s24le artifacts/commentary-full.normalized.wav

@@ -10,6 +10,7 @@ import pytest
 from sandboxer_v0.tts import (
     DEFAULT_FISH_TTS_MODEL,
     DEFAULT_TTS_MODEL,
+    DEFAULT_TTS_SETTINGS_VERSION,
     FakeTtsAdapter,
     FishAudioTtsAdapter,
     GeminiTtsAdapter,
@@ -45,7 +46,8 @@ def test_fake_adapter_synthesis_is_deterministic_wav_within_bounds():
 
 
 def test_fake_preflight_passes_and_drift_fails_closed():
-    expected = TtsPreflight(DEFAULT_TTS_MODEL, ("Kore", "Charon"), "settings-v1")
+    # The fake adapter defaults to the manifest's default (Fish) contract.
+    expected = TtsPreflight(DEFAULT_TTS_MODEL, ("Kore", "Charon"), DEFAULT_TTS_SETTINGS_VERSION)
     FakeTtsAdapter().preflight(expected).verify()
     with pytest.raises(VideoError, match="TTS_PREFLIGHT_DRIFT"):
         FakeTtsAdapter(model="other-model").preflight(expected).verify()
@@ -56,7 +58,7 @@ def test_render_commentary_maps_roles_to_pinned_voices_and_hashes_blocks(tmp_pat
     rendered = render_commentary_audio(manifest, FakeTtsAdapter(), out_dir=tmp_path)
     assert rendered["block_count"] == len(manifest["commentary"])
     assert rendered["voices"] == {"play_by_play": "Kore", "analyst": "Charon"}
-    assert rendered["expected"]["model"] == "gemini-3.1-flash-tts-preview"
+    assert rendered["expected"]["model"] == DEFAULT_FISH_TTS_MODEL
     for block in rendered["blocks"]:
         assert (tmp_path / block["file"]).is_file()
         assert block["start_frame"] is not None
@@ -308,7 +310,7 @@ def test_render_commentary_with_fish_adapter_records_models_used(tmp_path):
     rendered = render_commentary_audio(manifest, adapter, out_dir=tmp_path)
     assert rendered["block_count"] == len(manifest["commentary"])
     assert rendered["models_used"] == [DEFAULT_FISH_TTS_MODEL]
-    assert rendered["expected"]["model"] == "gemini-3.1-flash-tts-preview"
+    assert rendered["expected"]["model"] == DEFAULT_FISH_TTS_MODEL
 
 
 def test_parse_voice_spec_parses_pairs_and_ignores_junk():
