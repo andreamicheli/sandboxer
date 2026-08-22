@@ -42,13 +42,13 @@ def validate_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
     title = str(entry.get("title", "")).strip()
     if not title:
         raise PublicationIndexError("PUBLICATION_TITLE_MISSING")
-    report_url = str(entry.get("report_url", "")).strip()
+    report_url = str(entry.get("report_url") or "").strip()
     if report_url and not _URL.match(report_url):
         raise PublicationIndexError("PUBLICATION_REPORT_URL_INVALID")
-    video_url = str(entry.get("video_url", "")).strip()
+    video_url = str(entry.get("video_url") or "").strip()
     if video_url and not _URL.match(video_url):
         raise PublicationIndexError("PUBLICATION_VIDEO_URL_INVALID")
-    publish_at = str(entry.get("publish_at", "")).strip()
+    publish_at = str(entry.get("publish_at") or "").strip()
     try:
         parsed = dt.date.fromisoformat(publish_at) if publish_at else None
     except ValueError as error:

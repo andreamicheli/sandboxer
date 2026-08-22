@@ -8,10 +8,14 @@ Usage (credential-free rehearsal):
         --tts fake --youtube dry-run --out ../artifacts/broadcast.json
 
 Real mode requires control-plane credentials (GEMINI_API_KEY and the
-YOUTUBE_* refresh-token env vars).  Publishing is unattended by default
-(human gates off): the upload stays ``unlisted`` for preview and the site
-indexes the result on the next odd day.  Pass ``--manual`` to re-enable the
-human gate (``--approved-by`` plus an interactive confirmation).
+YOUTUBE_* refresh-token env vars).  Publication policy: every run uploads to
+YouTube automatically as ``unlisted`` (no approval needed) so the author can
+review the video and report together; ``public`` is refused at upload time.
+Making an episode public afterwards is a separate explicit human decision —
+``--publish-public`` with a non-empty approval token (``--approval-token`` or
+``SANDBOXER_PUBLISH_APPROVAL``) flips the uploaded unlisted video to public.
+Pass ``--manual`` to re-enable the human gate (``--approved-by`` plus an
+interactive confirmation).
 
     uv run python scripts/publish_broadcast.py \\
         --manifest ../artifacts/video-manifest.json \\
@@ -33,6 +37,10 @@ as featured while the upload stays unlisted for preview:
         --video ../artifacts/delivery.mp4 \\
         --tts fish --youtube real --privacy unlisted \\
         --bundle evidence.json --site-base-url https://sandboxer.example
+
+Ordering matters: the publication entry (slug, ``publications.json`` upsert)
+is indexed BEFORE the upload so the hard publish gate has an indexed entry to
+check; ``video_url`` is filled into the index after the upload completes.
 """
 
 from __future__ import annotations
@@ -70,7 +78,13 @@ from sandboxer_v0.tts import (
     parse_voice_spec,
     render_commentary_audio,
 )
-from sandboxer_v0.youtube import FakeYoutubeService, YoutubeError, YoutubeUploader, youtube_metadata
+from sandboxer_v0.youtube import (
+    ApprovalRequiredError,
+    FakeYoutubeService,
+    YoutubeError,
+    YoutubeUploader,
+    youtube_metadata,
+)
 from sandboxer_v0.video import validate_provenance
 
 
@@ -242,10 +256,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--tts", choices=("real", "fake", "fish"), default="fish",
                         help="TTS provider (default: fish; 'real' is the explicit Gemini override)")
     parser.add_argument("--youtube", choices=("real", "fake", "dry-run"), default="dry-run")
-    parser.add_argument("--privacy", choices=("private", "unlisted", "public"), default="unlisted")
+    parser.add_argument("--privacy", choices=("private", "unlisted"), default="unlisted",
+                        help="upload visibility; public is refused at upload time (use --publish-public afterwards)")
     parser.add_argument("--playlist", default=None)
     parser.add_argument("--approved-by", default=None)
     parser.add_argument("--yes", action="store_true")
+    parser.add_argument("--publish-public", action="store_true",
+                        help="after the upload, flip the unlisted video to public; needs an approval token")
+    parser.add_argument("--approval-token", default=None,
+                        help="explicit approval token for --publish-public (default: SANDBOXER_PUBLISH_APPROVAL env)")
     parser.add_argument("--manual", action="store_true",
                         help="re-enable the human approval gate (--approved-by + confirmation); default is unattended auto-approve")
     parser.add_argument("--report-url", default=None,
@@ -300,7 +319,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     if site_report["slug"]:
         print(f"staged site report: {site_report['report_url']}", file=sys.stderr)
 
-    # 3. YouTube handoff (metadata, resumable upload, captions, thumbnail).
+    # 3. Index the publication BEFORE the upload: the hard publish gate
+    #    refuses a real upload whose slug is not already listed in
+    #    publications.json, so the entry must exist first; ``video_url`` is
+    #    filled in after the upload completes.
+    publication_entry = site_report["publication"]
+    publications_index_path = args.site_root / "data" / "publications.json"
+    if publication_entry is not None:
+        # ``validate_entry`` rejects placeholder strings, so pending values are
+        # omitted rather than passed as None; the post-upload upsert fills them.
+        pre_upload_entry = {key: value for key, value in publication_entry.items() if value is not None}
+        try:
+            upsert_publication(publications_index_path, pre_upload_entry)
+        except PublicationIndexError as error:
+            raise SystemExit(f"PUBLICATION_INDEX_FAILED: {error}") from error
+        print(f"indexed site publication: {publication_entry['id']} (pre-upload, video_url pending)", file=sys.stderr)
+
+    # 4. YouTube handoff (metadata, resumable unlisted upload, captions, thumbnail).
     try:
         metadata = youtube_metadata(
             manifest,
@@ -321,6 +356,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.manual:
                 _confirm(f"YouTube upload ({args.privacy})", args.yes)
             uploader = YoutubeUploader(dry_run=False)
+        # Real uploads must clear the hard publish gate and therefore carry
+        # gate evidence (bundle, report URL, and the index written above);
+        # credential-free rehearsals stay ungated unless inputs are supplied.
+        gate_inputs: dict[str, Any] = {}
+        if args.bundle is not None and not rehearsal:
+            gate_inputs = {
+                "bundle_path": args.bundle,
+                "report_url": site_report["report_url"],
+                "publications_index": publications_index_path,
+            }
         preflight = uploader.preflight(video_path=args.video)
         uploaded = uploader.upload(
             args.video,
@@ -330,6 +375,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             category_id=metadata["snippet"]["categoryId"],
             privacy_status=args.privacy,
             approved=args.approved_by is not None or rehearsal,
+            **gate_inputs,
         )
         thumbnail = _best_effort(lambda: uploader.set_thumbnail(uploaded["video_id"], args.thumb)) if args.thumb else None
         captions = _best_effort(lambda: uploader.upload_captions(uploaded["video_id"], args.captions)) if args.captions else None
@@ -337,16 +383,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     except YoutubeError as error:
         raise SystemExit(f"YOUTUBE_FAILED: {error}") from error
 
-    # 4. Index the result on the site (revealed only once publish_at arrives).
-    publication_entry = site_report["publication"]
+    # 5. Fill the uploaded video_url into the pre-upload index entry.
     if publication_entry is not None:
         publication_entry = dict(publication_entry)
         publication_entry["video_url"] = uploaded["url"]
         try:
-            upsert_publication(args.site_root / "data" / "publications.json", publication_entry)
+            upsert_publication(publications_index_path, publication_entry)
         except PublicationIndexError as error:
             raise SystemExit(f"PUBLICATION_INDEX_FAILED: {error}") from error
-        print(f"indexed site publication: {publication_entry['id']} (publish_at={publication_entry.get('publish_at')})", file=sys.stderr)
+
+    # 6. Public visibility is a separate explicit human decision, never part
+    #    of the upload: --publish-public flips the unlisted episode only with
+    #    a non-empty approval token (--approval-token or env).
+    published_public = None
+    if args.publish_public:
+        try:
+            published_public = uploader.publish_public(uploaded["video_id"], args.approval_token)
+        except ApprovalRequiredError as error:
+            raise SystemExit(str(error)) from error
+        except YoutubeError as error:
+            raise SystemExit(f"YOUTUBE_FAILED: {error}") from error
+        print(f"published public: {published_public['url']}", file=sys.stderr)
 
     record = {
         "schema": "sandboxer.broadcast.v1",
@@ -370,6 +427,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "dry_run": uploaded["dry_run"],
             "approved_by": args.approved_by,
             "channel": preflight.get("channel"),
+            "publish_public": published_public,
         },
         "publication": {
             "report_url": site_report["report_url"],

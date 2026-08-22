@@ -1,10 +1,14 @@
 """YouTube publication handoff for the broadcast layer.
 
 The uploader talks to the YouTube Data API v3 with an OAuth refresh token
-stored in the control plane (never in a Runner).  Uploads default to
-``unlisted`` so a human can review before the episode becomes public; every
-real upload requires explicit approval and must clear the hard publication
-gate (``publish_gate``) unless ``allow_ungated=True`` is passed explicitly.
+stored in the control plane (never in a Runner).  Publication policy: every
+upload goes out automatically as ``unlisted`` (no approval needed) so a human
+can review video and report together; ``public`` is never granted at upload
+time.  Flipping an unlisted episode to ``public`` is a separate, explicit
+human decision via ``YoutubeUploader.publish_public``, which requires a
+non-empty approval token (argument or ``SANDBOXER_PUBLISH_APPROVAL`` env).
+Every real upload must still clear the hard publication gate
+(``publish_gate``) unless ``allow_ungated=True`` is passed explicitly.
 ``dry_run`` and the fake service keep the credential-free rehearsal path
 deterministic.
 """
@@ -22,11 +26,21 @@ from sandboxer_v0.publish_gate import PublishGateError, check_publish_gate
 
 DEFAULT_CATEGORY_ID = "28"  # Science & Technology
 DEFAULT_PRIVACY_STATUS = "unlisted"
+APPROVAL_TOKEN_ENV = "SANDBOXER_PUBLISH_APPROVAL"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 
 class YoutubeError(ValueError):
     pass
+
+
+class ApprovalRequiredError(RuntimeError):
+    """Public visibility was requested without explicit human approval.
+
+    The publication policy allows unlisted uploads to proceed automatically,
+    but going ``public`` requires a non-empty approval token supplied as an
+    argument or via ``SANDBOXER_PUBLISH_APPROVAL``.
+    """
 
 
 def _digest(value: object) -> str:
@@ -165,6 +179,9 @@ class _FakeMethod:
     def insert(self, **kwargs: Any) -> _FakeRequest:
         return _FakeRequest(self._service, f"{self._resource}.insert", **kwargs)
 
+    def update(self, **kwargs: Any) -> _FakeRequest:
+        return _FakeRequest(self._service, f"{self._resource}.update", **kwargs)
+
     def set(self, **kwargs: Any) -> _FakeRequest:
         return _FakeRequest(self._service, f"{self._resource}.set", **kwargs)
 
@@ -201,6 +218,10 @@ class FakeYoutubeService:
             body = kwargs.get("body") or {}
             status = body.get("status") or {}
             return {"id": f"sbx-video-{self._counter:04d}", "status": {"privacyStatus": status.get("privacyStatus", "unlisted")}}
+        if method == "videos.update":
+            body = kwargs.get("body") or {}
+            status = body.get("status") or {}
+            return {"id": body.get("id"), "status": {"privacyStatus": status.get("privacyStatus", "unlisted")}}
         if method == "thumbnails.set":
             return {"items": [{"url": f"https://i.ytimg.com/vi/{kwargs.get('videoId')}/hqdefault.jpg"}]}
         if method == "captions.insert":
@@ -322,6 +343,15 @@ class YoutubeUploader:
         video = self._require_file(video_path, "VIDEO")
         if privacy_status not in {"private", "unlisted", "public"}:
             raise YoutubeError("YOUTUBE_PRIVACY_INVALID")
+        if privacy_status == "public":
+            # Public visibility is never granted at upload time: every episode
+            # goes out unlisted (or private) for human review; flipping an
+            # uploaded video to public happens only via publish_public().
+            raise YoutubeError(
+                "YOUTUBE_PRIVACY_PUBLIC_FORBIDDEN:"
+                "uploads are never public;"
+                "upload unlisted then call publish_public() with an approval token"
+            )
         if not title.strip() or not description.strip():
             raise YoutubeError("YOUTUBE_METADATA_INVALID")
         if not self.dry_run and not approved:
@@ -369,6 +399,42 @@ class YoutubeUploader:
             raise YoutubeError("YOUTUBE_UPLOAD_FAILED")
         self.calls.append({"method": "videos.insert", "video_id": video_id, "privacy_status": privacy_status, "approved": True})
         return {"video_id": video_id, "url": f"https://www.youtube.com/watch?v={video_id}", "privacy_status": privacy_status, "dry_run": False}
+
+    def publish_public(self, video_id: str, approval_token: str | None = None) -> dict[str, Any]:
+        """Flip an existing unlisted video to ``public`` behind explicit approval.
+
+        The approval token must be non-empty — passed directly or resolved
+        from the ``SANDBOXER_PUBLISH_APPROVAL`` environment variable — and is
+        the recorded human decision that this episode may become public.
+        Without it ``ApprovalRequiredError`` is raised before any API call;
+        the token itself is never stored or logged, only its use.
+        """
+        if not str(video_id or "").strip():
+            raise YoutubeError("YOUTUBE_VIDEO_ID_MISSING")
+        token = str(approval_token or "").strip() or os.environ.get(APPROVAL_TOKEN_ENV, "").strip()
+        if not token:
+            raise ApprovalRequiredError(
+                f"PUBLISH_APPROVAL_REQUIRED:"
+                f"making {video_id} public needs a non-empty approval token"
+                f"(argument or {APPROVAL_TOKEN_ENV})"
+            )
+        body = {"id": video_id, "status": {"privacyStatus": "public"}}
+        if self.dry_run:
+            self.calls.append({"method": "videos.update", "video_id": video_id, "privacy_status": "public"})
+            return {"video_id": video_id, "url": f"https://www.youtube.com/watch?v={video_id}", "privacy_status": "public", "dry_run": True}
+        youtube = self._youtube()
+        try:
+            response = youtube.videos().update(part="status", body=body).execute()
+        except Exception as error:
+            raise YoutubeError("YOUTUBE_PUBLISH_PUBLIC_FAILED") from error
+        privacy_status = ((response or {}).get("status") or {}).get("privacyStatus", "public")
+        self.calls.append({"method": "videos.update", "video_id": video_id, "privacy_status": privacy_status})
+        return {
+            "video_id": video_id,
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "privacy_status": privacy_status,
+            "dry_run": False,
+        }
 
     def set_thumbnail(self, video_id: str, thumbnail_path: Path | str) -> dict[str, Any]:
         thumbnail = self._require_file(thumbnail_path, "THUMBNAIL")
