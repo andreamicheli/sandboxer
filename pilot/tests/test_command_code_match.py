@@ -110,12 +110,24 @@ def test_monitor_allows_runner_tools_and_rejects_unallowlisted_provider_tools():
             "model": "test-model",
         },
     }
-    with pytest.raises(CommandCodeError, match="COMMAND_CODE_NATIVE_TOOL_REJECTED"):
-        monitor(unallowlisted_frame)
+    # Contained native probe: recorded, phase continues (no abort).
+    monitor(unallowlisted_frame)
     assert any(
         kind == "provider_tool_rejected" and fields.get("tool_name") == "shell_command"
         for kind, fields in emitted
     )
+    # Actual execution of a native tool remains the hard abort condition.
+    executed_native_frame = {
+        "type": "event",
+        "event": {
+            "type": "tool_completed",
+            "toolName": "shell_command",
+            "turnNumber": 1,
+            "model": "test-model",
+        },
+    }
+    with pytest.raises(CommandCodeError, match="COMMAND_CODE_NATIVE_TOOL_REJECTED"):
+        monitor(executed_native_frame)
 
 
 def test_runner_tools_and_denials_are_not_misclassified_as_native_tool_rejection():
@@ -156,8 +168,12 @@ def test_runner_tools_and_denials_are_not_misclassified_as_native_tool_rejection
     }
     monitor(queued_native_frame)
 
-    assert any(kind == "provider_tool_denied" and fields.get("tool_name") == "shell_command" for kind, fields in emitted)
-    assert not any(kind == "provider_tool_rejected" for kind, fields in emitted)
+    # Denied/queued native calls are contained: recorded as rejected probes,
+    # never as executed, and no abort.
+    assert any(kind == "provider_tool_rejected" and fields.get("tool_name") == "shell_command" for kind, fields in emitted)
+    assert not any(
+        kind == "provider_native_tool_executed" for kind, fields in emitted
+    )
 
 
 def test_consecutive_retries_above_threshold_raise_capacity_unavailable():

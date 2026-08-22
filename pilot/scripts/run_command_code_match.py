@@ -144,14 +144,21 @@ def _frame_monitor(
                 if isinstance(event.get(key), (str, int)):
                     safe[key] = event[key]
             name = event.get("toolName")
-            if isinstance(name, str) and not name.startswith("mcp__runner__") and event.get("type") not in {"tool_queued", "tool_denied"}:
-                if callable(emit):
-                    emit("provider_tool_rejected", model=model, phase=current_phase,
-                         event_type=event.get("type"), tool_name=name)
-                raise CommandCodeError("COMMAND_CODE_NATIVE_TOOL_REJECTED")
-            if isinstance(name, str) and not name.startswith("mcp__runner__") and event.get("type") == "tool_denied":
-                if callable(emit):
-                    emit("provider_tool_denied", model=model, phase=current_phase, tool_name=name)
+            # A native (non-allowlisted) tool call is contained structurally:
+            # command-code's permissions allowlist denies execution before it
+            # can reach the runner, and the model receives the denial result.
+            # Abort only on evidence of actual execution; a queued/running
+            # native probe is recorded and the phase continues so a single
+            # tool-discovery quirk cannot kill an otherwise valid match.
+            if isinstance(name, str) and not name.startswith("mcp__runner__"):
+                if event.get("type") in {"tool_queued", "tool_denied", "tool_running"}:
+                    if callable(emit):
+                        emit("provider_tool_rejected", model=model, phase=current_phase,
+                             event_type=event.get("type"), tool_name=name)
+                elif event.get("type") == "tool_completed":
+                    if callable(emit):
+                        emit("provider_native_tool_executed", model=model, phase=current_phase, tool_name=name)
+                    raise CommandCodeError("COMMAND_CODE_NATIVE_TOOL_REJECTED")
         if callable(emit):
             emit("provider_frame", **safe)
     return on_frame
