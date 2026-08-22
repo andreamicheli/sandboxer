@@ -1,7 +1,8 @@
 """Build broadcast artifacts from a real Command Code match.
 
 Reads a frozen match's telemetry JSONL + result.json (as written by
-`run_command_code_match.py`) and produces, under artifacts/:
+`run_command_code_match.py`), converts them through the canonical
+`sandboxer_v0.artifact_converter.convert` phase, and produces, under artifacts/:
 
   replay.json            (schema sandboxer.replay.v1)
   report.json            (schema sandboxer.result-report.v1)
@@ -42,121 +43,19 @@ PILOT_ROOT = Path(__file__).resolve().parents[1]
 if str(PILOT_ROOT) not in sys.path:
     sys.path.insert(0, str(PILOT_ROOT))
 
+from sandboxer_v0.artifact_converter import (
+    IDENTITY_A,
+    IDENTITY_B,
+    _PANE_NAMES,
+    _public_identity,
+    convert,
+)
 from sandboxer_v0.arena_visual import FakeArenaVisualDrafter, draft_arena_plan
 from sandboxer_v0.commentary import HeadlessIntroCommentaryDrafter, draft_intro_commentary, draft_commentary
 from sandboxer_v0.run_layout import get_run_layout, run_artifact_path, write_run_manifest
 from sandboxer_v0.video import _digest, build_video_manifest
 
 ROOT = Path(__file__).resolve().parent.parent.parent / "artifacts"
-
-# Public names used by the broadcast layer (matches the synthetic fixtures and
-# the video logo/accent registry).
-IDENTITY_A = "Laguna S 2.1"     # poolside/laguna-s-2.1-free
-IDENTITY_B = "Muse Spark 1.2"   # meta/muse-spark-1.2-contributor
-_MODEL_TO_PANE = {
-    "poolside/laguna-s-2.1-free": 0,
-    "meta/muse-spark-1.2-contributor": 1,
-}
-_PANE_NAMES = {0: IDENTITY_A, 1: IDENTITY_B}
-
-# Neutral terminal text shown for each allowed tool (TTS classifier-safe).
-_TOOL_TEXT = {
-    "inspect_service": "inspect: declared service surface",
-    "deploy_service": "deploy: proposed service spec",
-    "request_own_service": "verify: self-service health check",
-    "finish_phase": "finish: phase wraps up",
-    "describe_target_service": "target: opponent service contract",
-    "http_request": "probe: HTTP request on target",
-    "submit_flag": "verify: objective token submission",
-}
-
-
-def _public_identity(model_id: str) -> str:
-    return _PANE_NAMES.get(_MODEL_TO_PANE.get(model_id, -1), model_id)
-
-
-def build_replay(telemetry: list[dict], result: dict) -> dict:
-    """Derive a replay from the real match telemetry (tool decisions etc.)."""
-    start_ns = telemetry[0]["monotonic_ns"] if telemetry else 0
-    frames: list[dict] = []
-    sequence = 0
-
-    def add(*, phase: str, pane: int, etype: str, text: str, ns: int) -> None:
-        nonlocal sequence
-        sequence += 1
-        frames.append({
-            "sequence": sequence,
-            "at_monotonic_ns": int(ns),
-            "event_id": f"e{sequence:02d}",
-            "event_type": etype,
-            "phase": phase,
-            "pane": pane,
-            "text": text,
-            "match_number": 1,
-        })
-
-    for event in telemetry:
-        kind = event.get("kind") or event.get("event_type")
-        ns = event.get("monotonic_ns", start_ns)
-        model = event.get("model") or event.get("competitor") or ""
-        pane = _MODEL_TO_PANE.get(model) if model else None
-        phase = str(event.get("phase", "blue"))
-
-        if kind == "match_started":
-            add(phase="blue", pane=0, etype="MATCH_STARTED",
-                text="match started - two isolated services, one flag each", ns=ns)
-            add(phase="blue", pane=1, etype="MATCH_STARTED",
-                text="match started - services coming up", ns=ns + 1)
-            continue
-        if kind == "blue_finished":
-            add(phase="blue", pane=0, etype="PHASE_TRANSITION",
-                text="blue phase complete - defenses are live", ns=ns)
-            continue
-        if kind == "interview_finished":
-            add(phase="blue", pane=1, etype="PHASE_TRANSITION",
-                text="interview complete - rules confirmed", ns=ns)
-            continue
-        if kind == "deployment_promoted":
-            if pane is None:
-                continue
-            policy = str(event.get("protected_policy", "?")).upper()
-            recovery = str(event.get("recovery_posture", "?")).upper()
-            add(phase="blue", pane=pane, etype="MODEL_RESPONSE",
-                text=f"defense promoted: {policy} policy, {recovery} recovery", ns=ns)
-            continue
-        if kind == "tool_decision":
-            if pane is None:
-                continue
-            tool = str(event.get("tool", ""))
-            text = _TOOL_TEXT.get(tool, f"tool: {tool}")
-            add(phase=phase, pane=pane, etype="TOOL_CALL", text=text, ns=ns)
-            continue
-        if kind == "match_finished":
-            winner = str(result.get("winner", ""))
-            winner_name = _public_identity(winner)
-            reason = str(result.get("reason_code", ""))
-            add(phase="red", pane=0, etype="MATCH_FINISHED",
-                text=f"match finished - {reason}, winner {winner_name}", ns=ns)
-            continue
-        if kind == "teardown":
-            add(phase="red", pane=1, etype="MATCH_FINISHED",
-                text="teardown complete - runners destroyed", ns=ns)
-            continue
-        # Skip the high-volume provider frames; tool decisions carry the story.
-        continue
-
-    # Ensure at least a minimal frame set even for unusual telemetry.
-    if not frames:
-        add(phase="blue", pane=0, etype="MATCH_STARTED", text="match started", ns=start_ns)
-        add(phase="red", pane=1, etype="MATCH_FINISHED", text="match finished", ns=start_ns + 1)
-
-    return {
-        "schema_version": "sandboxer.replay.v1",
-        "source_bundle_hash": str(result.get("seed", "match"))[:64].ljust(64, "0"),
-        "panes": [{"identity": IDENTITY_A}, {"identity": IDENTITY_B}],
-        "layout": {"split": {"left": 0.5, "right": 0.5, "permanent": True}},
-        "frames": frames,
-    }
 
 
 def build_report(result: dict) -> dict:
@@ -211,7 +110,8 @@ def main(argv: list[str] | None = None) -> int:
     ]
     result = json.loads(args.result.read_text(encoding="utf-8"))
 
-    replay = build_replay(telemetry, result)
+    _evidence, canonical_replay = convert(telemetry, result)
+    replay = canonical_replay.to_dict()
     report = build_report(result)
 
     model_metadata = {
