@@ -22,6 +22,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Protocol, Sequence
 
@@ -245,7 +246,67 @@ class AgyAdapter:
         return text.strip()
 
 
-AGENT_KINDS = ("codex", "cmd", "agy")
+class HermesAdapter:
+    """Hermes CLI (Nous Research) in headless single-query mode.
+
+    Temporary substitute for ``codex``/``agy`` while those backends are
+    unavailable on this host: runs ``hermes chat -Q -q <prompt>`` and returns
+    the final response text.  The default model comes from the Hermes config
+    (``~/.hermes/config.yaml`` -> ``orcarouter/free``), overridable per
+    adapter via ``model``/``-m``.
+
+    ``retries``/``retry_base_seconds`` retry the whole query on transient
+    failures (timeout, non-zero exit) — the free-tier backend behind Hermes
+    occasionally stalls or rate-limits a single heavy prompt, so a bounded
+    retry is what keeps content phases from falling back to authored text.
+    """
+
+    _TRANSIENT = ("HERMES_TIMEOUT", "HERMES_FAILED")
+
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        executable: Sequence[str] = ("hermes",),
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        retries: int = 2,
+        retry_base_seconds: float = 3.0,
+    ) -> None:
+        self.model = model
+        self._executable = tuple(executable)
+        self._timeout = timeout_seconds
+        self._retries = max(0, int(retries))
+        self._retry_base = retry_base_seconds
+
+    def complete(self, prompt: str) -> str:
+        if not prompt.strip():
+            raise HeadlessAgentError("HERMES_EMPTY_PROMPT")
+        attempt = 0
+        while True:
+            try:
+                return self._complete_once(prompt)
+            except HeadlessAgentError as error:
+                if error.reason_code not in self._TRANSIENT or attempt >= self._retries:
+                    raise
+                attempt += 1
+                time.sleep(self._retry_base * attempt)
+
+    def _complete_once(self, prompt: str) -> str:
+        command: list[str] = [*self._executable, "chat", "-Q", "-q", prompt]
+        if self.model:
+            command += ["-m", self.model]
+        proc = _run(command, binary_kind="HERMES", timeout_seconds=self._timeout)
+        if proc.returncode != 0:
+            raise HeadlessAgentError("HERMES_FAILED", detail=(proc.stderr or "")[-400:].strip())
+        text = proc.stdout.strip()
+        # Strip any trailing session_id / info lines hermes prints after the answer.
+        lines = [line for line in text.splitlines() if line.strip()]
+        if not lines:
+            raise HeadlessAgentError("HERMES_EMPTY")
+        return "\n".join(lines).strip()
+
+
+AGENT_KINDS = ("codex", "cmd", "agy", "hermes")
 
 # Phase → default agent kind.  ``agy`` (Antigravity Gemini, default model
 # gemini-3.7-flash-high) is the preferred backend for prose phases — intro and
@@ -276,6 +337,8 @@ def resolve_adapter(kind: str, *, model: str | None = None) -> HeadlessAgentAdap
         return CmdAdapter(model=model) if model else CmdAdapter()
     if normalized == "agy":
         return AgyAdapter(model=model) if model else AgyAdapter()
+    if normalized == "hermes":
+        return HermesAdapter(model=model) if model else HermesAdapter()
     raise HeadlessAgentError("AGENT_UNKNOWN")
 
 
@@ -303,6 +366,7 @@ __all__ = [
     "CodexAdapter",
     "HeadlessAgentAdapter",
     "HeadlessAgentError",
+    "HermesAdapter",
     "PHASE_DEFAULTS",
     "phase_adapter",
     "resolve_adapter",

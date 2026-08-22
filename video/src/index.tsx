@@ -55,6 +55,7 @@ type Scene = {
   rules_sentence?: string;
   match_number?: number;
   winner?: string;
+  outcome_basis?: string;
   report_link?: string;
 };
 
@@ -517,6 +518,7 @@ const FactualRecap: React.FC<{ scene: Scene; manifest: Manifest }> = ({ scene, m
   const winner = scene.winner;
   const accent = winner ? ACCENTS[winner] ?? COBALT : COBALT;
   const inP = spring({ frame, fps, config: { damping: 14 } });
+  const basis = scene.outcome_basis ?? '';
   return (
     <AbsoluteFill style={{ background: NAVY }}>
       <Grid />
@@ -535,10 +537,8 @@ const FactualRecap: React.FC<{ scene: Scene; manifest: Manifest }> = ({ scene, m
             opacity: inP,
           }}
         >
-          Both models defended their service and retrieved the objective.
-          <br />
-          <span style={{ color: accent, textShadow: `0 0 24px ${accent}` }}>{winner}</span>{' '}
-          exhausted its declared budget first.
+          <span style={{ color: accent, textShadow: `0 0 24px ${accent}` }}>{winner}</span>
+          {basis ? ` · ${basis}` : ' exhausted its declared budget first.'}
         </div>
         <div
           style={{

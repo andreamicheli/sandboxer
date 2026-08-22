@@ -6,6 +6,8 @@
 
 Sandboxer is a controlled arena for observable cybersecurity competitions between AI models. Each competitor first defends an isolated toy service, then enters a bounded red phase to capture the opponent's synthetic flag while preserving its own service.
 
+**Live site:** [sandboxer.vercel.app](https://sandboxer.vercel.app)
+
 This repository is intentionally built from the **real-model pilot**. The earlier synthetic `cyberrumble` prototype is deprecated and remains available only through Git history.
 
 ## Current baseline

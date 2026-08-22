@@ -97,7 +97,9 @@ def _schedule_intro_commentary(intro:Sequence[Mapping[str,Any]],scenes:Sequence[
     known roles/types, non-empty text, and a hedge marker on interpreted lines.
     """
     if not intro: return []
-    scene_start={"cold_open":0,"model_cards_and_rules":int(scenes[0]["duration_frames"])}
+    cold_dur=int(scenes[0]["duration_frames"]); model_dur=int(scenes[1]["duration_frames"])
+    scene_start={"cold_open":0,"model_cards_and_rules":cold_dur}
+    scene_dur={"cold_open":cold_dur,"model_cards_and_rules":model_dur}
     lines:list[dict[str,Any]]=[]
     for index,line in enumerate(intro):
         voice_role=str(line.get("voice_role","")); line_type=str(line.get("line_type","editorial"))
@@ -108,9 +110,23 @@ def _schedule_intro_commentary(intro:Sequence[Mapping[str,Any]],scenes:Sequence[
         if scene not in scene_start: raise VideoError(f"INTRO_COMMENTARY_INVALID: bad scene {scene!r} at {index}")
         if not isinstance(offset,(int,float)) or isinstance(offset,bool) or offset<0: raise VideoError(f"INTRO_COMMENTARY_INVALID: bad offset at {index}")
         if line_type=="interpreted" and not any(marker in text.lower() for marker in HEDGE_MARKERS): raise VideoError(f"INTRO_COMMENTARY_INVALID: interpreted without hedge at {index}")
+        # Backends occasionally treat offset as absolute-from-video-start or
+        # cumulative; clamp it to the scene so intro lines never spill into the
+        # match.  The remaining offset still preserves scene-relative ordering.
+        offset=min(float(offset),max(0.0,scene_dur[scene]/fps-1.0))
         start_frame=scene_start[scene]+round(offset*fps); length=_line_length(text,fps)
         lines.append({"voice_role":voice_role,"model":str(line.get("model","")),"start_frame":start_frame,"end_frame":start_frame+length,"text":text,"event_ids":[],"line_type":line_type})
-    lines.sort(key=lambda item:item["start_frame"]); return lines
+    # Flow back-to-back with a natural pause so intro lines never overlap audio
+    # (the full-track assembly overwrites overlapping blocks).  This mirrors the
+    # drafted match-commentary flow and keeps the greeting conversational.
+    lines.sort(key=lambda item:item["start_frame"])
+    gap=round(.4*fps); at=lines[0]["start_frame"]
+    for line in lines:
+        duration=line["end_frame"]-line["start_frame"]
+        line["start_frame"]=at; line["end_frame"]=at+duration; at=line["end_frame"]+gap
+    intro_end=cold_dur+model_dur
+    if lines[-1]["end_frame"]>intro_end: raise VideoError("INTRO_COMMENTARY_OVERFLOW")
+    return lines
 
 
 def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model_metadata:Mapping[str,Any],benchmark_snapshot:Mapping[str,Any],fps:int=30,commentary:Sequence[Mapping[str,Any]]|None=None,arena_visuals:Mapping[str,Any]|None=None,intro_commentary:Sequence[Mapping[str,Any]]|None=None)->dict[str,Any]:
@@ -138,7 +154,7 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
         duration=max(1,round((int(match_frames[-1]["at_monotonic_ns"])-int(match_frames[0]["at_monotonic_ns"]))/1_000_000_000*fps))
         scenes.append({"type":"match","match_number":number,"duration_frames":duration,"editing":"uncut","event_ids":[frame["event_id"] for frame in match_frames]})
         if position<len(matches)-1: scenes.append({"type":"intermission","duration_frames":60*fps,"target_seconds":60,"event_ids":[match_frames[-1]["event_id"]]})
-    scenes.append({"type":"factual_recap","duration_frames":12*fps,"winner":report.get("outcome",{}).get("winner"),"report_link":report.get("report_url"),"event_ids":[frames[-1]["event_id"]]})
+    scenes.append({"type":"factual_recap","duration_frames":12*fps,"winner":report.get("outcome",{}).get("winner"),"outcome_basis":report.get("outcome",{}).get("basis",""),"report_link":report.get("report_url"),"event_ids":[frames[-1]["event_id"]]})
     cursor=scenes[0]["duration_frames"]+scenes[1]["duration_frames"]
     scene_offset={}; running=cursor
     for scene in scenes[2:]:

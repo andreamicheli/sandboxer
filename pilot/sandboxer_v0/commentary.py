@@ -29,6 +29,22 @@ class CommentaryError(ValueError):
     pass
 
 
+def _repair_line_types(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Downgrade interpreted lines that forgot their hedge marker.
+
+    ``interpreted`` is defined as requiring a hedge ("seems", "likely", …);
+    some backends emit the type but plain prose.  Downgrading such a line to
+    ``editorial`` (grounded, but not asserting a fact) is a safe, text-preserving
+    repair that keeps validation strict instead of silently dropping the line.
+    """
+    for line in lines:
+        if line.get("line_type") == "interpreted" and not any(
+            marker in str(line.get("text", "")).lower() for marker in HEDGE_MARKERS
+        ):
+            line["line_type"] = "editorial"
+    return lines
+
+
 COMMENTARY_LINE_TYPES = frozenset({"observed", "interpreted", "editorial"})
 COMMENTARY_ROLES = frozenset({"play_by_play", "analyst"})
 # Intro/greeting lines anchor to named scenes instead of event IDs.
@@ -124,6 +140,7 @@ class HeadlessCommentaryDrafter:
                     "grounding": "every line's event_ids must reference real event IDs below",
                     "hedging": "interpreted lines must use 'appears', 'seems', or similar",
                     "tone": "human, curious, engaging; a simulated CTF, never glorify real harm",
+                    "length": "produce at most 10 lines total; keep each line under 25 words; let the analyst voice speak less often (roughly one analyst line per two play-by-play lines)",
                 },
                 "identities": identities,
                 "outcome": report.get("outcome", {}),
@@ -134,17 +151,29 @@ class HeadlessCommentaryDrafter:
         )
 
     def _parse(self, text: str, replay: Mapping[str, Any]) -> list[dict[str, Any]]:
+        cleaned = text.strip()
+        # Tolerate a ```json fence or surrounding prose the backend may wrap
+        # around the object (same leniency the intro parser already has).
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```", 2)[1]
+            if cleaned.lstrip().startswith("json"):
+                cleaned = cleaned.lstrip()[4:]
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        if start != -1 and end > start:
+            cleaned = cleaned[start : end + 1]
         try:
-            payload = json.loads(text)
+            payload = json.loads(cleaned)
         except json.JSONDecodeError as error:
             raise CommentaryError("COMMENTARY_PARSE_FAILED") from error
         lines = payload.get("lines") if isinstance(payload, dict) else None
         if not isinstance(lines, list) or not lines:
             raise CommentaryError("COMMENTARY_EMPTY")
+        lines = [dict(line) for line in lines]
+        _repair_line_types(lines)
         failures = validate_commentary(lines, replay.get("frames", ()))
         if failures:
             raise CommentaryError(f"COMMENTARY_INVALID: {'; '.join(failures)}")
-        return [dict(line) for line in lines]
+        return lines
 
 
 def draft_commentary(
@@ -233,7 +262,8 @@ class HeadlessIntroCommentaryDrafter:
                     "voice_roles": ["play_by_play", "analyst"],
                     "line_types": ["observed", "interpreted", "editorial"],
                     "hedging": "interpreted lines must use 'seems', 'we expect', 'likely', or similar",
-                    "offset_seconds": "non-negative float; place the greeting near the end of the cold open",
+                    "offset_seconds": "non-negative float, RELATIVE TO THE START of its scene; cold_open spans 0-8s and model_cards_and_rules spans 0-20s; place the greeting near the end of cold_open",
+                    "length": "produce at most 6 lines total (1-2 in cold_open, 4-5 in model_cards_and_rules); keep each line under 20 words",
                 },
                 "identities": [str(item) for item in identities],
                 "facts": facts,
@@ -261,10 +291,12 @@ class HeadlessIntroCommentaryDrafter:
             payload = payload.get("lines")
         if not isinstance(payload, list) or not payload:
             raise CommentaryError("INTRO_COMMENTARY_EMPTY")
-        failures = validate_intro_commentary(payload, identities=identities)
+        lines = [dict(line) for line in payload]
+        _repair_line_types(lines)
+        failures = validate_intro_commentary(lines, identities=identities)
         if failures:
             raise CommentaryError(f"INTRO_COMMENTARY_INVALID: {'; '.join(failures)}")
-        return [dict(line) for line in payload]
+        return lines
 
 
 def draft_intro_commentary(

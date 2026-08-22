@@ -96,6 +96,27 @@ def test_headless_drafter_rejects_malformed_json():
         HeadlessCommentaryDrafter(adapter=_FakeAdapter("not json")).draft(_replay(), {})
 
 
+def test_headless_drafter_downgrades_unhedged_interpreted_line():
+    adapter = _FakeAdapter(
+        '{"lines":[{"voice_role":"analyst","line_type":"interpreted",'
+        '"event_ids":["e2"],"text":"MiMo attacks the left flank."}]}'
+    )
+    lines = HeadlessCommentaryDrafter(adapter=adapter).draft(_replay(), {})
+    assert lines[0]["line_type"] == "editorial"
+
+
+def test_intro_drafter_downgrades_unhedged_interpreted_line():
+    payload = [
+        {"voice_role": "analyst", "line_type": "interpreted", "scene": "model_cards_and_rules",
+         "offset_seconds": 1.0, "text": "Muse moves fast.", "model": "Muse Spark 1.2"},
+    ]
+    adapter = _FakeAdapter(__import__("json").dumps(payload))
+    lines = HeadlessIntroCommentaryDrafter(adapter=adapter).draft(
+        ["Laguna S 2.1", "Muse Spark 1.2"], {}
+    )
+    assert lines[0]["line_type"] == "editorial"
+
+
 def _intro_line(**overrides):
     line = {
         "voice_role": "play_by_play",
