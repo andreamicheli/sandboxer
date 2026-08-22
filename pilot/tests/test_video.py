@@ -30,7 +30,7 @@ def test_video_manifest_exposes_per_pane_terminal_feed():
     assert terminal[0]["pane"]==0 and terminal[1]["pane"]==1
     assert terminal[0]["text"]=="defend" and terminal[0]["event_id"]=="e1" and terminal[1]["phase"]=="blue"
     # Terminal frames are scene-aligned: e1 sits at the match scene start
-    # (8s cold open + 20s model cards = 28s) so the renderer's localBase
+    # (8s custom intro + 20s model cards = 28s) so the renderer's localBase
     # window filtering selects exactly each scene's own events.
     match_start=manifest["scenes"][0]["duration_frames"]+manifest["scenes"][1]["duration_frames"]
     assert terminal[0]["at_frame"]==match_start and terminal[1]["at_frame"]==match_start+60
@@ -106,8 +106,8 @@ def test_video_manifest_drops_drafted_commentary_that_overflows_the_match():
 
 def test_video_manifest_schedules_intro_commentary_before_the_match():
     intro = [
-        {"voice_role":"play_by_play","line_type":"editorial","scene":"cold_open","offset_seconds":4.0,"text":"Welcome back."},
-        {"voice_role":"analyst","line_type":"editorial","scene":"model_cards_and_rules","offset_seconds":1.0,"text":"Two models, one flag."},
+        {"voice_role":"play_by_play","line_type":"editorial","scene":"model_cards_and_rules","offset_seconds":1.0,"text":"Welcome back."},
+        {"voice_role":"analyst","line_type":"editorial","scene":"model_cards_and_rules","offset_seconds":8.0,"text":"Two models, one flag."},
     ]
     manifest=build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},intro_commentary=intro)
     lines=manifest["commentary"]
@@ -126,14 +126,36 @@ def test_video_manifest_falls_back_when_intro_scene_is_unknown():
 
 
 def test_video_manifest_downgrades_unhedged_interpreted_intro_inside_its_window():
-    manifest=build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},intro_commentary=[{"voice_role":"analyst","line_type":"interpreted","scene":"cold_open","offset_seconds":1.0,"text":"Muse will win."}])
+    manifest=build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},intro_commentary=[{"voice_role":"analyst","line_type":"interpreted","scene":"model_cards_and_rules","offset_seconds":1.0,"text":"Muse will win."}])
     intro_lines=[line for line in manifest["commentary"] if not line["event_ids"]]
     assert [line["text"] for line in intro_lines]==["Muse will win."]
     assert intro_lines[0]["line_type"]=="editorial"
-    cold_open_end=intro_lines[0]["start_frame"]
+    line_start=intro_lines[0]["start_frame"]
     match_start=manifest["scenes"][0]["duration_frames"]+manifest["scenes"][1]["duration_frames"]
-    assert cold_open_end<match_start
+    assert line_start<match_start
     assert intro_lines[0]["provenance"]=="model_draft"
+
+
+def test_manifest_opens_with_custom_intro_and_model_cards_follow_at_its_offset():
+    fps=24
+    manifest=build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},fps=fps)
+    scenes=manifest["scenes"]
+    assert scenes[0]["type"]=="custom_intro"
+    assert scenes[0]["duration_frames"]==round(8*fps)==192
+    cursor=0; starts=[]
+    for scene in scenes:
+        starts.append(cursor); cursor+=int(scene["duration_frames"])
+    assert starts[1]==scenes[0]["duration_frames"]
+    intro_end=scenes[0]["duration_frames"]
+    assert all(line["start_frame"]>=intro_end for line in manifest["commentary"])
+
+
+def test_no_line_is_scheduled_into_the_custom_intro_window():
+    intro=[{"voice_role":"play_by_play","line_type":"editorial","scene":"custom_intro","offset_seconds":2.0,"text":"Greeting over the intro video."}]
+    manifest=build_video_manifest(_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={},intro_commentary=intro)
+    intro_end=manifest["scenes"][0]["duration_frames"]
+    assert all(line["text"]!="Greeting over the intro video." for line in manifest["commentary"])
+    assert all(line["start_frame"]>=intro_end for line in manifest["commentary"])
 
 
 def _phased_replay():
@@ -191,7 +213,7 @@ def test_long_match_narrates_far_beyond_the_old_fixed_cap():
 def test_phased_replay_inserts_interview_and_red_phase_scenes_in_order():
     manifest=build_video_manifest(_phased_replay(),report={"report_url":"r","outcome":{}},model_metadata={},benchmark_snapshot={})
     fps=manifest["fps"]; scenes=manifest["scenes"]
-    assert [scene["type"] for scene in scenes]==["cold_open","model_cards_and_rules","match","interview_card","interviews","red_phase_card","match","factual_recap"]
+    assert [scene["type"] for scene in scenes]==["custom_intro","model_cards_and_rules","match","interview_card","interviews","red_phase_card","match","factual_recap"]
     assert scenes[2]["scene_key"]=="match:1" and scenes[2]["editing"]=="uncut" and scenes[2]["event_ids"]==["e1","e2"]
     assert scenes[3]["event_ids"]==["e3"] and scenes[3]["duration_frames"]==4*fps
     # The real interview-to-red gap is 4s; the interviews block clamps to its 8s minimum.
@@ -207,7 +229,7 @@ def test_phased_replay_inserts_interview_and_red_phase_scenes_in_order():
     assert all(_owner(by_event[event]["at_frame"]) is scenes[6] for event in ("e5","e6","e7"))
     # Budgets cover every narrated scene exactly once, with windows matching durations.
     budgets=_scene_budgets(scenes,fps)
-    assert set(budgets)=={"cold_open","model_cards_and_rules","match:1","interviews:1","match:1:2"}
+    assert set(budgets)=={"model_cards_and_rules","match:1","interviews:1","match:1:2"}
     interviews=budgets["interviews:1"]
     assert (interviews.max_lines,interviews.max_words_per_line,interviews.max_total_words)==(3,25,70)
     for scene in (scenes[2],scenes[4],scenes[6]):

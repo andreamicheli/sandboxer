@@ -2,13 +2,14 @@ import React from 'react';
 import {
   AbsoluteFill,
   Composition,
-  Easing,
+  OffthreadVideo,
   Sequence,
   interpolate,
   registerRoot,
   spring,
   useCurrentFrame,
   useVideoConfig,
+  staticFile,
 } from 'remotion';
 import { ArenaVisual, type ArenaPlan } from './arena';
 import { accentOf } from './logos';
@@ -137,69 +138,18 @@ const Grid: React.FC = () => (
 );
 
 /* ------------------------------------------------------------------ */
-/* Scene 1: cold open                                                  */
+/* Scene 1: custom pre-rendered intro video                            */
 /* ------------------------------------------------------------------ */
 
-const ColdOpen: React.FC = () => {
-  const frame = useCurrentFrame();
-  const inP = spring({ frame, fps: 30, config: { damping: 14 } });
-  const cursor = frame % 60 < 30 ? '▊' : ' ';
-  return (
-    <AbsoluteFill style={{ background: NAVY }}>
-      <Grid />
-      <Chrome showTimestamp={false} />
-      <AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center', textAlign: 'center' }}>
-        <div
-          style={{
-            color: DIM,
-            fontFamily: MONO,
-            fontSize: 20,
-            letterSpacing: 8,
-            marginBottom: 28,
-          }}
-        >
-          SERIES 001 · MATCH PREVIEW
-        </div>
-        <div
-          style={{
-            color: INK,
-            fontFamily: MONO,
-            fontWeight: 700,
-            fontSize: 118,
-            letterSpacing: 14,
-            textShadow: `0 0 42px ${COBALT}, 0 0 8px ${COBALT}`,
-            opacity: inP,
-            transform: `translateY(${interpolate(inP, [0, 1], [40, 0])}px)`,
-          }}
-        >
-          SANDBOXER
-        </div>
-        <div
-          style={{
-            color: COBALT,
-            fontFamily: MONO,
-            fontSize: 22,
-            letterSpacing: 3,
-            marginTop: 18,
-            opacity: inP,
-          }}
-        >
-          A simulated capture-the-flag between two isolated models
-        </div>
-        <div
-          style={{
-            color: DIM,
-            fontFamily: MONO,
-            fontSize: 18,
-            marginTop: 54,
-          }}
-        >
-          initializing arena{cursor}
-        </div>
-      </AbsoluteFill>
-    </AbsoluteFill>
-  );
-};
+const CustomIntroScene: React.FC = () => (
+  <AbsoluteFill style={{ background: NAVY }}>
+    <OffthreadVideo
+      src={staticFile('assets/custom-intro.mp4')}
+      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+    />
+    <Chrome />
+  </AbsoluteFill>
+);
 
 /* ------------------------------------------------------------------ */
 /* Phase cards: brief centered title cards between editorial blocks     */
@@ -685,7 +635,7 @@ export const SeriesVideo: React.FC<{ manifest: Manifest }> = ({ manifest }) => {
         at += scene.duration_frames;
         return (
           <Sequence key={`${scene.type}-${index}`} from={from} durationInFrames={scene.duration_frames}>
-            {scene.type === 'cold_open' && <ColdOpen />}
+            {scene.type === 'custom_intro' && <CustomIntroScene />}
             {scene.type === 'model_cards_and_rules' && <ModelCardsAndRules scene={scene} />}
             {scene.type === 'interview_card' && <PhaseCard label="POST-MATCH INTERVIEWS" />}
             {scene.type === 'red_phase_card' && <PhaseCard label="RED PHASE — ATTACK ROUND" />}
@@ -711,7 +661,7 @@ const fallbackManifest: Manifest = {
   identities: ['Laguna S 2.1', 'Muse Spark 1.2'],
   source_bundle_hash: 'runtime-required',
   scenes: [
-    { type: 'cold_open', duration_frames: 240, event_ids: ['runtime'] },
+    { type: 'custom_intro', duration_frames: 240, event_ids: ['runtime'] },
     { type: 'model_cards_and_rules', duration_frames: 600, identities: ['Laguna S 2.1', 'Muse Spark 1.2'], event_ids: ['runtime'] },
     { type: 'match', duration_frames: 300, match_number: 1, event_ids: ['runtime'] },
     { type: 'factual_recap', duration_frames: 360, event_ids: ['runtime'] },

@@ -183,6 +183,7 @@ def _benchmarks(snapshot:Mapping[str,Any],identities:tuple[str,str])->list[dict[
 # Editorial scheduling policy.  All placement authority lives in
 # ``schedule.validate_and_pack``; these are only the per-scene budget shapes
 # and the flow gaps used when packing dialogue vs. verbatim narration.
+CUSTOM_INTRO_FRAMES_SECONDS = 8.0  # fixed-length pre-rendered intro video, no commentary
 _TAIL_MARGIN_SECONDS = 0.75   # keep intro speech clear of the next scene cut
 _DIALOGUE_GAP_SECONDS = 0.4   # natural pause between drafted dialogue lines
 _NARRATION_GAP_SECONDS = 0.35 # pause between fallback narration blocks
@@ -193,10 +194,7 @@ def _scene_budgets(scenes:Sequence[Mapping[str,Any]],fps:int)->dict[str,LineBudg
     budgets:dict[str,LineBudget]={}
     for scene in scenes:
         kind=str(scene["type"]); duration_s=int(scene["duration_frames"])/fps
-        if kind=="cold_open":
-            budgets["cold_open"]=LineBudget(max_lines=3,max_words_per_line=20,max_total_words=60,
-                                            window_start_s=0.0,window_end_s=max(1e-6,duration_s-_TAIL_MARGIN_SECONDS))
-        elif kind=="model_cards_and_rules":
+        if kind=="model_cards_and_rules":
             budgets["model_cards_and_rules"]=LineBudget(max_lines=5,max_words_per_line=20,max_total_words=100,
                                                         window_start_s=0.0,window_end_s=max(1e-6,duration_s-_TAIL_MARGIN_SECONDS))
         elif kind=="match":
@@ -299,7 +297,7 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
     timeline=[{"at_frame":round((int(frame["at_monotonic_ns"])-start)/1_000_000_000*fps),"event_ids":[frame["event_id"]],"visual":"terminal_event","caption":frame.get("text","")} for frame in frames]
     rule=f"Sandboxer is a simulated capture-the-flag. First, {identities[0]} and {identities[1]} defend their own service. Then they attack until both capture the flag or one exhausts its declared budget."
     scenes=[
-        {"type":"cold_open","duration_frames":8*fps,"event_ids":[frames[-1]["event_id"]]},
+        {"type":"custom_intro","duration_frames":round(CUSTOM_INTRO_FRAMES_SECONDS*fps),"event_ids":[frames[-1]["event_id"]]},
         {"type":"model_cards_and_rules","duration_frames":20*fps,"identities":identities,"metadata":{name:model_metadata.get(name,{}) for name in identities},"benchmarks":_benchmarks(benchmark_snapshot,identities),"rules_sentence":rule},
     ]
     matches:dict[int,list[Mapping[str,Any]]]={}
@@ -357,7 +355,7 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
     scenes.append({"type":"factual_recap","duration_frames":12*fps,"winner":report.get("outcome",{}).get("winner"),"outcome_basis":report.get("outcome",{}).get("basis",""),"report_link":report.get("report_url"),"event_ids":[frames[-1]["event_id"]]})
     cursor=scenes[0]["duration_frames"]+scenes[1]["duration_frames"]
     running=cursor
-    scene_starts:dict[str,int]={"cold_open":0,"model_cards_and_rules":int(scenes[1]["duration_frames"])}
+    scene_starts:dict[str,int]={"custom_intro":0,"model_cards_and_rules":int(scenes[0]["duration_frames"])}
     narrated_spans:list[tuple[str,int,int]]=[]  # (packing key, absolute start frame, duration) of every scene that can carry narration
     for scene in scenes[2:]:
         if "scene_key" in scene:
