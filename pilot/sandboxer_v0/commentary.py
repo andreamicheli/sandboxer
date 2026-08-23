@@ -58,8 +58,8 @@ ACTION_EVENT_TYPES = frozenset({
 
 LINE_WINDOW_SECONDS = 8      # a line's [start_frame, end_frame) window cap
 DEAD_AIR_SECONDS = 15        # silence longer than this earns a filler recap
-LINE_TARGET_SECONDS = 4.0    # soft per-line speech budget (chars/15 TTS pace)
-_CHARS_PER_SECOND = 15       # rough Fish TTS pace used for the estimate
+LINE_TARGET_SECONDS = 3.5    # soft per-line speech budget
+_CHARS_PER_SECOND = 12.4     # measured Fish s2.1 pace (episode-v8d telemetry)
 _RECAP_PHRASES_MAX = 2       # dead-air filler concatenates at most this many
 ANALYST_EVERY = 4            # every Nth consecutive action also earns an analyst beat
 ANALYST_DELAY_SECONDS = 2    # analyst follow-up lands this long after its action
