@@ -211,6 +211,7 @@ def convert(runtime_telemetry: Sequence[Mapping[str, Any]], result: Mapping[str,
     """
     telemetry = list(runtime_telemetry)
     start_ns = telemetry[0]["monotonic_ns"] if telemetry else 0
+    no_gameplay = not result.get("winner")
     events: list[CanonicalEvent] = []
     tool_calls: list[CanonicalToolCall] = []
     attacks: list[CanonicalAttack] = []
@@ -241,7 +242,6 @@ def convert(runtime_telemetry: Sequence[Mapping[str, Any]], result: Mapping[str,
         # A match that died before gameplay (no winner recorded) contributes
         # no narratable story: skip its start/phase events entirely, else the
         # narration of a 1-frame scene overflows the speak window (v8d).
-        no_gameplay = not result.get("winner")
 
         if kind == "match_started":
             if not no_gameplay:
@@ -255,8 +255,9 @@ def convert(runtime_telemetry: Sequence[Mapping[str, Any]], result: Mapping[str,
                 text="blue phase complete - defenses are live", ns=ns)
             continue
         if kind == "interview_finished":
-            add(phase="blue", competitor=None, pane=1, etype="PHASE_TRANSITION",
-                text="interview complete - rules confirmed", ns=ns)
+            if not no_gameplay:
+                add(phase="blue", competitor=None, pane=1, etype="PHASE_TRANSITION",
+                    text="interview complete - rules confirmed", ns=ns)
             continue
         if kind == "interview_line":
             # Verbatim post-blue interview answer; unlike tool decisions the
@@ -315,6 +316,12 @@ def convert(runtime_telemetry: Sequence[Mapping[str, Any]], result: Mapping[str,
             text="match started", ns=start_ns)
         add(phase="red", competitor=IDENTITY_B, pane=1, etype="MATCH_FINISHED",
             text="match finished", ns=start_ns + 1)
+    if no_gameplay:
+        # Bootstrap-failed match: drop the placeholder start/finish frames so
+        # the merged series timeline and the commentary never narrate a scene
+        # with zero gameplay (episode-v8d m3).
+        events = [event for event in events
+                  if event["event_type"] not in {"MATCH_STARTED", "MATCH_FINISHED"}]
 
     frames = [_frame_from_event(event) for event in events]
 
