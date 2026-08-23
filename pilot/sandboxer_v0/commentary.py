@@ -61,7 +61,7 @@ DEAD_AIR_SECONDS = 15        # silence longer than this earns a filler recap
 LINE_TARGET_SECONDS = 4.0    # soft per-line speech budget (chars/15 TTS pace)
 _CHARS_PER_SECOND = 15       # rough Fish TTS pace used for the estimate
 _RECAP_PHRASES_MAX = 2       # dead-air filler concatenates at most this many
-ANALYST_EVERY = 3            # every Nth consecutive action also earns an analyst beat
+ANALYST_EVERY = 4            # every Nth consecutive action also earns an analyst beat
 ANALYST_DELAY_SECONDS = 2    # analyst follow-up lands this long after its action
 REPEATED_STREAK = 3          # consecutive same-actor offensive actions -> pattern note
 SLOW_PROMOTION_RATIO = 2.0   # promotion elapsed-time gap worth narrating (~10x in v7)
@@ -301,19 +301,22 @@ def build_commentary(
                            line_type="observed")
 
         # Every Nth consecutive action earns an analyst recap of the run.
+        # Episode-v8g: these cadence recaps averaged 12s each and pushed the
+        # total speech past the speak window; ANALYST_EVERY 3->4 and a single
+        # recap phrase keep the beat without the bulk.
         if (index + 1) % ANALYST_EVERY == 0:
             window = groups[max(0, index - ANALYST_EVERY + 1): index + 1]
             ids = [event_id for entry in window for event_id in entry["event_ids"]]
-            phrases = "; ".join(_recap_phrase(entry) for entry in window)
+            phrases = _recap_phrase(window[-1])
             offense = sum(1 for entry in window if entry["kind"] in _OFFENSIVE_KINDS)
             defense = sum(1 for entry in window if entry["kind"] in _DEFENSIVE_KINDS)
             if offense == 0 and defense > 0:
-                closing = "It appears the defenses are still taking shape."
+                closing = "Defenses still taking shape."
             elif offense >= defense:
-                closing = "It looks like the attack is setting the tempo."
+                closing = "The attack sets the tempo."
             else:
-                closing = "It seems both sides are trading blows."
-            _queue(index, 2, text=f"Reading back the last few beats: {phrases}. {closing}",
+                closing = "Both sides trading blows."
+            _queue(index, 2, text=f"Last few beats: {phrases}. {closing}",
                    ids=ids, line_type="interpreted")
 
     entries: list[dict[str, Any]] = []
