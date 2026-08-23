@@ -29,7 +29,12 @@ Usage (as the pilot user):
     python scripts/build_real_artifacts.py --series \
       --telemetry <m1>.telemetry.jsonl <m2>.telemetry.jsonl <m3>.telemetry.jsonl \
       --result <m1>.result.json <m2>.result.json <m3>.result.json \
-      [--series-id episode-v8]
+      [--series-id episode-v8] [--require-valid N] [--force]
+
+Series mode enforces a strict gate: unless at least ``--require-valid``
+(default 2) matches recorded ``result=passed`` with outcome
+``VALID_CAPTURE``, nothing is written and the build exits nonzero with
+``SERIES_INSUFFICIENT_VALID_MATCHES`` (bypass with ``--force``).
 
 Pass ``--run-id`` (with optional ``--artifacts-root``, default ``--out-dir``)
 to isolate outputs under ``<artifacts-root>/runs/<run-id>/`` using
@@ -95,6 +100,13 @@ class BenchmarkDataError(RuntimeError):
 class ArtifactInputError(ValueError):
     """The telemetry/result file inputs do not fit the requested mode."""
 
+
+def count_valid_capture_results(result_docs: list[dict]) -> int:
+    """Matches recorded as ``result=passed`` with outcome ``VALID_CAPTURE``."""
+    return sum(1 for doc in result_docs
+               if isinstance(doc, dict)
+               and doc.get("result") == "passed"
+               and doc.get("outcome") == "VALID_CAPTURE")
 
 
 def _pair_slug(name: str) -> str:
@@ -420,6 +432,13 @@ def main(argv: list[str] | None = None) -> int:
                              "three files in series mode")
     parser.add_argument("--series", action="store_true",
                         help="treat inputs as one best-of-3 episode and emit combined artifacts")
+    parser.add_argument("--require-valid", type=int, default=2, metavar="N",
+                        help="series mode only: refuse to write artifacts unless at least N "
+                             "matches recorded result=passed with outcome VALID_CAPTURE "
+                             "(default: 2); bypass with --force")
+    parser.add_argument("--force", action="store_true",
+                        help="series mode only: write artifacts even when fewer than "
+                             "--require-valid matches are valid")
     parser.add_argument("--series-id", default=None,
                         help="series identifier for <series-id>.series.json; "
                              "defaults to the first match id without its -m<i> suffix")
@@ -455,6 +474,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         telemetry_docs = [read_jsonl(path) for path in args.telemetry]
         result_docs = [json.loads(path.read_text(encoding="utf-8")) for path in args.result]
+    except (OSError, json.JSONDecodeError) as error:
+        print(f"ARTIFACT_INPUT_UNREADABLE ({error})", file=sys.stderr)
+        return 2
+    if args.series and not args.force:
+        valid = count_valid_capture_results(result_docs)
+        if valid < args.require_valid:
+            print(f"SERIES_INSUFFICIENT_VALID_MATCHES ({valid} of {len(result_docs)} matches "
+                  f"passed with VALID_CAPTURE; {args.require_valid} required; "
+                  f"pass --force to write artifacts anyway)", file=sys.stderr)
+            return 2
+    try:
         artifacts = build_broadcast_artifacts(
             telemetry_docs, result_docs,
             benchmark_data=args.benchmark_data,

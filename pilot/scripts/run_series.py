@@ -11,7 +11,11 @@ duplicated here.  Every match gets its own identity:
             <match-id>.telemetry.jsonl / <match-id>.result.json
 
 Seeds default to ``<seed-prefix or series-id>-m<i>`` so each match draws a
-different Blue Brief deterministically.
+different Blue Brief deterministically.  A match that fails with a
+``*_BUDGET_EXCEEDED`` reason code is retried once with 1.5x token budgets
+under the derived identity ``...-m<i>-retry1`` / ``<seed>-retry1``; each
+match's ``attempts`` record in the series JSON shows which attempt produced
+the recorded data point.
 
 After the third match the driver writes ``<series-id>.series.json`` next to
 the evidence with per-match winners and the series decision (see
@@ -52,10 +56,47 @@ from sandboxer_v0.series_result import SERIES_SCHEMA, build_series_summary
 from scripts.run_command_code_match import DEFAULT_MODELS, _safe_codes, run_one_match
 
 SERIES_MATCHES = 3
+BUDGET_RETRY_MULTIPLIER = 1.5
+RETRY_SUFFIX = "-retry1"
 
 
 class SeriesError(RuntimeError):
     """A series could not even be started (bad arguments)."""
+
+
+def _is_budget_failure(codes: tuple[str, ...]) -> bool:
+    """True when any safe reason code is an output/phase budget exhaustion."""
+    return any("BUDGET_EXCEEDED" in code for code in codes)
+
+
+def _budget_retry_args(match_args: argparse.Namespace) -> argparse.Namespace:
+    """One budget-retry namespace: 1.5x token budgets and a derived identity.
+
+    The retry gets its own match id/seed suffix so its evidence files never
+    collide with attempt one's (telemetry is opened with O_EXCL).
+    """
+    retried = argparse.Namespace(**vars(match_args))
+    retried.match_id = f"{match_args.match_id}{RETRY_SUFFIX}"
+    retried.seed = f"{match_args.seed}{RETRY_SUFFIX}"
+    for field in ("blue_tokens", "red_tokens", "interview_tokens"):
+        setattr(retried, field,
+                int(getattr(match_args, field) * BUDGET_RETRY_MULTIPLIER))
+    return retried
+
+
+def _attempt_record(attempt: int, match_args: argparse.Namespace, *,
+                    multipliers: Mapping[str, float], succeeded: bool,
+                    reason_code: str | None = None) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "attempt": attempt,
+        "match_id": str(match_args.match_id),
+        "seed": str(match_args.seed),
+        "budget_multipliers": dict(multipliers),
+        "succeeded": succeeded,
+    }
+    if reason_code is not None:
+        record["reason_code"] = reason_code
+    return record
 
 
 def _per_match_args(args: argparse.Namespace, number: int) -> argparse.Namespace:
@@ -91,32 +132,55 @@ def execute_series(
 
     ``runner`` is injectable for rehearsal/tests; production uses the real
     ``run_one_match``.  A failing match never aborts the series: the failure's
-    safe reason codes are recorded as that match's data point.
+    safe reason codes are recorded as that match's data point.  A match that
+    dies with a ``*_BUDGET_EXCEEDED`` reason code gets exactly one retry with
+    token budgets multiplied by ``BUDGET_RETRY_MULTIPLIER`` and the derived
+    identity ``<seed>-retry1``; the retry's outcome (success or failure)
+    becomes the recorded data point.
     """
     if not args.series_id or any(not part.strip() for part in args.series_id.split("-")):
         raise SeriesError("SERIES_ID_INVALID")
     results: list[dict[str, Any]] = []
     match_ids: list[str] = []
     for number in range(1, SERIES_MATCHES + 1):
-        match_args = _per_match_args(args, number)
-        match_ids.append(str(match_args.match_id))
-        try:
-            payload = dict(runner(match_args))
-            payload.setdefault("result", "passed")
-        except BaseException as error:  # noqa: BLE001 - a failure is a datapoint
-            codes = _safe_codes(error)
-            payload = {
-                "result": "failed",
-                "outcome": "INVALID",
-                "reason_code": codes[0],
-                "models": list(match_args.models),
-                "winner": None,
-                "captures": [],
-                "error_codes": list(codes),
-                "seed": str(match_args.seed),
-                "match_id": str(match_args.match_id),
-            }
+        base_args = _per_match_args(args, number)
+        match_args = base_args
+        multipliers: dict[str, float] = {"blue": 1.0, "red": 1.0, "interview": 1.0}
+        attempts: list[dict[str, Any]] = []
+        while True:
+            try:
+                payload = dict(runner(match_args))
+                payload.setdefault("result", "passed")
+                attempts.append(_attempt_record(len(attempts) + 1, match_args,
+                                                multipliers=multipliers, succeeded=True))
+                payload["attempts"] = attempts
+                break
+            except BaseException as error:  # noqa: BLE001 - a failure is a datapoint
+                codes = _safe_codes(error)
+                attempts.append(_attempt_record(len(attempts) + 1, match_args,
+                                                multipliers=multipliers, succeeded=False,
+                                                reason_code=codes[0]))
+                if len(attempts) <= 1 and _is_budget_failure(codes):
+                    multipliers = {key: value * BUDGET_RETRY_MULTIPLIER
+                                   for key, value in multipliers.items()}
+                    match_args = _budget_retry_args(base_args)
+                    continue
+                payload = {
+                    "result": "failed",
+                    "outcome": "INVALID",
+                    "reason_code": codes[0],
+                    "models": list(match_args.models),
+                    "winner": None,
+                    "captures": [],
+                    "error_codes": list(codes),
+                    "seed": str(match_args.seed),
+                    "match_id": str(match_args.match_id),
+                    "attempts": attempts,
+                }
+                break
         results.append(payload)
+        # The recorded data point is the last attempt's evidence.
+        match_ids.append(str(match_args.match_id))
 
     evidence_paths = [
         {
@@ -132,6 +196,9 @@ def execute_series(
     ))
     summary["schema_version"] = SERIES_SCHEMA
     summary["evidence_dir"] = str(args.evidence_dir)
+    if summary.get("brief_variety") == "low":
+        print("WARNING brief_variety=low: all three Blue brief families are identical",
+              file=sys.stderr)
 
     destination = Path(args.evidence_dir) / f"{args.series_id}.series.json"
     destination.parent.mkdir(parents=True, mode=0o700, exist_ok=True)

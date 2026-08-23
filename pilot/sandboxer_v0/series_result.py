@@ -147,6 +147,10 @@ def build_series_summary(
         }
         if evidence_paths and index <= len(evidence_paths):
             entry["evidence"] = dict(evidence_paths[index - 1])
+        attempts = result.get("attempts")
+        if isinstance(attempts, list) and attempts:
+            entry["attempts"] = [dict(attempt) for attempt in attempts
+                                 if isinstance(attempt, Mapping)]
         matches.append(entry)
 
     summary = {
@@ -160,6 +164,14 @@ def build_series_summary(
         "series_winner": decision["series_winner"],
         "decision_basis": decision["decision_basis"],
     }
+    brief_families: list[str] = []
+    for result in results:
+        manifest = result.get("blue_brief")
+        if isinstance(manifest, Mapping):
+            brief_families.append(str(manifest.get("family", "")))
+    if (len(results) > 1 and len(brief_families) == len(results)
+            and len(set(brief_families)) == 1):
+        summary["brief_variety"] = "low"
     if decision["token_totals"] is not None:
         summary["tie_break"] = {
             "rule": ("lowest total provider tokens (input+output+cache) across "
