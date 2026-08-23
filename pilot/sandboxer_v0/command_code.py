@@ -331,13 +331,21 @@ class CommandCodeAdapter:
                 raise CommandCodeError("COMMAND_CODE_EVENT_INVALID")
             kind = event["type"]; events.append(kind)
             if kind.startswith("tool_"):
-                tool_name = event.get("toolName")
+                tool_name = event.get("toolName") or event.get("tool")
                 tool_call_id = event.get("toolCallId")
                 prefix = "mcp__runner__"
+                if kind == "tool_decision":
+                    allowed = event.get("allowed")
+                    if isinstance(allowed, bool) and allowed and isinstance(tool_name, str):
+                        if tool_name.startswith(prefix) and tool_name[len(prefix):] in allowed_tools:
+                            continue
+                        if tool_name not in allowed_tools:
+                            raise CommandCodeError("COMMAND_CODE_NATIVE_TOOL_REJECTED")
+                    continue
                 if isinstance(tool_name, str) and tool_name.startswith(prefix) and tool_name[len(prefix):] in allowed_tools:
                     if isinstance(tool_call_id, str):
                         runner_tool_calls.add(tool_call_id)
-                elif kind in {"tool_queued", "tool_denied"}:
+                elif kind in {"tool_queued", "tool_denied", "tool_running", "tool_completed"}:
                     continue
                 elif not isinstance(tool_call_id, str) or tool_call_id not in runner_tool_calls:
                     raise CommandCodeError("COMMAND_CODE_NATIVE_TOOL_REJECTED")

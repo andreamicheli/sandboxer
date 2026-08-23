@@ -15,7 +15,7 @@ elif mode in {"auth","credits","rate","server_error","mcp_disconnect"}:
 else:
     emit({"type":"event","event":{"type":"model_request_start","model":reported_model}})
     if mode == "streaming": time.sleep(.15)
-    if mode == "tool": emit({"type":"event","event":{"type":"tool_running","toolName":"shell_command"}})
+    if mode == "tool": emit({"type":"event","event":{"type":"tool_decision","tool":"shell_command","allowed":True,"reason_code":None}})
     if mode == "native_tool_queued": emit({"type":"event","event":{"type":"tool_queued","toolName":"read_directory","toolCallId":"native-1"}})
     if mode == "native_tool_denied": emit({"type":"event","event":{"type":"tool_denied","toolName":"read_directory","toolCallId":"native-1"}})
     if mode == "runner_tool": emit({"type":"event","event":{"type":"tool_running","toolName":"mcp__runner__read_note"}})
