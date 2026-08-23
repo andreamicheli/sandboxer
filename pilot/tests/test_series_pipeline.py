@@ -469,10 +469,10 @@ def test_single_match_pipeline_stays_identical_to_legacy_composition():
                    for scene in legacy_manifest["scenes"][:-1])
     legacy_clamped = [
         line for line in legacy_manifest["commentary"]
-        if int(line["start_frame"]) < boundary]
+        if int(line["start_frame"]) + 30 <= boundary]
     for line in legacy_clamped:
         start = int(line["start_frame"])
-        line["end_frame"] = min(int(line["end_frame"]), max(boundary - 1, start + 1))
+        line["end_frame"] = min(int(line["end_frame"]), max(boundary - 1, start + 30))
     assert built["manifest"]["commentary"] == legacy_clamped
     manifest_rest = {k: v for k, v in built["manifest"].items() if k != "commentary"}
     legacy_manifest_rest = {k: v for k, v in legacy_manifest.items() if k != "commentary"}

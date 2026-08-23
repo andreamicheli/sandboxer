@@ -431,16 +431,18 @@ def build_broadcast_artifacts(
         # per-match series path and the single-match path.
         boundary = sum(int(scene["duration_frames"]) for scene in manifest["scenes"][:-1])
         dense_commentary = [
-            line for line in dense_commentary if int(line["start_frame"]) < boundary]
+            line for line in dense_commentary
+            if int(line["start_frame"]) + fps <= boundary]
         for line in dense_commentary:
             start = int(line["start_frame"])
-            line["end_frame"] = min(int(line["end_frame"]), max(boundary - 1, start + 1))
+            line["end_frame"] = min(int(line["end_frame"]), max(boundary - 1, start + fps))
         if manifest.get("commentary"):
             manifest["commentary"] = [
-                line for line in manifest["commentary"] if int(line["start_frame"]) < boundary]
+                line for line in manifest["commentary"]
+                if int(line["start_frame"]) + fps <= boundary]
             for line in manifest["commentary"]:
                 start = int(line["start_frame"])
-                line["end_frame"] = min(int(line["end_frame"]), max(boundary - 1, start + 1))
+                line["end_frame"] = min(int(line["end_frame"]), max(boundary - 1, start + fps))
     return {"replay": replay, "report": report, "manifest": manifest, "series": summary}
 
 
