@@ -10,6 +10,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import logging
 import os
 import pwd
 import re
@@ -40,6 +41,9 @@ from .service_spec import ServiceSpec, parse_service_spec
 _SAFE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 _MAX_CONTROL_RESPONSE = MAX_TOOL_MESSAGE_BYTES
 _NETWORK_PROBE_TIMEOUT_SECONDS = 24
+_NETWORK_PROOF_ATTEMPTS = 3
+_NETWORK_PROOF_RETRY_BACKOFF_SECONDS = (0.5, 1.0)
+_LOG = logging.getLogger(__name__)
 _MAX_QEMU_STDERR_BYTES = 1024
 _SOCKET_WITNESS_TIMEOUT_SECONDS = 1.0
 _SOCKET_WITNESS_MESSAGE_BYTES = 64
@@ -1076,20 +1080,35 @@ class LocalKvmRunnerProvider:
         raise RuntimeError("CONTROL_BOOTSTRAP_TIMEOUT") from last_error
 
     def _network_proof(self, record: _RunnerRecord, phase: Phase) -> NetworkProof:
-        try:
-            response = self._host.control_exchange(
-                record.control_socket,
-                f"NETPROBE {record.nonce} {phase.value}\n",
-                timeout_seconds=_NETWORK_PROBE_TIMEOUT_SECONDS,
-            )
-        except (TimeoutError, socket.timeout) as error:
-            raise PreflightWitnessFailed(f"LOCAL_KVM_{phase.value.upper()}_GUEST_NETPROBE_TIMEOUT") from error
-        except (FileNotFoundError, ConnectionRefusedError, OSError) as error:
-            raise PreflightWitnessFailed(f"LOCAL_KVM_{phase.value.upper()}_GUEST_NETPROBE_REQUEST_UNAVAILABLE") from error
-        try:
-            return parse_network_proof(response, record.nonce, phase.value)
-        except Exception as error:
-            raise PreflightWitnessFailed(f"LOCAL_KVM_{phase.value.upper()}_GUEST_NETPROBE_INVALID_RESPONSE") from error
+        failure_reason = ""
+        cause: Exception | None = None
+        for attempt in range(1, _NETWORK_PROOF_ATTEMPTS + 1):
+            try:
+                response = self._host.control_exchange(
+                    record.control_socket,
+                    f"NETPROBE {record.nonce} {phase.value}\n",
+                    timeout_seconds=_NETWORK_PROBE_TIMEOUT_SECONDS,
+                )
+            except (TimeoutError, socket.timeout) as error:
+                failure_reason, cause = f"LOCAL_KVM_{phase.value.upper()}_GUEST_NETPROBE_TIMEOUT", error
+            except (FileNotFoundError, ConnectionRefusedError, OSError) as error:
+                failure_reason, cause = f"LOCAL_KVM_{phase.value.upper()}_GUEST_NETPROBE_REQUEST_UNAVAILABLE", error
+            else:
+                try:
+                    return parse_network_proof(response, record.nonce, phase.value)
+                except Exception as error:
+                    failure_reason, cause = f"LOCAL_KVM_{phase.value.upper()}_GUEST_NETPROBE_INVALID_RESPONSE", error
+            if attempt < _NETWORK_PROOF_ATTEMPTS:
+                _LOG.debug(
+                    "netprobe_retry attempt=%d phase=%s runner=%s after_error=%s",
+                    attempt + 1,
+                    phase.value,
+                    record.handle.runner_id,
+                    type(cause).__name__ if cause is not None else "unknown",
+                )
+                time.sleep(_NETWORK_PROOF_RETRY_BACKOFF_SECONDS[attempt - 1])
+        assert cause is not None and failure_reason
+        raise PreflightWitnessFailed(failure_reason) from cause
 
     def _network_proofs(self, records: list[_RunnerRecord], phase: Phase) -> list[NetworkProof]:
         proofs: list[NetworkProof] = []
