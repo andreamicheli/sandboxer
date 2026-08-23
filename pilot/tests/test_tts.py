@@ -405,6 +405,70 @@ def test_render_commentary_packs_blocks_by_actual_duration_no_overlap(tmp_path):
     assert blocks[1]["start_frame"] >= blocks[0]["end_frame"]
 
 
+def _dense_manifest(lines, *, recap_frames, fps=30):
+    # Synthetic manifest with an explicit speak window: everything before the
+    # final scene is speakable, the recap scene is not.
+    return {
+        "schema": "sandboxer.video-manifest.v1",
+        "fps": fps,
+        "scenes": [{"duration_frames": recap_frames}, {"duration_frames": 10 * fps}],
+        "commentary": [
+            {
+                "voice_role": line["voice_role"],
+                "text": line["text"],
+                "start_frame": line.get("start_frame", index),
+            }
+            for index, line in enumerate(lines)
+        ],
+        "tts": {
+            "expected": {
+                "model": DEFAULT_TTS_MODEL,
+                "voices": list(("Kore", "Charon")),
+                "settings_version": DEFAULT_TTS_SETTINGS_VERSION,
+            }
+        },
+    }
+
+
+_DENSE_LINES = [
+    {"voice_role": "play_by_play" if index % 2 == 0 else "analyst", "text": f"Line {index} of the dense series."}
+    for index in range(10)
+]
+
+
+def test_render_commentary_shrinks_gap_when_dense_commentary_would_overflow(tmp_path):
+    # 10 x 1.5s speech + fixed 400ms gaps = 18.6s in an 18s window: the old
+    # fixed-gap packer raised COMMENTARY_OVERFLOW_AFTER_RENDER here.
+    manifest = _dense_manifest(_DENSE_LINES, recap_frames=540)  # 18s @30fps
+    adapter = FakeTtsAdapter(ms_per_char=0, min_ms=1500, max_ms=1500)
+    rendered = render_commentary_audio(manifest, adapter, out_dir=tmp_path)
+    blocks = rendered["blocks"]
+    assert len(blocks) == 10
+    boundary = 540
+    for block in blocks:
+        assert block["end_frame"] <= boundary
+    starts = [block["start_frame"] for block in blocks]
+    assert starts == sorted(starts)
+    for previous, block in zip(blocks, blocks[1:]):
+        assert block["start_frame"] >= previous["end_frame"]
+        # Compressed gap engaged: consecutive starts are closer than the
+        # duration + fixed 400ms step would ever allow.
+        assert block["start_frame"] - previous["start_frame"] < 1500 * 30 // 1000 + 400 * 30 // 1000
+    # Planned starts stay a lower bound (15-frame spacing here).
+    for index, block in enumerate(blocks):
+        assert block["start_frame"] >= _DENSE_LINES[index].get("start_frame", index)
+    again = render_commentary_audio(_dense_manifest(_DENSE_LINES, recap_frames=540), adapter, out_dir=tmp_path / "again")
+    assert [b["start_frame"] for b in again["blocks"]] == starts
+
+
+def test_render_commentary_still_raises_when_pure_speech_overflows_window(tmp_path):
+    # Speech alone (15s) exceeds the window (13s): even a zero gap cannot fit.
+    manifest = _dense_manifest(_DENSE_LINES, recap_frames=390)  # 13s @30fps
+    adapter = FakeTtsAdapter(ms_per_char=0, min_ms=1500, max_ms=1500)
+    with pytest.raises(TtsError, match="COMMENTARY_OVERFLOW_AFTER_RENDER"):
+        render_commentary_audio(manifest, adapter, out_dir=tmp_path)
+
+
 def test_adapters_speak_script_verbatim_without_style_instruction():
     # ``style`` is editorial metadata, not spoken direction: the model must
     # read the commentary verbatim (regression for the spoken "Narrate with...").

@@ -75,6 +75,9 @@ DEFAULT_SETTINGS_VERSION = "settings-v1"
 VOICE_BY_ROLE = {"play_by_play": "Kore", "analyst": "Charon"}
 # Natural turn-taking pause between packed commentary blocks (milliseconds).
 _PACK_GAP_MS = 400
+# Floor the turn gap may shrink to when dense commentary would otherwise
+# overflow the speak window (milliseconds).
+_MIN_PACK_GAP_MS = 80
 
 # Fish Audio (https://fish.audio) free developer tier: the `s2.1-pro-free`
 # model has no hard usage cap under Fair Use.  Voices are explicit
@@ -778,13 +781,23 @@ def render_commentary_audio(
         # Pack by actual rendered duration, but never pull a block *earlier*
         # than its planned start: intro lines are scene-anchored and match lines
         # are event-anchored, so the planned schedule must remain a lower bound
-        # while overlaps are still resolved forward.
+        # while overlaps are still resolved forward.  Dense series commentary
+        # cannot afford a fixed turn gap everywhere, so when speech plus
+        # standard gaps would overflow the speak window the gap shrinks
+        # proportionally (evenly dividing the slack) down to _MIN_PACK_GAP_MS;
+        # only pure-speech overflow past the boundary still fails closed.
+        durations_ms=[int(block["duration_ms"]) for block in blocks]
+        slack_ms=recap_start*1000//fps-sum(durations_ms)
+        inter_gaps=len(blocks)-1
+        gap_ms=_PACK_GAP_MS
+        if inter_gaps>0 and slack_ms<inter_gaps*_PACK_GAP_MS:
+            gap_ms=min(_PACK_GAP_MS,max(_MIN_PACK_GAP_MS,slack_ms//inter_gaps))
         prev_end_ms=None
         for block in blocks:
             duration_ms=int(block["duration_ms"])
             planned_ms=block["start_frame"]*1000//fps
             if prev_end_ms is None: at_ms=planned_ms
-            else: at_ms=max(planned_ms,prev_end_ms+_PACK_GAP_MS)
+            else: at_ms=max(planned_ms,prev_end_ms+gap_ms)
             block["start_frame"]=round(at_ms*fps/1000)
             block["end_frame"]=round((at_ms+duration_ms)*fps/1000)
             prev_end_ms=at_ms+duration_ms
