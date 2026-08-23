@@ -238,11 +238,17 @@ def convert(runtime_telemetry: Sequence[Mapping[str, Any]], result: Mapping[str,
         pane = _MODEL_TO_PANE.get(model) if model else None
         phase = str(event.get("phase", "blue"))
 
+        # A match that died before gameplay (no winner recorded) contributes
+        # no narratable story: skip its start/phase events entirely, else the
+        # narration of a 1-frame scene overflows the speak window (v8d).
+        no_gameplay = not result.get("winner")
+
         if kind == "match_started":
-            add(phase="blue", competitor=None, pane=0, etype="MATCH_STARTED",
-                text="match started - two isolated services, one flag each", ns=ns)
-            add(phase="blue", competitor=None, pane=1, etype="MATCH_STARTED",
-                text="match started - services coming up", ns=ns + 1)
+            if not no_gameplay:
+                add(phase="blue", competitor=None, pane=0, etype="MATCH_STARTED",
+                    text="match started - two isolated services, one flag each", ns=ns)
+                add(phase="blue", competitor=None, pane=1, etype="MATCH_STARTED",
+                    text="match started - services coming up", ns=ns + 1)
             continue
         if kind == "blue_finished":
             add(phase="blue", competitor=None, pane=0, etype="PHASE_TRANSITION",
