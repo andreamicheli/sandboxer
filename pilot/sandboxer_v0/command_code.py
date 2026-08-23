@@ -9,9 +9,17 @@ import os
 import re
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+
+# Client-side provider built-ins that never execute on the guest.  The bridge
+# cannot run them (no SANDBOXER_RUNNER_TOOLS entry), so an allow decision for
+# one is registry housekeeping, not sandbox execution: record and tolerate.
+BENIGN_NATIVE_TOOLS = frozenset({"search_tools"})
+
+THINKING_LOOP_WARNING_SECONDS = 90.0
 
 _TRANSPORT_FAILURE_TOKENS = (
     "overloaded", "unavailable", "timeout", "timed out", "connection", "network",
@@ -60,6 +68,57 @@ class CommandCodeBudget:
         if tokens < 0 or self.consumed_output_tokens + tokens > self.output_tokens:
             raise CommandCodeError("COMMAND_CODE_OUTPUT_BUDGET_EXCEEDED")
         self.consumed_output_tokens += tokens
+
+
+class ThinkingLoopWatchdog:
+    """Observational watchdog for runaway provider thinking spans.
+
+    Episode-v8b m3 died in a thinking loop that burned the whole phase
+    timeout.  This tracks consecutive thinking time within one model request
+    (a streak is broken by any non-thinking event and reset per request);
+    once it passes ``warning_seconds`` the configured ``on_warning`` callback
+    receives the elapsed seconds, at most once per streak.  Nothing is ever
+    aborted, and per-event cost stays at string comparisons plus two clock
+    reads per thinking boundary.
+    """
+
+    def __init__(
+        self,
+        *,
+        warning_seconds: float = THINKING_LOOP_WARNING_SECONDS,
+        on_warning: Callable[[float], None] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.warning_seconds = warning_seconds
+        self.on_warning = on_warning
+        self._clock = clock
+        self._reset_streak()
+
+    def _reset_streak(self) -> None:
+        self._accumulated = 0.0
+        self._span_started_at: float | None = None
+        self._warned = False
+
+    def observe(self, event_type: object) -> None:
+        if event_type == "thinking_start":
+            if self._span_started_at is None:
+                self._span_started_at = self._clock()
+        elif event_type == "thinking_end":
+            started = self._span_started_at
+            if started is not None:
+                self._span_started_at = None
+                self._accumulated += max(0.0, self._clock() - started)
+                if not self._warned and self._accumulated > self.warning_seconds:
+                    self._warned = True
+                    if self.on_warning is not None:
+                        self.on_warning(self._accumulated)
+        elif event_type in {"thinking_delta", "thinking_text"}:
+            return
+        else:
+            self._reset_streak()
+
+    def reset(self) -> None:
+        self._reset_streak()
 
 
 @dataclass(frozen=True)
@@ -339,13 +398,19 @@ class CommandCodeAdapter:
                     if isinstance(allowed, bool) and allowed and isinstance(tool_name, str):
                         if tool_name.startswith(prefix) and tool_name[len(prefix):] in allowed_tools:
                             continue
+                        # Benign client-side built-ins (registry searches) are
+                        # never guest execution: tolerate instead of failing
+                        # the match (episode-v8b m2 postmortem).
+                        if tool_name in BENIGN_NATIVE_TOOLS:
+                            continue
                         if tool_name not in allowed_tools:
                             raise CommandCodeError("COMMAND_CODE_NATIVE_TOOL_REJECTED")
                     continue
                 if isinstance(tool_name, str) and tool_name.startswith(prefix) and tool_name[len(prefix):] in allowed_tools:
                     if isinstance(tool_call_id, str):
                         runner_tool_calls.add(tool_call_id)
-                elif kind in {"tool_queued", "tool_denied", "tool_running", "tool_completed"}:
+                elif kind in {"tool_queued", "tool_denied", "tool_running", "tool_completed"} or (
+                        isinstance(tool_name, str) and tool_name in BENIGN_NATIVE_TOOLS):
                     continue
                 elif not isinstance(tool_call_id, str) or tool_call_id not in runner_tool_calls:
                     raise CommandCodeError("COMMAND_CODE_NATIVE_TOOL_REJECTED")

@@ -22,7 +22,13 @@ if str(PILOT_ROOT) not in sys.path:
 from sandboxer_v0.arena_safety import Phase
 from sandboxer_v0.artifact_converter import _public_identity
 from sandboxer_v0.blue_briefs import BlueBrief, brief_manifest, select_blue_briefs
-from sandboxer_v0.command_code import CommandCodeAdapter, CommandCodeError, CommandCodeResult
+from sandboxer_v0.command_code import (
+    BENIGN_NATIVE_TOOLS,
+    CommandCodeAdapter,
+    CommandCodeError,
+    CommandCodeResult,
+    ThinkingLoopWatchdog,
+)
 from sandboxer_v0.local_kvm import LocalKvmConfig, LocalKvmRunnerProvider
 from sandboxer_v0.runner_tool_server import RunnerToolServer, ToolDecision
 from sandboxer_v0.service_spec import SERVICE_SPEC_VERSION, ServiceSpec, ServiceSpecError, parse_service_spec
@@ -139,8 +145,20 @@ def _frame_monitor(
     *,
     emit: object = None,
     stop_path: Path | None = None,
+    watchdog: ThinkingLoopWatchdog | None = None,
 ):
     consecutive_retries = 0
+
+    def thinking_warning(elapsed: float) -> None:
+        # Observational only: a runaway thinking streak is telemetry, not an
+        # abort (episode-v8b m3 died in such a loop before its phase timeout).
+        if callable(emit):
+            emit("thinking_loop_warning", model=model, phase=current_phase, elapsed_seconds=elapsed)
+
+    if watchdog is None:
+        watchdog = ThinkingLoopWatchdog()
+    if watchdog.on_warning is None:
+        watchdog.on_warning = thinking_warning
 
     def on_frame(frame: dict[str, object]) -> None:
         nonlocal consecutive_retries
@@ -150,6 +168,7 @@ def _frame_monitor(
         safe: dict[str, object] = {"model": model, "phase": current_phase, "frame_type": frame.get("type")}
         if isinstance(event, dict):
             safe["event_type"] = event.get("type")
+            watchdog.observe(event.get("type"))
             if event.get("type") == "api_retry":
                 consecutive_retries += 1
                 if consecutive_retries > MAX_PROVIDER_RETRIES:
@@ -178,11 +197,19 @@ def _frame_monitor(
                              event_type=event.get("type"), tool_name=name)
                 elif event.get("type") == "tool_decision" and event.get("allowed") is True:
                     # Defensive tripwire: a native tool allowed by the bridge
-                    # would be guest execution (should not happen normally).
-                    if callable(emit):
-                        emit("provider_native_tool_executed", model=model, phase=current_phase,
-                             tool_name=name, event_type="tool_decision", allowed=True)
-                    raise CommandCodeError("COMMAND_CODE_NATIVE_TOOL_REJECTED")
+                    # would be guest execution (should not happen normally) --
+                    # except read-only registry helpers in BENIGN_NATIVE_TOOLS,
+                    # which never touch the guest and must only be recorded
+                    # (episode-v8b m2 postmortem).
+                    if name in BENIGN_NATIVE_TOOLS:
+                        if callable(emit):
+                            emit("provider_native_tool_benign", model=model, phase=current_phase,
+                                 tool_name=name)
+                    else:
+                        if callable(emit):
+                            emit("provider_native_tool_executed", model=model, phase=current_phase,
+                                 tool_name=name, event_type="tool_decision", allowed=True)
+                        raise CommandCodeError("COMMAND_CODE_NATIVE_TOOL_REJECTED")
         if callable(emit):
             emit("provider_frame", **safe)
     return on_frame

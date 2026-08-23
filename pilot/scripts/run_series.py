@@ -12,10 +12,13 @@ duplicated here.  Every match gets its own identity:
 
 Seeds default to ``<seed-prefix or series-id>-m<i>`` so each match draws a
 different Blue Brief deterministically.  A match that fails with a
-``*_BUDGET_EXCEEDED`` reason code is retried once with 1.5x token budgets
-under the derived identity ``...-m<i>-retry1`` / ``<seed>-retry1``; each
-match's ``attempts`` record in the series JSON shows which attempt produced
-the recorded data point.
+``*_BUDGET_EXCEEDED`` reason code is retried once with 1.5x token budgets,
+and a match that fails with ``COMMAND_CODE_TIMEOUT`` (e.g. a provider stuck
+in a thinking loop, episode-v8b m3) is retried once with the same 1.5x token
+budgets plus a 1.5x ``phase_timeout``; both retries run under the derived
+identity ``...-m<i>-retry1`` / ``<seed>-retry1`` and each match's ``attempts``
+record in the series JSON shows which attempt produced the recorded data
+point.
 
 After the third match the driver writes ``<series-id>.series.json`` next to
 the evidence with per-match winners and the series decision (see
@@ -69,11 +72,21 @@ def _is_budget_failure(codes: tuple[str, ...]) -> bool:
     return any("BUDGET_EXCEEDED" in code for code in codes)
 
 
-def _budget_retry_args(match_args: argparse.Namespace) -> argparse.Namespace:
+def _is_timeout_failure(codes: tuple[str, ...]) -> bool:
+    """True when any safe reason code is a phase wall-clock timeout."""
+    return "COMMAND_CODE_TIMEOUT" in codes
+
+
+def _budget_retry_args(
+    match_args: argparse.Namespace, *, extend_phase_timeout: bool = False
+) -> argparse.Namespace:
     """One budget-retry namespace: 1.5x token budgets and a derived identity.
 
     The retry gets its own match id/seed suffix so its evidence files never
-    collide with attempt one's (telemetry is opened with O_EXCL).
+    collide with attempt one's (telemetry is opened with O_EXCL).  A timeout
+    retry additionally gets 1.5x ``phase_timeout`` because a thinking-loop or
+    slow-provider match (episode-v8b m3) dies on the wall clock, not on the
+    token budget.
     """
     retried = argparse.Namespace(**vars(match_args))
     retried.match_id = f"{match_args.match_id}{RETRY_SUFFIX}"
@@ -81,6 +94,8 @@ def _budget_retry_args(match_args: argparse.Namespace) -> argparse.Namespace:
     for field in ("blue_tokens", "red_tokens", "interview_tokens"):
         setattr(retried, field,
                 int(getattr(match_args, field) * BUDGET_RETRY_MULTIPLIER))
+    if extend_phase_timeout:
+        retried.phase_timeout = float(match_args.phase_timeout) * BUDGET_RETRY_MULTIPLIER
     return retried
 
 
@@ -134,9 +149,11 @@ def execute_series(
     ``run_one_match``.  A failing match never aborts the series: the failure's
     safe reason codes are recorded as that match's data point.  A match that
     dies with a ``*_BUDGET_EXCEEDED`` reason code gets exactly one retry with
-    token budgets multiplied by ``BUDGET_RETRY_MULTIPLIER`` and the derived
-    identity ``<seed>-retry1``; the retry's outcome (success or failure)
-    becomes the recorded data point.
+    token budgets multiplied by ``BUDGET_RETRY_MULTIPLIER``; a
+    ``COMMAND_CODE_TIMEOUT`` failure gets the same budget retry plus a 1.5x
+    ``phase_timeout``.  Either way the retry runs under the derived identity
+    ``<seed>-retry1`` and its outcome (success or failure) becomes the
+    recorded data point.
     """
     if not args.series_id or any(not part.strip() for part in args.series_id.split("-")):
         raise SeriesError("SERIES_ID_INVALID")
@@ -160,10 +177,11 @@ def execute_series(
                 attempts.append(_attempt_record(len(attempts) + 1, match_args,
                                                 multipliers=multipliers, succeeded=False,
                                                 reason_code=codes[0]))
-                if len(attempts) <= 1 and _is_budget_failure(codes):
+                if len(attempts) <= 1 and (_is_budget_failure(codes) or _is_timeout_failure(codes)):
                     multipliers = {key: value * BUDGET_RETRY_MULTIPLIER
                                    for key, value in multipliers.items()}
-                    match_args = _budget_retry_args(base_args)
+                    match_args = _budget_retry_args(
+                        base_args, extend_phase_timeout=_is_timeout_failure(codes))
                     continue
                 payload = {
                     "result": "failed",
