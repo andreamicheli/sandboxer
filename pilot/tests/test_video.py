@@ -273,8 +273,8 @@ def test_phased_replay_inserts_interview_and_red_phase_scenes_in_order():
     assert [scene["type"] for scene in scenes]==["custom_intro","model_cards_and_rules","match","interview_card","interviews","red_phase_card","match","factual_recap"]
     assert scenes[2]["scene_key"]=="match:1" and scenes[2]["editing"]=="uncut" and scenes[2]["event_ids"]==["e1","e2"]
     assert scenes[3]["event_ids"]==["e3"] and scenes[3]["duration_frames"]==4*fps
-    # The real interview-to-red gap is 4s; the interviews block clamps to its 8s minimum.
-    assert scenes[4]["scene_key"]=="interviews:1" and scenes[4]["event_ids"]==["e3","e4"] and scenes[4]["duration_frames"]==8*fps
+    # Screen time scales with the entry count: two recorded interviews -> 12s.
+    assert scenes[4]["scene_key"]=="interviews:1" and scenes[4]["event_ids"]==["e3","e4"] and scenes[4]["duration_frames"]==12*fps
     assert scenes[5]["event_ids"]==["e5"] and scenes[5]["duration_frames"]==3*fps
     assert scenes[6]["scene_key"]=="match:1:2" and scenes[6]["match_number"]==1 and scenes[6]["editing"]=="uncut" and scenes[6]["event_ids"]==["e5","e6","e7","e8"]
     # Terminal events land inside their owning scene's window.

@@ -373,7 +373,8 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
             _match_segment(first_ns,last_ns+1,list(match_frames))
         if t_iv is not None:
             iv_end=t_red if t_red is not None else last_ns+1
-            iv_duration=min(45*fps,max(8*fps,round((iv_end-t_iv)/1_000_000_000*fps)))
+            # Screen time scales with the interview count: 6s per entry, capped at 30s.
+            iv_duration=min(30*fps,6*fps*len(interview_frames))
             segments.append({"type":"interview_card","match_number":number,"duration_frames":4*fps,"event_ids":[interview_frames[0]["event_id"]]})
             segments.append({"type":"interviews","scene_key":f"interviews:{number}","match_number":number,
                              "duration_frames":iv_duration,"editing":"fullscreen",

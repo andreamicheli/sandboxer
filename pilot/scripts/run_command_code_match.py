@@ -20,6 +20,7 @@ if str(PILOT_ROOT) not in sys.path:
     sys.path.insert(0, str(PILOT_ROOT))
 
 from sandboxer_v0.arena_safety import Phase
+from sandboxer_v0.artifact_converter import _public_identity
 from sandboxer_v0.blue_briefs import BlueBrief, brief_manifest, select_blue_briefs
 from sandboxer_v0.command_code import CommandCodeAdapter, CommandCodeError, CommandCodeResult
 from sandboxer_v0.local_kvm import LocalKvmConfig, LocalKvmRunnerProvider
@@ -327,6 +328,10 @@ async def execute_match(args: argparse.Namespace) -> dict[str, object]:
             raise MatchCalibrationError("BLUE_DEFENSE_UNCHANGED")
         emit("blue_finished", usage=[_usage(item) for item in blue])
         interviews = await interview()
+        for item in interviews:
+            emit("interview_line", model=item.observed_model,
+                 competitor=_public_identity(item.observed_model),
+                 text=item.final_text, phase="interview")
         emit("interview_finished", tool_access=False, usage=[_usage(item) for item in interviews])
         flags = (f"SANDBOXER-{secrets.token_hex(16)}", f"SANDBOXER-{secrets.token_hex(16)}")
         for runner, flag in zip(runners, flags):

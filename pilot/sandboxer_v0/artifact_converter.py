@@ -252,6 +252,14 @@ def convert(runtime_telemetry: Sequence[Mapping[str, Any]], result: Mapping[str,
             add(phase="blue", competitor=None, pane=1, etype="PHASE_TRANSITION",
                 text="interview complete - rules confirmed", ns=ns)
             continue
+        if kind == "interview_line":
+            # Verbatim post-blue interview answer; unlike tool decisions the
+            # line is kept even without a known pane so no interview is lost.
+            add(phase="interview",
+                competitor=_public_identity(str(model)) if model else None,
+                pane=pane, etype="INTERVIEW_RECORDED",
+                text=str(event.get("text", "")), ns=ns)
+            continue
         if kind == "deployment_promoted":
             if pane is None:
                 continue
