@@ -135,19 +135,15 @@ def test_validate_detects_missing_hash_for_existing_input(tmp_path):
 
 # --- build_real_artifacts.py CLI integration -------------------------------
 
-# Small, valid drafts so main() exercises the manifest path deterministically
-# without invoking any headless agent backend.
+# Small, valid intro draft so main() exercises the manifest path
+# deterministically without invoking any headless agent backend.  Match
+# commentary is deterministic dense telemetry-derived coverage and needs no
+# draft at all.
 _SHORT_INTRO = [
     {"voice_role": "play_by_play", "line_type": "editorial", "scene": "cold_open",
      "offset_seconds": 1.0, "text": "Welcome to Sandboxer."},
     {"voice_role": "analyst", "line_type": "interpreted", "scene": "model_cards_and_rules",
      "offset_seconds": 1.0, "model": "Laguna S 2.1", "text": "It seems very sharp today."},
-]
-_SHORT_COMMENTARY = [
-    {"voice_role": "play_by_play", "line_type": "observed", "event_ids": ["e01"],
-     "text": "We are live."},
-    {"voice_role": "analyst", "line_type": "interpreted", "event_ids": ["e04"],
-     "text": "It seems strategy decided the match."},
 ]
 
 
@@ -156,7 +152,6 @@ def _match_inputs(tmp_path, monkeypatch):
     from scripts import build_real_artifacts as bra
 
     monkeypatch.setattr(bra, "draft_intro_commentary", lambda *args, **kwargs: [dict(line) for line in _SHORT_INTRO])
-    monkeypatch.setattr(bra, "draft_commentary", lambda *args, **kwargs: [dict(line) for line in _SHORT_COMMENTARY])
     telemetry = tmp_path / "m.telemetry.jsonl"
     telemetry.write_text(
         "\n".join(

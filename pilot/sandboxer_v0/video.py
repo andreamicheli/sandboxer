@@ -15,6 +15,8 @@ from .commentary import (
     COMMENTARY_LINE_TYPES,
     COMMENTARY_ROLES,
     INTRO_SCENES,
+    LINE_WINDOW_SECONDS,
+    PROVENANCE_DETERMINISTIC,
     fallback_intro_commentary,
     repair_line_types,
 )
@@ -319,7 +321,7 @@ def _schedule_intro_commentary(intro:Sequence[Mapping[str,Any]],budgets:Mapping[
     return [line for line in _blocks_to_lines(packed,scene_starts,fps) if not line["event_ids"]]
 
 
-def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model_metadata:Mapping[str,Any],benchmark_snapshot:Mapping[str,Any],fps:int=30,commentary:Sequence[Mapping[str,Any]]|None=None,arena_visuals:Mapping[str,Any]|None=None,intro_commentary:Sequence[Mapping[str,Any]]|None=None,bgm:Mapping[str,Any]|None=None)->dict[str,Any]:
+def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model_metadata:Mapping[str,Any],benchmark_snapshot:Mapping[str,Any],fps:int=30,commentary:Sequence[Mapping[str,Any]]|None=None,arena_visuals:Mapping[str,Any]|None=None,intro_commentary:Sequence[Mapping[str,Any]]|None=None,bgm:Mapping[str,Any]|None=None,dense_commentary:Sequence[Mapping[str,Any]]|None=None)->dict[str,Any]:
     if replay.get("schema_version")!="sandboxer.replay.v1" or fps<24: raise VideoError("VIDEO_INPUT_INVALID")
     panes=replay.get("panes",())
     if not isinstance(panes,(list,tuple)) or len(panes)!=2: raise VideoError("VIDEO_IDENTITIES_INVALID")
@@ -452,9 +454,47 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
                                "model":str(line.get("model") or identities[pane]),
                                "event_ids":eids})
     budgets=_scene_budgets(scenes,fps)
-    match_lines=_schedule_commentary(commentary,budgets,scene_starts,fps,candidates,_narration())
+    if dense_commentary is None:
+        match_lines=_schedule_commentary(commentary,budgets,scene_starts,fps,candidates,_narration())
+    else:
+        # A dense deterministic rundown replaces the packed draft/narration
+        # track wholesale: its lines are already grounded and windowed.
+        match_lines=[]
     intro_lines=_schedule_intro_commentary(intro_commentary or (),budgets,scene_starts,fps,identities)
-    scheduled=sorted(match_lines+intro_lines,key=lambda item:(item["start_frame"],item["end_frame"]))
+    # Dense deterministic lines (see ``sandboxer_v0.commentary.build_commentary``)
+    # arrive windowed in match-relative frames anchored to their primary event.
+    # Translate each onto the absolute manifest timeline: play-by-play lines sit
+    # exactly on their event's scene anchor; analyst offsets shift within the
+    # owning segment.  Ungrounded or mistyped lines fail closed.
+    total_frames=running
+    dense_lines:list[dict[str,Any]]=[]
+    if dense_commentary is not None:
+        def _rel_frame(frame:Mapping[str,Any])->int:
+            return max(0,round((int(frame["at_monotonic_ns"])-start)/1_000_000_000*fps))
+        for item in dense_commentary:
+            text=str(item.get("text","")).strip()
+            eids=[str(eid) for eid in item.get("event_ids",())]
+            anchors=[event_frame[eid] for eid in eids if eid in event_frame]
+            role=item.get("voice_role"); line_type=str(item.get("line_type","observed"))
+            if (not text or not eids or len(anchors)!=len(eids)
+                    or role not in COMMENTARY_ROLES or line_type not in COMMENTARY_LINE_TYPES):
+                raise VideoError("VIDEO_DENSE_COMMENTARY_INVALID")
+            primary=anchors[0]
+            shift=max(0,int(item.get("start_frame",0))-_rel_frame(primary))
+            abs_start=min(_anchor(primary)+shift,total_frames-1)
+            duration=min(max(int(item.get("end_frame",0))-int(item.get("start_frame",0)),1),
+                         fps*LINE_WINDOW_SECONDS)
+            dense_lines.append({"voice_role":str(role),"model":str(item.get("model") or ""),
+                                "start_frame":abs_start,
+                                "end_frame":min(abs_start+duration,total_frames),
+                                "text":text,"event_ids":eids,"line_type":line_type,
+                                "provenance":str(item.get("provenance") or PROVENANCE_DETERMINISTIC)})
+        dense_lines.sort(key=lambda item:(item["start_frame"],item["end_frame"]))
+    scheduled=sorted(match_lines+intro_lines+dense_lines,key=lambda item:(item["start_frame"],item["end_frame"]))
+    for position,line in enumerate(scheduled[:-1]):
+        nxt=scheduled[position+1]["start_frame"]
+        if line["end_frame"]>nxt:
+            line["end_frame"]=max(line["start_frame"]+1,nxt)
     manifest={"schema":"sandboxer.video-manifest.v1","fps":fps,"identities":identities,"source_bundle_hash":replay.get("source_bundle_hash"),"layout":{"split":{"left":.5,"right":.5,"permanent":True}},"timeline":timeline,"terminal":terminal,"scenes":scenes,"commentary":scheduled,"interviews":interviews,"arena_visuals":dict(arena_visuals) if arena_visuals else None,"silence_allowed":True,"tts":{"expected":asdict(TtsPreflight(DEFAULT_TTS_MODEL,DEFAULT_TTS_VOICES,DEFAULT_TTS_SETTINGS_VERSION)),"requested":asdict(TtsProvenance(DEFAULT_TTS_PROVIDER,DEFAULT_TTS_MODEL,DEFAULT_TTS_VOICES)),"observed":None,"tts_provider_drift":False,"blocks":"bounded-and-hashed"},"qa":{"required":["alignment","clipping","noise","speaker_swaps","silence","pronunciation","factual_traceability","accessibility","licensing","decisive_cue_audibility"]},"composition":{"engine":"remotion","ffmpeg":["probe","loudness-normalize","mux","delivery-encode"]}}
     if bgm: manifest["composition"]["bgm"]=dict(bgm)
     manifest["manifest_hash"]=_digest(manifest);return manifest

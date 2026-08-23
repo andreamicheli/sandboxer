@@ -303,12 +303,6 @@ def test_build_real_artifacts_delegates_replay_conversion_to_the_module(tmp_path
         {"voice_role": "play_by_play", "line_type": "editorial", "scene": "cold_open",
          "offset_seconds": 1.0, "text": "Welcome to Sandboxer."},
     ])
-    monkeypatch.setattr(bra, "draft_commentary", lambda *args, **kwargs: [
-        {"voice_role": "play_by_play", "line_type": "observed", "event_ids": ["e01"],
-         "text": "We are live."},
-        {"voice_role": "analyst", "line_type": "interpreted", "event_ids": ["e11"],
-         "text": "It seems strategy decided the match."},
-    ])
     telemetry_path = tmp_path / "m.telemetry.jsonl"
     telemetry_path.write_text(
         "".join(json.dumps(event) + "\n" for event in _telemetry()), encoding="utf-8",

@@ -52,12 +52,15 @@ if str(PILOT_ROOT) not in sys.path:
 from sandboxer_v0.artifact_converter import (
     IDENTITY_A,
     IDENTITY_B,
-    _PANE_NAMES,
     _public_identity,
     convert,
 )
 from sandboxer_v0.arena_visual import FakeArenaVisualDrafter, draft_arena_plan
-from sandboxer_v0.commentary import HeadlessIntroCommentaryDrafter, draft_intro_commentary, draft_commentary
+from sandboxer_v0.commentary import (
+    HeadlessIntroCommentaryDrafter,
+    build_commentary,
+    draft_intro_commentary,
+)
 from sandboxer_v0.run_layout import get_run_layout, run_artifact_path, write_run_manifest
 from sandboxer_v0.video import build_video_manifest
 
@@ -227,22 +230,13 @@ def main(argv: list[str] | None = None) -> int:
              "text": "Strong on agentic benchmarks like CyberGym, it seems Muse moves fast."},
         ]
 
-    # Two-voice commentary (LLM draft with deterministic fallback).
-    try:
-        commentary = draft_commentary(replay, report)
-        print(f"commentary: LLM draft ok ({len(commentary)} lines)", file=sys.stderr)
-    except Exception as error:
-        print(f"commentary LLM draft failed ({error}); using authored fallback", file=sys.stderr)
-        winner = report["outcome"]["winner"]
-        replay_frames = replay.get("frames", [])
-        first_id = str(replay_frames[0]["event_id"]) if replay_frames else "e01"
-        last_id = str(replay_frames[-1]["event_id"]) if replay_frames else "e01"
-        commentary = [
-            {"voice_role": "play_by_play", "line_type": "observed", "event_ids": [first_id],
-             "text": f"We're live. The arena is up, {_PANE_NAMES[0]} and {_PANE_NAMES[1]} are in their corners."},
-            {"voice_role": "analyst", "line_type": "interpreted", "event_ids": [last_id],
-             "text": f"It looks like the match came down to strategy, and {winner} came out ahead."},
-        ]
+    # Dense two-voice commentary derived straight from the replay frames: every
+    # terminal action (inspect, deploy, promote, verify, probe, capture attempt,
+    # phase transition) is narrated at its own timestamp, dead air is filled
+    # with recaps of seen actions, and nothing is invented (v7 postmortem: the
+    # drafted path produced 11 lines for 26 events and skipped the blue phase).
+    commentary = build_commentary(replay.get("frames", []), [IDENTITY_A, IDENTITY_B], fps=30)
+    print(f"commentary: deterministic dense rundown ({len(commentary)} lines)", file=sys.stderr)
 
     manifest = build_video_manifest(
         replay,
@@ -250,9 +244,9 @@ def main(argv: list[str] | None = None) -> int:
         model_metadata=model_metadata,
         benchmark_snapshot=benchmark_snapshot,
         fps=30,
-        commentary=commentary,
         arena_visuals=arena,
         intro_commentary=intro,
+        dense_commentary=commentary,
     )
 
     # The manifest's own terminal feed is already scene-aligned (each frame

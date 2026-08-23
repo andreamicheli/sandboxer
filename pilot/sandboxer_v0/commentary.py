@@ -31,6 +31,331 @@ from typing import Any, Mapping, Protocol, Sequence
 from .agents import HeadlessAgentAdapter, phase_adapter
 
 
+# --- Deterministic dense play-by-play ----------------------------------------
+#
+# Episode-postmortem rule: drafted commentary covered only a fraction of the
+# terminal events (v7: 11 lines for 26 events) and never narrated the blue
+# phase.  ``build_commentary`` derives coverage straight from the replay
+# frames instead: every meaningful action gets an immediate play-by-play line
+# anchored at its own event frame, analyst lines interpret patterns using only
+# observed events, and dead air longer than fifteen seconds is filled with a
+# recap of actions already seen.  Nothing is invented: every sentence restates
+# frame fields (event type, phase, pane identity, terminal text) or arithmetic
+# over telemetry timestamps.
+
+PROVENANCE_DETERMINISTIC = "deterministic"
+"""Line content derived mechanically from telemetry (never model prose)."""
+
+# Replay vocabulary treated as narratable action.  ``artifact_converter.convert``
+# emits MATCH_STARTED / PHASE_TRANSITION / MODEL_RESPONSE / TOOL_CALL /
+# MATCH_FINISHED; series-level producers add gate-opening and verified-submission
+# events.  INTERVIEW_RECORDED is deliberately excluded: interviews get their own
+# fullscreen scene rather than play-by-play.
+ACTION_EVENT_TYPES = frozenset({
+    "MATCH_STARTED", "TOOL_CALL", "MODEL_RESPONSE", "PHASE_TRANSITION",
+    "MATCH_FINISHED", "SUBMISSION_VERIFIED", "PHASE_GATE_OPENED",
+})
+
+LINE_WINDOW_SECONDS = 8      # a line's [start_frame, end_frame) window cap
+DEAD_AIR_SECONDS = 15        # silence longer than this earns a filler recap
+ANALYST_EVERY = 3            # every Nth consecutive action also earns an analyst beat
+ANALYST_DELAY_SECONDS = 2    # analyst follow-up lands this long after its action
+REPEATED_STREAK = 3          # consecutive same-actor offensive actions -> pattern note
+SLOW_PROMOTION_RATIO = 2.0   # promotion elapsed-time gap worth narrating (~10x in v7)
+
+_OFFENSIVE_KINDS = frozenset({"recon", "probe", "capture_attempt"})
+_DEFENSIVE_KINDS = frozenset({"inspect", "deploy", "promote", "health_check"})
+
+_KIND_PHRASE = {
+    "match_start": "the match open",
+    "inspect": "an inspect",
+    "deploy": "a deploy",
+    "promote": "a defense promotion",
+    "health_check": "a self-health check",
+    "capture_attempt": "a flag submission",
+    "recon": "target recon",
+    "probe": "an HTTP probe",
+    "wrap": "a phase wrap-up",
+    "phase": "a phase call",
+    "gate": "a gate opening",
+    "submission": "a verified submission",
+    "finish": "the final whistle",
+    "other": "a tool action",
+}
+
+
+def _action_kind(frame: Mapping[str, Any]) -> str:
+    """Classify one replay frame from its event type and redacted text."""
+    event_type = str(frame.get("event_type", ""))
+    text = str(frame.get("text", "")).strip().lower()
+    if event_type == "MATCH_STARTED":
+        return "match_start"
+    if event_type == "MATCH_FINISHED":
+        return "finish"
+    if event_type == "PHASE_TRANSITION":
+        return "phase"
+    if event_type == "PHASE_GATE_OPENED":
+        return "gate"
+    if event_type == "SUBMISSION_VERIFIED":
+        return "submission"
+    if text.startswith("defense promoted"):
+        return "promote"
+    for prefix, kind in (
+        ("verify: self-service", "health_check"),
+        ("verify: objective token", "capture_attempt"),
+        ("inspect:", "inspect"),
+        ("deploy:", "deploy"),
+        ("target:", "recon"),
+        ("probe:", "probe"),
+        ("finish:", "wrap"),
+    ):
+        if text.startswith(prefix):
+            return kind
+    return "other"
+
+
+def _pane_identity(frame: Mapping[str, Any], identities: Sequence[str]) -> str:
+    try:
+        pane = int(frame.get("pane"))
+    except (TypeError, ValueError):
+        return ""
+    if 0 <= pane < len(identities):
+        return identities[pane]
+    return ""
+
+
+def _sentence(text: str) -> str:
+    cleaned = str(text).strip()
+    if not cleaned:
+        return ""
+    sentence = cleaned[0].upper() + cleaned[1:]
+    return sentence if sentence[-1] in ".!?" else sentence + "."
+
+
+def _action_text(kind: str, name: str, raw_text: str) -> str:
+    """A factual restatement of one action; only frame material is used."""
+    if kind == "match_start":
+        if name:
+            return f"{name} brings its service up as the match starts."
+        return "The match starts: two isolated services, one flag each."
+    if kind == "inspect":
+        return f"{name} inspects its declared service surface." if name else "Declared service surface inspected."
+    if kind == "deploy":
+        return f"{name} deploys its proposed service spec." if name else "Proposed service spec deployed."
+    if kind == "health_check":
+        return f"{name} runs a self-service health check." if name else "Self-service health check runs."
+    if kind == "capture_attempt":
+        return f"{name} goes for the flag - an objective token submission lands." if name else "Objective token submission - a capture attempt."
+    if kind == "recon":
+        return f"{name} pulls up the opponent's service contract." if name else "Opponent service contract described."
+    if kind == "probe":
+        return f"{name} probes the target over HTTP." if name else "HTTP probe hits the target."
+    if kind == "wrap":
+        return f"{name} wraps up the phase." if name else "Phase wrapped up."
+    if kind == "promote":
+        detail = raw_text.split(":", 1)[1].strip() if ":" in raw_text else raw_text.strip()
+        return f"{name} promotes a live defense: {detail}." if name else f"Defense promoted: {detail}."
+    if kind == "submission":
+        if raw_text.strip():
+            return _sentence(raw_text)
+        return f"{name} has an objective submission verified." if name else "Objective submission verified."
+    if raw_text.strip():
+        return _sentence(raw_text)
+    return f"{name} acts." if name else "Action logged."
+
+
+def _recap_phrase(group: Mapping[str, Any]) -> str:
+    kind = str(group.get("kind", "other"))
+    name = str(group.get("name", ""))
+    phrase = _KIND_PHRASE.get(kind, kind)
+    return f"{phrase} from {name}" if name else phrase
+
+
+def build_commentary(
+    replay_frames: Sequence[Mapping[str, Any]],
+    identities: Sequence[str],
+    fps: int = 30,
+) -> list[dict[str, Any]]:
+    """Dense deterministic two-voice commentary derived from replay frames.
+
+    Coverage contract (episode v7 postmortem):
+
+    - every action frame (:data:`ACTION_EVENT_TYPES`) is cited by at least one
+      line's ``event_ids``, with ``start_frame`` aligned to the event frame;
+    - every ~3rd consecutive action, any repeated-offense streak, and any
+      lopsided match-start-to-defense-promotion elapsed time also earn an
+      analyst line shortly after, interpreting only what was observed;
+    - silence longer than :data:`DEAD_AIR_SECONDS` between lines is filled
+      with an analyst recap of already-seen actions;
+    - windows never overlap: ``end_frame = min(next start, start + fps*8)``;
+    - identical inputs yield byte-identical output and empty input yields [].
+    """
+    fps = int(fps)
+    names = [str(item) for item in identities]
+    frames = [dict(frame) for frame in replay_frames]
+    if not frames or fps <= 0:
+        return []
+    base_ns = min(int(frame.get("at_monotonic_ns", 0)) for frame in frames)
+
+    def _rel(ns: Any) -> int:
+        return max(0, round((int(ns) - base_ns) / 1_000_000_000 * fps))
+
+    # Consecutive action frames landing on the same aligned frame merge into
+    # one line citing all their ids (the converter emits the match-start pair
+    # one nanosecond apart).
+    groups: list[dict[str, Any]] = []
+    for frame in frames:
+        if str(frame.get("event_type", "")) not in ACTION_EVENT_TYPES:
+            continue
+        rel = _rel(frame.get("at_monotonic_ns", base_ns))
+        if groups and groups[-1]["start"] == rel:
+            groups[-1]["event_ids"].append(str(frame["event_id"]))
+            continue
+        groups.append({
+            "start": rel,
+            "ns": int(frame.get("at_monotonic_ns", base_ns)),
+            "kind": _action_kind(frame),
+            "name": _pane_identity(frame, names),
+            "raw": str(frame.get("text", "")),
+            "event_ids": [str(frame["event_id"])],
+        })
+    if not groups:
+        return []
+
+    open_ns = groups[0]["ns"]
+    promotion_ns: dict[str, tuple[int, list[str]]] = {}
+    slow_note_done = False
+    streak_actor: str | None = None
+    streak_ids: list[str] = []
+    streak_phrases: list[str] = []
+
+    pending: dict[int, list[tuple[int, dict[str, Any]]]] = {}
+
+    def _queue(index: int, priority: int, *, text: str, ids: list[str], line_type: str) -> None:
+        pending.setdefault(index, []).append(
+            (priority, {"role": "analyst", "model": "", "text": text,
+                        "ids": list(ids), "type": line_type}))
+
+    for index, group in enumerate(groups):
+        kind, name = group["kind"], group["name"]
+
+        # Repeated same-actor offense: a notable pattern worth interpreting.
+        if kind in _OFFENSIVE_KINDS and name:
+            if name != streak_actor:
+                streak_actor, streak_ids, streak_phrases = name, [], []
+            streak_ids.extend(group["event_ids"])
+            streak_phrases.append(_KIND_PHRASE.get(kind, kind))
+            if len(streak_phrases) == REPEATED_STREAK:
+                _queue(index, 1,
+                       text=(f"That is {REPEATED_STREAK} offensive actions in a row from {name} - "
+                             f"{', '.join(streak_phrases)}. It looks like sustained pressure on the defender."),
+                       ids=streak_ids, line_type="interpreted")
+                streak_actor, streak_ids, streak_phrases = name, [], []
+        else:
+            streak_actor, streak_ids, streak_phrases = None, [], []
+
+        # Lopsided defense promotion: compare elapsed times from telemetry.
+        if kind == "promote" and name and name not in promotion_ns:
+            promotion_ns[name] = (group["ns"], list(group["event_ids"]))
+            if len(promotion_ns) == 2 and not slow_note_done:
+                (fast_name, fast_data), (slow_name, slow_data) = sorted(
+                    promotion_ns.items(), key=lambda item: item[1][0])
+                fast_s = (fast_data[0] - open_ns) / 1_000_000_000
+                slow_s = (slow_data[0] - open_ns) / 1_000_000_000
+                if fast_s > 0 and slow_s / fast_s >= SLOW_PROMOTION_RATIO:
+                    slow_note_done = True
+                    _queue(index, 0,
+                           text=(f"From the telemetry clock: {slow_name} needed {slow_s:.0f} seconds from "
+                                 f"match start to a promoted defense; {fast_name} did it in {fast_s:.0f} - "
+                                 f"roughly {slow_s / fast_s:.0f} times slower."),
+                           ids=list(fast_data[1]) + list(slow_data[1]),
+                           line_type="observed")
+
+        # Every Nth consecutive action earns an analyst recap of the run.
+        if (index + 1) % ANALYST_EVERY == 0:
+            window = groups[max(0, index - ANALYST_EVERY + 1): index + 1]
+            ids = [event_id for entry in window for event_id in entry["event_ids"]]
+            phrases = "; ".join(_recap_phrase(entry) for entry in window)
+            offense = sum(1 for entry in window if entry["kind"] in _OFFENSIVE_KINDS)
+            defense = sum(1 for entry in window if entry["kind"] in _DEFENSIVE_KINDS)
+            if offense == 0 and defense > 0:
+                closing = "It appears the defenses are still taking shape."
+            elif offense >= defense:
+                closing = "It looks like the attack is setting the tempo."
+            else:
+                closing = "It seems both sides are trading blows."
+            _queue(index, 2, text=f"Reading back the last few beats: {phrases}. {closing}",
+                   ids=ids, line_type="interpreted")
+
+    entries: list[dict[str, Any]] = []
+    play_group_at: dict[int, int] = {}
+
+    def _emit(role: str, model: str, start: int, text: str,
+              ids: list[str], line_type: str) -> None:
+        entries.append({"role": role, "model": model, "start": int(start),
+                        "text": text, "ids": [str(item) for item in ids],
+                        "type": line_type})
+
+    for index, group in enumerate(groups):
+        start = group["start"]
+        _emit("play_by_play", group["name"], start,
+              _action_text(group["kind"], group["name"], group["raw"]),
+              group["event_ids"], "observed")
+        play_group_at[len(entries) - 1] = index
+        next_start = groups[index + 1]["start"] if index + 1 < len(groups) else None
+        limit = next_start if next_start is not None else start + fps * LINE_WINDOW_SECONDS
+        cursor = start + 1  # the play-by-play line keeps at least one frame
+        for _, candidate in sorted(pending.get(index, ()), key=lambda item: item[0]):
+            begin = max(start + fps * ANALYST_DELAY_SECONDS, cursor)
+            if begin + fps > limit:
+                middle = start + max(1, (limit - start) // 2)
+                begin = max(cursor, min(begin, middle))
+            if begin + fps > limit:
+                continue  # no room for a spoken window before the next action
+            cursor = begin + fps  # reserve at least one spoken second
+            _emit(candidate["role"], candidate["model"], begin,
+                  candidate["text"], candidate["ids"], candidate["type"])
+
+    # Dead-air filler: real gaps between windows become analyst recaps that
+    # cite only actions the viewer has already seen.
+    filled: list[dict[str, Any]] = []
+    for position, entry in enumerate(entries):
+        filled.append(entry)
+        if position + 1 >= len(entries):
+            continue
+        gap = entries[position + 1]["start"] - entry["start"]
+        recent_index = play_group_at.get(position)
+        if gap <= fps * DEAD_AIR_SECONDS or recent_index is None:
+            continue
+        window = groups[max(0, recent_index - 2): recent_index + 1]
+        ids = [event_id for item in window for event_id in item["event_ids"]]
+        phrases = "; ".join(_recap_phrase(item) for item in window)
+        filler_start = max(entry["start"] + 1,
+                           entry["start"] + fps * LINE_WINDOW_SECONDS)
+        filled.append({"role": "analyst", "model": "",
+                       "start": min(filler_start, entries[position + 1]["start"] - fps),
+                       "text": f"While the arena holds quiet, the story so far: {phrases}.",
+                       "ids": ids, "type": "observed"})
+
+    lines: list[dict[str, Any]] = []
+    for position, entry in enumerate(filled):
+        next_start = filled[position + 1]["start"] if position + 1 < len(filled) else None
+        end = entry["start"] + fps * LINE_WINDOW_SECONDS
+        if next_start is not None:
+            end = min(end, next_start)
+        lines.append({
+            "voice_role": entry["role"],
+            "model": entry["model"],
+            "start_frame": entry["start"],
+            "end_frame": max(end, entry["start"] + 1),
+            "text": entry["text"],
+            "event_ids": list(entry["ids"]),
+            "line_type": entry["type"],
+            "provenance": PROVENANCE_DETERMINISTIC,
+        })
+    return lines
+
+
 class CommentaryError(ValueError):
     pass
 
@@ -352,11 +677,14 @@ def draft_intro_commentary(
 
 
 __all__ = [
+    "ACTION_EVENT_TYPES",
     "CommentaryDrafter",
     "CommentaryError",
     "HeadlessCommentaryDrafter",
     "HeadlessIntroCommentaryDrafter",
     "IntroCommentaryDrafter",
+    "PROVENANCE_DETERMINISTIC",
+    "build_commentary",
     "draft_commentary",
     "draft_intro_commentary",
     "fallback_intro_commentary",
