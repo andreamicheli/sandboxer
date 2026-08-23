@@ -37,6 +37,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
+from .commentary_emotion import (
+    EMOTION_ANNOTATION_VERSION,
+    annotate,
+    line_context,
+)
 from .video import (
     DEFAULT_TTS_MODEL,
     DEFAULT_TTS_PROVIDER,
@@ -670,7 +675,11 @@ def render_commentary_audio(
     """Render every commentary line as a bounded, hashed audio block.
 
     The deterministic dialogue schedule controls order and non-overlap; the
-    audio model only speaks each already-scheduled line.  ``resume=True``
+    audio model only speaks each already-scheduled line.  Manifest commentary
+    text stays CLEAN (it captions the video): on the Fish provider each line
+    gets an inline emotion cue prepended just before synthesis (see
+    ``sandboxer_v0.commentary_emotion``), and that spoken text is what is
+    hashed, synthesized and recorded.  ``resume=True``
     reuses existing ``block-XXXX.wav`` files whose script hash still matches
     the manifest, so an interrupted render (e.g. a free-tier quota window)
     continues without re-spending quota on completed blocks.  Returns the
@@ -702,6 +711,17 @@ def render_commentary_audio(
     if any(line.get("voice_role") not in mapping for line in lines):
         raise TtsError("TTS_ROLE_UNMAPPED")
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Emotional emphasis is Fish-inline-syntax specific (S2 reads "[cue]"
+    # naturally): other providers must keep speaking verbatim text, so the
+    # cue is prepended only on the fish provider and never written back into
+    # the manifest lines themselves.
+    apply_emotion = str(getattr(adapter, "provider", "")) == "fish"
+    terminal_index = {
+        str(entry.get("event_id")): entry
+        for entry in manifest.get("terminal", ()) or ()
+        if isinstance(entry, Mapping)
+    }
+    recap_start = sum(scene["duration_frames"] for scene in manifest["scenes"][:-1])
     blocks: list[dict[str, Any]] = []
     models_used: set[str] = set()
     for index, line in enumerate(lines):
@@ -710,11 +730,20 @@ def render_commentary_audio(
         filename = f"block-{index:04d}.wav"
         path = out_dir / filename
         script_text = str(line.get("text", ""))
+        spoken_text = (
+            annotate(
+                script_text,
+                line["voice_role"],
+                line_context(line, terminal_events=terminal_index, recap_start_frame=recap_start),
+            )
+            if apply_emotion
+            else script_text
+        )
         # The model is not re-verifiable offline, so reuse the last recorded
         # model from a sidecar if present, else the pinned expected model.
         model = _block_model(out_dir, index) or expected.model
         expected_script_hash = _digest(
-            {"script": script_text, "model": model, "voice": voice, "style": style}
+            {"script": spoken_text, "model": model, "voice": voice, "style": style}
         )
         if resume and path.is_file() and path.stat().st_size > 0 and _block_script_hash(out_dir, index) == expected_script_hash:
             with wave.open(str(path), "rb") as reader:
@@ -724,13 +753,13 @@ def render_commentary_audio(
                 # header frame count (streaming WAVs declare a placeholder).
                 duration_ms = round((len(audio) // frame_bytes) / reader.getframerate() * 1000)
             record = tts_block(
-                script=script_text, model=model, voice=voice, style=style,
+                script=spoken_text, model=model, voice=voice, style=style,
                 audio=audio, duration_ms=duration_ms,
             )
             blocks.append({**record, "file": filename, "start_frame": line.get("start_frame"), "end_frame": line.get("end_frame")})
             models_used.add(model)
             continue
-        result = adapter.synthesize(script=script_text, voice=voice, style=style)
+        result = adapter.synthesize(script=spoken_text, voice=voice, style=style)
         path.write_bytes(result.audio)
         _write_block_model(out_dir, index, result.model)
         _write_block_script_hash(out_dir, index, result.record["script_hash"])
@@ -759,7 +788,6 @@ def render_commentary_audio(
             block["start_frame"]=round(at_ms*fps/1000)
             block["end_frame"]=round((at_ms+duration_ms)*fps/1000)
             prev_end_ms=at_ms+duration_ms
-        recap_start=sum(scene["duration_frames"] for scene in manifest["scenes"][:-1])
         if blocks[-1]["end_frame"]>recap_start: raise TtsError("COMMENTARY_OVERFLOW_AFTER_RENDER")
     blocks_hash = _digest([block["script_hash"] for block in blocks])
     # Observed provenance: aggregated from the audio actually present.  Models
@@ -786,5 +814,7 @@ def render_commentary_audio(
         "block_count": len(blocks),
         "blocks_hash": blocks_hash,
         "models_used": sorted(models_used),
+        "emotion_applied": apply_emotion,
+        "emotion_version": EMOTION_ANNOTATION_VERSION,
         "out_dir": str(out_dir),
     }

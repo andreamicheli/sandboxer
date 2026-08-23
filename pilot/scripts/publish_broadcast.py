@@ -556,6 +556,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "requested": tts_provenance["requested"],
             "observed": tts_provenance["observed"],
             "tts_provider_drift": tts_provenance["tts_provider_drift"],
+            "emotion_applied": tts_section.get("emotion_applied", False),
+            "emotion_version": tts_section.get("emotion_version"),
             "voices": tts_section["voices"],
             "block_count": tts_section["block_count"],
             "blocks_hash": tts_section["blocks_hash"],

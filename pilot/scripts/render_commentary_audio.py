@@ -161,6 +161,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     manifest["tts"]["requested"] = section["requested"]
     manifest["tts"]["observed"] = section["observed"]
     manifest["tts"]["tts_provider_drift"] = section["tts_provider_drift"]
+    # Emotion provenance: whether Fish inline cues were applied to spoken text
+    # (manifest commentary text stays clean) and which annotator version ran.
+    manifest["tts"]["emotion_applied"] = section["emotion_applied"]
+    manifest["tts"]["emotion_version"] = section["emotion_version"]
     problems = validate_provenance(manifest)
     if problems:
         print(f"TTS_PROVENANCE_INVALID: {', '.join(problems)}", file=sys.stderr)
@@ -168,6 +172,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"tts provenance: requested={section['requested']['provider']}/{section['requested']['model']} "
           f"observed={section['observed']['provider']}/{section['observed']['model']} "
           f"drift={section['tts_provider_drift']}")
+    print(f"tts emotion: applied={section['emotion_applied']} version={section['emotion_version']}")
 
     # Persist the actual-duration-packed schedule back into the manifest so
     # captions and the Remotion caption bar stay in sync with the audio.
