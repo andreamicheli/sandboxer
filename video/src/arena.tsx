@@ -9,6 +9,7 @@ import {
   useVideoConfig,
 } from 'remotion';
 import { logoFile, logoOf } from './logos';
+import { computeDefenseLayout } from './arena-layout';
 
 /* ------------------------------------------------------------------ */
 /* Arena visualization: two competitor avatars (official brand logos), */
@@ -78,33 +79,25 @@ const WIN_K = 0.4;
 const WIN_FLOOR = 0.06;
 const WIN_CEIL = 0.94;
 
-/* ---- per-side defense layout -------------------------------------- */
-/* Defenses are laid out per side from the count of artifacts plus the
- * avatar home: slots start near the center line and march toward the
- * avatar at a fixed full-size pitch.  When that row would overrun the
- * span between the center line (960) and the avatar home (180 / 1740),
- * the whole arena content is scaled down by a deterministic factor so
- * everything shrinks instead of overlapping. */
+/* ---- defense layout ------------------------------------------------ */
+/* Defense positions come from the pure geometry module arena-layout.js,
+ * which packs N nodes between the avatar exclusion zones with adaptive
+ * multi-row spacing.  The boxes below mirror the rendered avatar badges
+ * (104px ring + glow/bob slack) plus the name label underneath. */
 const CANVAS_W = 1920;
 const CENTER_X = CANVAS_W / 2;
-const HOME_X = { left: 180, right: 1740 };
-const SIDE_SPAN = CENTER_X - HOME_X.left; // 780px on both sides
-const SHAPE_BASE = 96;
-const HALF_SHAPE = SHAPE_BASE / 2;
-const DEFENSE_STEP = 150; // pitch between neighbouring defense centers
-const FIRST_SLOT_OFFSET = 140; // first slot distance from the center line
-const AVATAR_CLEARANCE = 72; // breathing room before the avatar badge
+const AVATAR_BOX_W = 128;
+const AVATAR_BOX_H = 170;
 
-const slotX = (index: number, side: 'left' | 'right') => {
-  const dist = FIRST_SLOT_OFFSET + index * DEFENSE_STEP;
-  return side === 'left' ? CENTER_X - dist : CENTER_X + dist;
-};
+const avatarBoxes = (midY: number) =>
+  ([180, 1740] as const).map((homeX) => ({
+    x: homeX - AVATAR_BOX_W / 2,
+    y: midY - AVATAR_BOX_H * 0.38,
+    w: AVATAR_BOX_W,
+    h: AVATAR_BOX_H,
+  }));
 
-/* Span from the center line toward the avatar home needed by n defenses. */
-const spanNeeded = (count: number) =>
-  count > 0 ? FIRST_SLOT_OFFSET + (count - 1) * DEFENSE_STEP + HALF_SHAPE + AVATAR_CLEARANCE : 0;
-
-const shapeStyle = (shape: string, color: string, size = SHAPE_BASE): React.CSSProperties => {
+const shapeStyle = (shape: string, color: string, size = 96): React.CSSProperties => {
   const base: React.CSSProperties = { width: size, height: size, background: color, border: `1px solid ${color}` };
   switch (shape) {
     case 'sphere':
@@ -168,12 +161,8 @@ export const ArenaVisual: React.FC<{
 
   const defensesFor = (name: string) => plan.defenses.filter((d) => d.competitor === name);
 
-  /* Global zoom-out factor: the tighter side dictates how much the whole
-   * arena shrinks (1 = natural size).  Deterministic in the defense counts. */
-  const fitScale = Math.min(
-    1,
-    SIDE_SPAN / Math.max(spanNeeded(defensesFor(a).length), spanNeeded(defensesFor(b).length), 1),
-  );
+  const defenseLayout = computeDefenseLayout(plan.defenses, CANVAS_W, H - WIN_BAR_HEIGHT, avatarBoxes(midY));
+  const posOf = (id: string) => defenseLayout.positions[id] ?? { x: CENTER_X, y: midY };
 
   const localTime = (beat: { event_ids?: string[]; start_frame: number }) => {
     if (beat.event_ids?.length) {
@@ -248,9 +237,7 @@ export const ArenaVisual: React.FC<{
   const targetPosition = (attack: ArenaBeat) => {
     const target = plan.defenses.find((d) => d.id === attack.target);
     if (!target) return { x: CENTER_X, y: midY };
-    const side = attack.attacker === a ? 'right' : 'left';
-    const tIndex = defensesFor(target.competitor).findIndex((d) => d.id === target.id);
-    return { x: slotX(Math.max(tIndex, 0), side), y: midY };
+    return posOf(target.id);
   };
 
   /* ---- avatar (logo badge, with legacy shape fallback) ---- */
@@ -334,9 +321,9 @@ export const ArenaVisual: React.FC<{
   };
 
   /* ---- defense artifact ---- */
-  const renderDefense = (d: ArenaDefense, side: 'left' | 'right', index: number) => {
-    const x = slotX(index, side);
-    const size = SHAPE_BASE * fitScale;
+  const renderDefense = (d: ArenaDefense) => {
+    const { x, y } = posOf(d.id);
+    const size = defenseLayout.nodeSize;
     const built = buildTime(d);
     const p = spring({ frame: frame - built, fps, config: { damping: 13, mass: 0.7, stiffness: 120 } });
     const isTarget = activeAttack?.target === d.id;
@@ -361,7 +348,7 @@ export const ArenaVisual: React.FC<{
         style={{
           position: 'absolute',
           left: x - size / 2,
-          top: midY - size / 2,
+          top: y - size / 2,
           opacity: p,
           transform: `scale(${p}) translateX(${shake}px)`,
           display: 'flex',
@@ -465,17 +452,9 @@ export const ArenaVisual: React.FC<{
         overflow: 'hidden',
       }}
     >
-      {/* Arena content scales down uniformly (origin = canvas centre) when
-          either side's defense row outgrows its span; the win bar below
-          stays unscaled. */}
-      <div
-        style={{
-          position: 'absolute',
-          inset: 0,
-          transform: `scale(${fitScale})`,
-          transformOrigin: '50% 50%',
-        }}
-      >
+      {/* Arena content renders at natural size; the defense layout module
+          guarantees nodes never collide with each other or the avatars. */}
+      <div style={{ position: 'absolute', inset: 0 }}>
         <svg width="1920" height={H} style={{ position: 'absolute', inset: 0 }}>
           <line x1={960} y1={20} x2={960} y2={H - 20} stroke="rgba(77,156,255,0.18)" strokeDasharray="3 6" />
         </svg>
@@ -484,8 +463,8 @@ export const ArenaVisual: React.FC<{
         </div>
         {renderAvatar(a, HOME.left, accentA)}
         {renderAvatar(b, HOME.right, accentB)}
-        {defensesFor(a).map((d, i) => renderDefense(d, 'left', i))}
-        {defensesFor(b).map((d, i) => renderDefense(d, 'right', i))}
+        {defensesFor(a).map((d) => renderDefense(d))}
+        {defensesFor(b).map((d) => renderDefense(d))}
         {renderAttack()}
       </div>
       {/* ---- win-probability bar (starts 50/50, tracks momentum) ---- */}
