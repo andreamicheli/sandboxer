@@ -77,7 +77,7 @@ VOICE_BY_ROLE = {"play_by_play": "Kore", "analyst": "Charon"}
 _PACK_GAP_MS = 400
 # Floor the turn gap may shrink to when dense commentary would otherwise
 # overflow the speak window (milliseconds).
-_MIN_PACK_GAP_MS = 80
+_MIN_PACK_GAP_MS = 25
 
 # Fish Audio (https://fish.audio) free developer tier: the `s2.1-pro-free`
 # model has no hard usage cap under Fair Use.  Voices are explicit
