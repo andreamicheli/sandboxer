@@ -291,8 +291,13 @@ def convert(runtime_telemetry: Sequence[Mapping[str, Any]], result: Mapping[str,
                 text=f"match finished - {reason}, winner {winner_name}", ns=ns)
             continue
         if kind == "teardown":
-            add(phase="red", competitor=None, pane=1, etype="MATCH_FINISHED",
-                text="teardown complete - runners destroyed", ns=ns)
+            # A match that died at bootstrap (no gameplay) has no teardown
+            # worth narrating: its event lands at the merged timeline end and
+            # the TTS audio duration pushes the block past the recap boundary
+            # (episode-v8d). Skip when the result records no winner.
+            if str(result.get("winner", "")):
+                add(phase="red", competitor=None, pane=1, etype="MATCH_FINISHED",
+                    text="teardown complete - runners destroyed", ns=ns)
             continue
         # Skip the high-volume provider frames; tool decisions carry the story.
         continue
