@@ -445,6 +445,8 @@ def test_single_match_pipeline_stays_identical_to_legacy_composition():
     identities = [str(pane["identity"]) for pane in legacy_replay["panes"]]
     legacy_intro = draft_intro_commentary(identities, {"models": {}, "benchmark_snapshot": {}},
                                           drafter=_FixedIntroDrafter())
+    # Legacy path with the same recap speak-boundary clamp that main() now
+    # applies on top of the built manifest (episode-v8d fix).
     legacy_dense = build_commentary(legacy_replay["frames"], identities, fps=30)
     legacy_manifest = build_video_manifest(
         legacy_replay, report=legacy_report,
@@ -460,7 +462,21 @@ def test_single_match_pipeline_stays_identical_to_legacy_composition():
     )
     assert built["replay"] == legacy_replay
     assert built["report"] == legacy_report
-    assert built["manifest"] == legacy_manifest
+    # main() now applies the recap speak-boundary clamp to the manifest's
+    # commentary (episode-v8d fix). Reproduce it on the legacy manifest so the
+    # comparison covers the full pipeline behaviour, not raw builder output.
+    boundary = sum(int(scene["duration_frames"])
+                   for scene in legacy_manifest["scenes"][:-1])
+    legacy_clamped = [
+        line for line in legacy_manifest["commentary"]
+        if int(line["start_frame"]) < boundary]
+    for line in legacy_clamped:
+        start = int(line["start_frame"])
+        line["end_frame"] = min(int(line["end_frame"]), max(boundary - 1, start + 1))
+    assert built["manifest"]["commentary"] == legacy_clamped
+    manifest_rest = {k: v for k, v in built["manifest"].items() if k != "commentary"}
+    legacy_manifest_rest = {k: v for k, v in legacy_manifest.items() if k != "commentary"}
+    assert manifest_rest == legacy_manifest_rest
     assert built["series"] is None
     # ...and keeps the historical scene shape: one match, no intermissions.
     types = [scene["type"] for scene in built["manifest"]["scenes"]]

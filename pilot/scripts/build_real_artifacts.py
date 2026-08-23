@@ -422,10 +422,20 @@ def build_broadcast_artifacts(
         # Nothing may speak inside or after the closing recap scene: clamp
         # windows to the recap boundary (episode-v8d: a failed match's
         # teardown event overflowed into factual_recap and tripped the TTS
-        # COMMENTARY_OVERFLOW_AFTER_RENDER guardrail).
+        # COMMENTARY_OVERFLOW_AFTER_RENDER guardrail).  Applies to both the
+        # per-match series path and the single-match path.
         boundary = sum(int(scene["duration_frames"]) for scene in manifest["scenes"][:-1])
-        dense_commentary = build_commentary(
-            replay.get("frames", []), identities, fps=fps, speak_boundary=boundary)
+        dense_commentary = [
+            line for line in dense_commentary if int(line["start_frame"]) < boundary]
+        for line in dense_commentary:
+            start = int(line["start_frame"])
+            line["end_frame"] = min(int(line["end_frame"]), max(boundary - 1, start + 1))
+        if manifest.get("commentary"):
+            manifest["commentary"] = [
+                line for line in manifest["commentary"] if int(line["start_frame"]) < boundary]
+            for line in manifest["commentary"]:
+                start = int(line["start_frame"])
+                line["end_frame"] = min(int(line["end_frame"]), max(boundary - 1, start + 1))
     return {"replay": replay, "report": report, "manifest": manifest, "series": summary}
 
 
