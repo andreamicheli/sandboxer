@@ -143,23 +143,26 @@ def _frame_monitor(
             for key in ("toolName", "turnNumber", "model"):
                 if isinstance(event.get(key), (str, int)):
                     safe[key] = event[key]
+            # Only MCP runner tools (mcp__runner__*) cross the sandbox seam.
+            # A non-allowlisted runner tool is refused by the bridge before it
+            # can reach the guest; client-side tool events for other tools
+            # (command-code built-ins such as search_tools) are not execution
+            # on the guest and never abort the match.
             name = event.get("toolName")
-            # A non-allowlisted native tool in tool_queued or tool_running
-            # state is client-side processing that gets dropped at the runner
-            # bridge (no SANDBOXER_RUNNER_TOOLS entry). Record the rejection and
-            # continue; only a completed native tool aborts.
             if isinstance(name, str) and not name.startswith("mcp__runner__"):
                 if event.get("type") == "tool_denied":
                     if callable(emit):
                         emit("provider_tool_denied", model=model, phase=current_phase, tool_name=name)
-                elif event.get("type") in {"tool_queued", "tool_running"}:
+                elif event.get("type") in {"tool_queued", "tool_running", "tool_completed"}:
                     if callable(emit):
                         emit("provider_tool_rejected", model=model, phase=current_phase,
                              event_type=event.get("type"), tool_name=name)
-                elif event.get("type") == "tool_completed":
+                elif event.get("type") == "tool_decision" and event.get("allowed") is True:
+                    # Defensive tripwire: a native tool allowed by the bridge
+                    # would be guest execution (should not happen normally).
                     if callable(emit):
-                        emit("provider_tool_rejected", model=model, phase=current_phase,
-                             event_type=event.get("type"), tool_name=name)
+                        emit("provider_native_tool_executed", model=model, phase=current_phase,
+                             tool_name=name, event_type="tool_decision", allowed=True)
                     raise CommandCodeError("COMMAND_CODE_NATIVE_TOOL_REJECTED")
         if callable(emit):
             emit("provider_frame", **safe)

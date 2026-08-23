@@ -90,21 +90,20 @@ def test_monitor_allows_runner_tools_and_rejects_unallowlisted_provider_tools():
         "type": "event",
         "event": {
             "type": "tool_running",
-            "toolName": "mcp__runner__run_service_command",
+            "toolName": "mcp__runner__inspect_service",
             "turnNumber": 1,
             "model": "test-model",
         },
     }
     monitor(runner_frame)
     assert any(
-        kind == "provider_frame" and fields.get("toolName") == "mcp__runner__run_service_command"
+        kind == "provider_frame" and fields.get("toolName") == "mcp__runner__inspect_service"
         for kind, fields in emitted
     )
 
     # A non-allowlisted native tool in tool_running state is client-side
     # processing that the runner MCP bridge will drop at tools/call (no
-    # SANDBOXER_RUNNER_TOOLS entry). Record the rejection and continue; only a
-    # tool_completed event aborts.
+    # SANDBOXER_RUNNER_TOOLS entry). Record the rejection and continue.
     unallowlisted_frame = {
         "type": "event",
         "event": {
@@ -124,8 +123,9 @@ def test_monitor_allows_runner_tools_and_rejects_unallowlisted_provider_tools():
     assert not any(
         kind == "provider_capacity_unavailable" for kind, fields in emitted
     )
-    # Actual completion is the hard abort.
-    executed_native_frame = {
+    # A completion of a contained native probe is still not execution:
+    # the bridge dropped the call, the completion just reports the refusal.
+    completed_native_frame = {
         "type": "event",
         "event": {
             "type": "tool_completed",
@@ -134,13 +134,50 @@ def test_monitor_allows_runner_tools_and_rejects_unallowlisted_provider_tools():
             "model": "test-model",
         },
     }
-    with pytest.raises(CommandCodeError, match="COMMAND_CODE_NATIVE_TOOL_REJECTED"):
-        monitor(executed_native_frame)
+    monitor(completed_native_frame)
     assert any(
         kind == "provider_tool_rejected"
         and fields.get("tool_name") == "shell_command"
         and fields.get("event_type") == "tool_completed"
         for kind, fields in emitted
+    )
+    assert not any(
+        kind == "provider_native_tool_executed" for kind, fields in emitted
+    )
+    # The hard abort fires only when the bridge actually allowed a native
+    # tool: tool_decision with allowed=True for a non-mcp__runner__ tool.
+    allowed_native_frame = {
+        "type": "event",
+        "event": {
+            "type": "tool_decision",
+            "toolName": "shell_command",
+            "allowed": True,
+            "phase": "blue",
+            "competitor": "test-model",
+        },
+    }
+    with pytest.raises(CommandCodeError):
+        monitor(allowed_native_frame)
+    assert any(
+        kind == "provider_native_tool_executed"
+        and fields.get("tool_name") == "shell_command"
+        for kind, fields in emitted
+    )
+    # An allow decision for a runner tool never aborts.
+    emitted.clear()
+    allowed_runner_frame = {
+        "type": "event",
+        "event": {
+            "type": "tool_decision",
+            "tool": "inspect_service",
+            "allowed": True,
+            "phase": "blue",
+            "competitor": "test-model",
+        },
+    }
+    monitor(allowed_runner_frame)
+    assert not any(
+        kind == "provider_native_tool_executed" for kind, fields in emitted
     )
 
 

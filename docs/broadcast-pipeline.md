@@ -28,10 +28,15 @@ speech backend.
    is swapped for a persistent dir under `pilot/logs/render-tmp`, with
    warnings).
 6. **Mux** — `ffmpeg_delivery_commands()` in `video.py` (probe → loudness
-   normalize → mux → delivery encode) produces `delivery.mp4`.
-7. **Publish** — `pilot/scripts/publish_broadcast.py` uploads to YouTube
+   normalize → mux → delivery encode) produces `delivery.mp4`.  By default a
+   looped background-music bed (`video/public/assets/background-track.m4a`)
+   is trimmed to the video duration, loudness-normalized to -28 LUFS
+   (ceiling -20 dBTP) and mixed at weight 0.18 under the narration voices;
+   pass `--no-bgm` to publish_broadcast for the plain voice-only mux.
+7. **Publish** — `pilot/scripts/publish_broadcast.py` runs the BGM-underlaid
+   delivery encode (step 6) on `--video`, uploads the result to YouTube
    (`unlisted` by default), sets captions + thumbnail, and writes
-   `broadcast.json` (the provenance record).
+   `broadcast.json` (the provenance record, including the `bgm` section).
 
 ## The TtsAdapter contract
 
@@ -162,19 +167,19 @@ cd ../video && npx remotion render src/index.tsx SandboxerSeries ../artifacts/vi
     --props=../artifacts/remotion-props.json \
     --concurrency="$(cd ../pilot && uv run python -c 'from sandboxer_v0.render_preflight import preflight_render; print(preflight_render().concurrency)')" && cd ../pilot
 
-# 6. Mux -> artifacts/delivery.mp4 (probe -> loudnorm -> mux -> delivery)
-ffmpeg -y -nostdin -i artifacts/commentary-full.wav -af "loudnorm=I=-16:LRA=7:TP=-1.5" -c:a pcm_s24le artifacts/commentary-full.normalized.wav
-ffmpeg -y -nostdin -i artifacts/video-only.mp4 -i artifacts/commentary-full.normalized.wav -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 320k artifacts/master.mov
-ffmpeg -y -nostdin -i artifacts/master.mov -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -movflags +faststart artifacts/delivery.mp4
-
-# 4. Publish (unlisted) + captions + thumbnail.  Unattended by default;
-#    pass --manual to re-enable the human gate (--approved-by + confirmation).
-#    With a frozen evidence bundle add:
+# 6. Publish (unlisted) + captions + thumbnail.  By default publish_broadcast
+#    runs the BGM-underlaid delivery encode itself: pass --video
+#    artifacts/video-only.mp4 and it mixes the shipped background track under
+#    commentary-full.wav (found next to the audio dir, or pass --voice-track),
+#    uploads the resulting video-only-bgm.mp4, and records the bgm section.
+#    Pass --no-bgm to upload an already-muxed delivery.mp4 untouched.
+#    Unattended by default; pass --manual to re-enable the human gate
+#    (--approved-by + confirmation).  With a frozen evidence bundle add:
 #    --bundle evidence.json --site-base-url https://<site>
 #    to also stage the canonical + detailed + LLM-narrative reports on the site.
 uv run python scripts/publish_broadcast.py \
   --manifest artifacts/video-manifest.json --report artifacts/report.json \
-  --video artifacts/delivery.mp4 --captions artifacts/captions.vtt \
+  --video artifacts/video-only.mp4 --captions artifacts/captions.vtt \
   --thumb artifacts/thumbnail.png --audio-dir artifacts/broadcast.audio \
   --out artifacts/broadcast.json --tts fish --youtube real --privacy unlisted
 ```
