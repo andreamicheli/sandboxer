@@ -33,7 +33,7 @@ import wave
 
 # google-genai flags the interactions surface as experimental on every call.
 warnings.filterwarnings("ignore", message="Interactions usage is experimental.*")
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
@@ -148,6 +148,47 @@ def _duration_ms(wav: bytes) -> int:
     _, data_size = _wav_data_bounds(wav)
     frames = data_size // (channels * width)
     return round(frames / rate * 1000)
+
+
+def _trim_trailing_silence(record, threshold: int = 300, keep_ms: int = 120):
+    """Trim trailing silence from a TTS block, keeping a short natural tail.
+
+    Fish blocks carry ~100-200ms of trailing silence each; across a dense
+    series that dead air accumulates past the speak window. Keeps ``keep_ms``
+    of tail so lines do not sound clipped. Handles streaming WAVs (placeholder
+    RIFF sizes) via ``_wav_data_bounds``.
+    """
+    raw = record.audio
+    try:
+        data_start, data_end = _wav_data_bounds(raw)
+    except TtsError:
+        return record
+    header = raw[:data_start]
+    audio = raw[data_start:data_end]
+    if len(audio) < 4 or len(header) < 24:
+        return record
+    channels = int.from_bytes(header[22:24], "little") or 1
+    rate = int.from_bytes(header[24:28], "little")
+    frame_bytes = channels * 2
+    count = len(audio) // frame_bytes
+    samples = struct.unpack(f"<{count * channels}h", audio[: count * frame_bytes])
+    tail_frames = 0
+    for i in range(count - 1, -1, -1):
+        if any(abs(s) > threshold for s in samples[i * channels:(i + 1) * channels]):
+            break
+        tail_frames += 1
+    keep_frames = max(0, min(tail_frames, round(keep_ms / 1000 * rate)))
+    trimmed = audio[: (count - tail_frames + keep_frames) * frame_bytes]
+    if trimmed == audio:
+        return record
+    # Rewrite the data-chunk size (offset 40 in a canonical 16-bit-fmt PCM
+    # header) and the RIFF size so downstream readers see the true length.
+    out = bytearray(header + trimmed)
+    out[40:44] = len(trimmed).to_bytes(4, "little")
+    riff_size = len(out) - 8
+    out[4:8] = riff_size.to_bytes(4, "little")
+    duration_ms = round((len(trimmed) // frame_bytes) / rate * 1000)
+    return replace(record, audio=bytes(out), duration_ms=duration_ms)
 
 
 @dataclass(frozen=True)
@@ -763,6 +804,7 @@ def render_commentary_audio(
             models_used.add(model)
             continue
         result = adapter.synthesize(script=spoken_text, voice=voice, style=style)
+        result = _trim_trailing_silence(result)
         path.write_bytes(result.audio)
         _write_block_model(out_dir, index, result.model)
         _write_block_script_hash(out_dir, index, result.record["script_hash"])
