@@ -408,10 +408,18 @@ def build_video_manifest(replay:Mapping[str,Any],*,report:Mapping[str,Any],model
         """Absolute manifest frame of a replay frame inside its owning scene."""
         ns=int(frame["at_monotonic_ns"])
         windows=anchor_windows[frame.get("match_number") or 1]
+        def _within(lo_ns:int,hi_ns:int,key:str)->int:
+            # Keep the anchor strictly inside the owning scene: the window's
+            # exclusive end is the next scene cut, so a match's final event
+            # (hi_ns == last+1ns) scales onto the scene's last frame, never
+            # one frame past the cut into the following scene.
+            offset=round((max(ns,lo_ns)-lo_ns)/1_000_000_000*fps)
+            duration=max(1,round((hi_ns-lo_ns)/1_000_000_000*fps))
+            return scene_starts[key]+max(0,min(offset,duration-1))
         for lo_ns,hi_ns,key in windows:
-            if ns<hi_ns: return scene_starts[key]+max(0,round((ns-lo_ns)/1_000_000_000*fps))
+            if ns<hi_ns: return _within(lo_ns,hi_ns,key)
         lo_ns,_,key=windows[-1]
-        return scene_starts[key]+max(0,round((ns-lo_ns)/1_000_000_000*fps))
+        return _within(lo_ns,anchor_windows[frame.get("match_number") or 1][-1][1],key)
     def _locate(at_frame:int)->tuple[str,float]:
         """Map an absolute frame onto its owning narrated scene (key, seconds-in)."""
         for key,start,duration in narrated_spans:

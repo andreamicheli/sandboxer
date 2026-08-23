@@ -432,6 +432,18 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
         json.dump(payload, stream, indent=2, sort_keys=True); stream.write("\n")
 
 
+def run_one_match(args: argparse.Namespace) -> dict[str, object]:
+    """``run_one_match``: run exactly one match synchronously, return its payload.
+
+    Importable single-match core used by series drivers
+    (``scripts/run_series.py``): ``args`` is the parsed namespace from
+    ``main`` below, so a caller only needs to override ``match_id`` (and
+    usually ``seed``) per match to get independent evidence files
+    (``<match_id>.telemetry.jsonl`` / ``<match_id>.result.json``).
+    """
+    return asyncio.run(execute_match(args))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", type=Path, required=True); parser.add_argument("--profile", type=Path, required=True)
@@ -450,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
     if os.geteuid() != 0:
         print("MATCH_REQUIRES_ORCHESTRATOR_ROOT", file=sys.stderr); return 2
     try:
-        payload = asyncio.run(execute_match(args))
+        payload = run_one_match(args)
     except BaseException as error:
         print(",".join(_safe_codes(error)), file=sys.stderr); return 2
     print(json.dumps(payload, indent=2, sort_keys=True)); return 0
