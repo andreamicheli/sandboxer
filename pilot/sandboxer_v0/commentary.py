@@ -224,6 +224,7 @@ def build_commentary(
     frames = [dict(frame) for frame in replay_frames]
     if not frames or fps <= 0:
         return []
+    _suppressed_event_ids: set[str] = set()
     base_ns = min(int(frame.get("at_monotonic_ns", 0)) for frame in frames)
 
     def _rel(ns: Any) -> int:
@@ -279,6 +280,12 @@ def build_commentary(
                        text=(f"That is {REPEATED_STREAK} offensive actions in a row from {name} - "
                              f"{', '.join(streak_phrases)}. It looks like sustained pressure on the defender."),
                        ids=streak_ids, line_type="interpreted")
+                # The pattern note already narrates the whole streak: drop the
+                # redundant per-action play-by-play lines inside it (episode-v8d:
+                # three identical probe lines anchored within 2s overflowed the
+                # packed schedule past the speak window).
+                for sid in streak_ids[:-1]:
+                    _suppressed_event_ids.add(sid)
                 streak_actor, streak_ids, streak_phrases = name, [], []
         else:
             streak_actor, streak_ids, streak_phrases = None, [], []
@@ -328,6 +335,10 @@ def build_commentary(
                         "type": line_type})
 
     for index, group in enumerate(groups):
+        if any(sid in _suppressed_event_ids for sid in group["event_ids"]):
+            # A streak pattern note already covers this action; its redundant
+            # play-by-play line is dropped (see the streak block above).
+            continue
         start = group["start"]
         _emit("play_by_play", group["name"], start,
               _action_text(group["kind"], group["name"], group["raw"]),
