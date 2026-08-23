@@ -101,6 +101,10 @@ def test_monitor_allows_runner_tools_and_rejects_unallowlisted_provider_tools():
         for kind, fields in emitted
     )
 
+    # A non-allowlisted native tool in tool_running state is client-side
+    # processing that the runner MCP bridge will drop at tools/call (no
+    # SANDBOXER_RUNNER_TOOLS entry). Record the rejection and continue; only a
+    # tool_completed event aborts.
     unallowlisted_frame = {
         "type": "event",
         "event": {
@@ -110,13 +114,17 @@ def test_monitor_allows_runner_tools_and_rejects_unallowlisted_provider_tools():
             "model": "test-model",
         },
     }
-    # Contained native probe: recorded, phase continues (no abort).
     monitor(unallowlisted_frame)
     assert any(
-        kind == "provider_tool_rejected" and fields.get("tool_name") == "shell_command"
+        kind == "provider_tool_rejected"
+        and fields.get("tool_name") == "shell_command"
+        and fields.get("event_type") == "tool_running"
         for kind, fields in emitted
     )
-    # Actual execution of a native tool remains the hard abort condition.
+    assert not any(
+        kind == "provider_capacity_unavailable" for kind, fields in emitted
+    )
+    # Actual completion is the hard abort.
     executed_native_frame = {
         "type": "event",
         "event": {
@@ -128,6 +136,12 @@ def test_monitor_allows_runner_tools_and_rejects_unallowlisted_provider_tools():
     }
     with pytest.raises(CommandCodeError, match="COMMAND_CODE_NATIVE_TOOL_REJECTED"):
         monitor(executed_native_frame)
+    assert any(
+        kind == "provider_tool_rejected"
+        and fields.get("tool_name") == "shell_command"
+        and fields.get("event_type") == "tool_completed"
+        for kind, fields in emitted
+    )
 
 
 def test_runner_tools_and_denials_are_not_misclassified_as_native_tool_rejection():
@@ -156,7 +170,6 @@ def test_runner_tools_and_denials_are_not_misclassified_as_native_tool_rejection
         },
     }
     monitor(denied_native_frame)
-
     queued_native_frame = {
         "type": "event",
         "event": {
@@ -168,9 +181,11 @@ def test_runner_tools_and_denials_are_not_misclassified_as_native_tool_rejection
     }
     monitor(queued_native_frame)
 
-    # Denied/queued native calls are contained: recorded as rejected probes,
-    # never as executed, and no abort.
-    assert any(kind == "provider_tool_rejected" and fields.get("tool_name") == "shell_command" for kind, fields in emitted)
+    # Denied/queued native calls are contained: tool_denied emits
+    # provider_tool_denied and tool_queued emits provider_tool_rejected;
+    # both are never executed and neither aborts the phase.
+    assert any(kind == "provider_tool_denied" and fields.get("tool_name") == "shell_command" for kind, fields in emitted)
+    assert any(kind == "provider_tool_rejected" and fields.get("tool_name") == "read_file" for kind, fields in emitted)
     assert not any(
         kind == "provider_native_tool_executed" for kind, fields in emitted
     )
