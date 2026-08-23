@@ -407,7 +407,6 @@ def build_broadcast_artifacts(
         # invented (v7 postmortem: the drafted path produced 11 lines for 26
         # events and skipped the blue phase).
         dense_commentary = build_commentary(replay.get("frames", []), identities, fps=fps)
-        print(f"commentary: deterministic dense rundown ({len(dense_commentary)} lines)", file=sys.stderr)
 
     manifest = build_video_manifest(
         replay,
@@ -419,6 +418,14 @@ def build_broadcast_artifacts(
         intro_commentary=intro,
         dense_commentary=dense_commentary,
     )
+    if dense_commentary and manifest.get("scenes"):
+        # Nothing may speak inside or after the closing recap scene: clamp
+        # windows to the recap boundary (episode-v8d: a failed match's
+        # teardown event overflowed into factual_recap and tripped the TTS
+        # COMMENTARY_OVERFLOW_AFTER_RENDER guardrail).
+        boundary = sum(int(scene["duration_frames"]) for scene in manifest["scenes"][:-1])
+        dense_commentary = build_commentary(
+            replay.get("frames", []), identities, fps=fps, speak_boundary=boundary)
     return {"replay": replay, "report": report, "manifest": manifest, "series": summary}
 
 

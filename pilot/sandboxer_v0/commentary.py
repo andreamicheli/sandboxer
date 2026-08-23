@@ -175,6 +175,8 @@ def build_commentary(
     replay_frames: Sequence[Mapping[str, Any]],
     identities: Sequence[str],
     fps: int = 30,
+    *,
+    speak_boundary: int | None = None,
 ) -> list[dict[str, Any]]:
     """Dense deterministic two-voice commentary derived from replay frames.
 
@@ -353,6 +355,11 @@ def build_commentary(
             "line_type": entry["type"],
             "provenance": PROVENANCE_DETERMINISTIC,
         })
+    if speak_boundary is not None:
+        boundary = int(speak_boundary)
+        lines = [line for line in lines if line["start_frame"] < boundary]
+        for line in lines:
+            line["end_frame"] = min(line["end_frame"], max(boundary - 1, line["start_frame"] + 1))
     return lines
 
 
