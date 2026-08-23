@@ -387,7 +387,10 @@ def build_commentary(
         })
     if speak_boundary is not None:
         boundary = int(speak_boundary)
-        lines = [line for line in lines if line["start_frame"] < boundary]
+        # A line needs at least one second of runway before the boundary to
+        # be speakable at all (episode-v8d: a teardown line anchored 1 frame
+        # before the recap left no room for its audio).
+        lines = [line for line in lines if line["start_frame"] + fps <= boundary]
         for line in lines:
             line["end_frame"] = min(line["end_frame"], max(boundary - 1, line["start_frame"] + 1))
     return lines
