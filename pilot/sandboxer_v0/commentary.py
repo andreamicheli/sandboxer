@@ -294,9 +294,8 @@ def build_commentary(
                 if fast_s > 0 and slow_s / fast_s >= SLOW_PROMOTION_RATIO:
                     slow_note_done = True
                     _queue(index, 0,
-                           text=(f"From the telemetry clock: {slow_name} needed {slow_s:.0f} seconds from "
-                                 f"match start to a promoted defense; {fast_name} did it in {fast_s:.0f} - "
-                                 f"roughly {slow_s / fast_s:.0f} times slower."),
+                           text=(f"Telemetry note: {slow_name} promoted in {slow_s:.0f}s; "
+                                 f"{fast_name} in {fast_s:.0f}s."),
                            ids=list(fast_data[1]) + list(slow_data[1]),
                            line_type="observed")
 
