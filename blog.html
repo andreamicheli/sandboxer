@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <title>Sandboxer | KVM isolation pipeline</title>
+  <meta name="description" content="A walkthrough of SandBoxer's KVM isolation pipeline: per-match VM provisioning, namespace firewall, phase-scoped tool whitelists, and hash-chained evidence.">
+  <meta property="og:site_name" content="Sandboxer">
+  <meta property="og:title" content="Sandboxer | KVM isolation pipeline">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://sandboxer.vercel.app/blog.html">
+  <meta property="og:image" content="https://sandboxer.vercel.app/assets/brand/sandboxer-banner.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400;1,9..144,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .post {
+      margin: 0 auto;
+      padding: clamp(48px, 8vw, 96px) 0 clamp(48px, 8vw, 80px);
+    }
+    .post-data {
+      display: flex;
+      gap: 18px;
+      align-items: baseline;
+      margin-bottom: 32px;
+      padding-bottom: 22px;
+      border-bottom: 1px solid var(--line);
+      font-size: var(--fs-small);
+    }
+    .post-data .label {
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: var(--w-semibold);
+      white-space: nowrap;
+    }
+    .post-data time { color: var(--ink); }
+    .post-data .sep { color: var(--line); }
+    .post-body p {
+      margin: 0 0 18px;
+      max-width: 720px;
+      line-height: 1.65;
+    }
+    .post-body h2 {
+      margin: 42px 0 16px;
+      font-size: var(--fs-h2);
+    }
+    .post-body blockquote {
+      margin: 24px 0;
+      padding: 14px 18px 14px 22px;
+      border-left: 3px solid var(--accent);
+      background: #fbfaf7;
+      font-size: var(--fs-body);
+      line-height: 1.55;
+    }
+    .post-body ul, .post-body ol {
+      margin: 12px 0 22px;
+      padding-left: 22px;
+    }
+    .post-body li { margin: 0 0 8px; line-height: 1.6; }
+    .post-body pre {
+      margin: 26px 0;
+      padding: 16px 18px;
+      background: #faf8f4;
+      border: 1px solid var(--line);
+      overflow-x: auto;
+      font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .post-body code {
+      font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+      font-size: 0.92em;
+      background: #f3f1ea;
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    .post-body pre code {
+      background: transparent;
+      padding: 0;
+      border-radius: 0;
+    }
+    .post-foot {
+      margin-top: 42px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      font-size: var(--fs-small);
+      line-height: 1.55;
+      color: #555;
+    }
+    .post-foot a { color: inherit; }
+    .post-foot a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <main id="content">
+    <article class="post">
+      <div class="post-data">
+        <span class="label">Article</span>
+        <span class="sep">/</span>
+        <time datetime="2026-08-23">23 August 2026</time>
+      </div>
+      <h1>Inside SandBoxer's KVM isolation pipeline</h1>
+<p><em>How an experimental model-vs-model CTF benchmark keeps two capable LLM agents from escaping, colliding, or contaminating each other's evidence.</em></p>
+<p>SandBoxer is an experimental benchmark where two LLM-driven competitors play opposite sides of a CTF-style match: one deploys and hardens a small web service (Blue), the other attacks it for a flag (Red). Both competitors are agentic coding CLIs with shell access on their own runner host. That combination is exactly why the isolation design matters more than the game: you have put two optimizers with tool use into a box, told them to win, and promised the audience that the resulting telemetry is real. This article walks through how the pilot's KVM isolation pipeline is actually built, file by file, in the repository. Every number and flag quoted below is taken from the code; links to specific files are given so you can check each claim yourself.</p>
+<h2>The problem</h2>
+<p>The threat model has three parts:</p>
+<ol><li><strong>Escape.</strong> A competitor model should not be able to reach the orchestrator host, the other competitor's environment, or anything beyond the match.</li><li><strong>Interference.</strong> During Blue phase the two runners must be fully network-separated; during Red phase they should exchange only TCP traffic to the declared toy service port and nothing else.</li><li><strong>Evidence integrity.</strong> Scores must come from machine-verified telemetry, not from a model's self-report about what it did.</li></ol>
+<p>There is also a fourth, quieter requirement: honesty about residual risk. The KVM adapter carries a class-level <code>production_ready = False</code> flag with the comment that local smoke tests "cannot establish adversarial escape resistance" (<a href="https://github.com/andreamicheli/sandboxer/blob/main/pilot/sandboxer_v0/local_kvm.py">local_kvm.py</a>). The design goal is containment that can be <em>proven per-match</em>, not a claim of unbreakability.</p>
+<h2>Two tiers: containers for rehearsal, VMs for serious runs</h2>
+<p>The repo ships two runner backends.</p>
+<p><strong>Docker Compose tier.</strong> <code>pilot/compose.yaml</code> defines <code>alpha</code> and <code>beta</code> runners from <code>docker/runner.Dockerfile</code>. Each service gets:</p>
+<ul><li><code>read_only: true</code> root filesystem, with writable tmpfs at <code>/tmp</code> (<code>noexec,nosuid,nodev,size=256m</code>) and <code>/run</code> (<code>nosuid,nodev</code>, 32m)</li><li><code>cap_drop: ["ALL"]</code>, <code>privileged: false</code>, and <code>security_opt: ["no-new-privileges:true"]</code></li><li><code>pids_limit: 192</code>, <code>mem_limit: 2304m</code>, <code>cpus: 2.0</code></li><li><code>restart: "no"</code> so nothing resurrects itself</li><li>Two named internal networks, <code>alpha_private</code> and <code>beta_private</code>, both marked <code>internal: true</code>: alpha sits only on its own network, beta only on the other, so there is no shared bridge between panes at all.</li></ul>
+<p>The image itself (<a href="https://github.com/andreamicheli/sandboxer/blob/main/pilot/docker/runner.Dockerfile">runner.Dockerfile</a>) builds from <code>python:3.11-slim-bookworm</code>, creates a non-root user <code>arena</code> with uid 10001, bakes a pristine copy of the toy service into <code>/opt/pristine</code>, installs the entrypoint helpers as root-owned files, and ends with <code>USER arena</code> under <code>tini</code> as PID 1. On boot, <code>runner-entrypoint.sh</code> copies <code>/opt/pristine/.</code> into <code>/arena/service</code> if no service exists yet and calls <code>arena-restart</code>.</p>
+<p>This tier is good enough for rehearsal loops. Its fundamental ceiling is shared kernel: every container on the host trusts one Linux kernel.</p>
+<p><strong>KVM/QEMU tier.</strong> For matches where that matters, <code>LocalKvmRunnerProvider</code> boots each runner as a full virtual machine with hardware virtualization enabled, so the two competitors run distinct kernels. The preflight even asserts this: the <code>distinct_kernels</code> check compares guest <code>boot_id</code>s and fails with <code>KERNEL_ISOLATION_LOST</code> if both VMs report the same one.</p>
+<h2>Inside the KVM adapter</h2>
+<p>Provisioning happens per match in <code>LocalKvmRunnerProvider.provision()</code>. For each of the two runners it creates a private directory tree under a match root with mode <code>0711</code> (owner traversal only) and a runner root with mode <code>0700</code> owned by a dedicated unprivileged QEMU user. The mode checks are re-read from disk after creation; any mismatch aborts provisioning with <code>MATCH_ROOT_UNSAFE</code> or <code>QEMU_RUNTIME_DIRECTORY_UNSAFE</code>.</p>
+<p>Disk layout per runner:</p>
+<ul><li><strong>Base image</strong>: one shared qcow2, pinned by mandatory SHA-256 (<code>base_image_sha256</code> is validated against <code>[0-9a-f]{64}</code> in <code>LocalKvmConfig.__post_init__</code>) and attached <code>readonly=on,cache=none</code>.</li><li><strong>Workspace</strong>: a fresh 64 MB qcow2 created per runner via <code>qemu-img create -f qcow2 ... 64M</code>, attached read-write with <code>discard=unmap</code>. It is disposable; nothing persists between matches.</li><li><strong>Seed</strong>: a cloud-init ISO built with <code>cloud-localds</code>, carrying per-runner identity including a fresh 32-byte hex nonce.</li></ul>
+<p>Resource limits are enforced twice: inside the guest configuration and again on the host via cgroup v2. Defaults are deliberately tight, and the config validator refuses looser ones: <code>memory_mib</code> must be at least 256 (scripts use 512 MiB), <code>vcpus</code> must equal 1, <code>pids_max</code> must be at least 32 (default 128), and <code>ttl_seconds</code> must be at least 30 (default 300). The host cgroup under <code>/sys/fs/cgroup/sandboxer</code> gets <code>memory.max = memory_mib * 1024 * 1024</code>, <code>cpu.max = "100000 100000"</code> (one CPU's worth), and the pids cap; membership is verified after attach, not assumed.</p>
+<p>The QEMU command line is where the interesting flags live:</p>
+<pre><code>ip netns exec &lt;blue_ns&gt; setpriv --reuid=&lt;qemu_user&gt; --regid=&lt;qemu_user&gt; --init-groups \\
+qemu-system-x86_64 -enable-kvm -cpu host -m &lt;mem&gt; -smp 1 \\
+  -nodefaults -display none -monitor none -serial file:&lt;serial.log&gt; -no-reboot \\
+  -sandbox on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny \\
+  -drive file=&lt;base.qcow2&gt;,if=virtio,format=qcow2,readonly=on,cache=none \\
+  -drive file=&lt;workspace.qcow2&gt;,if=virtio,format=qcow2,cache=none,discard=unmap \\
+  -drive file=&lt;seed.iso&gt;,media=cdrom,readonly=on -nic none \\
+  -netdev tap,id=arena0,ifname=&lt;tap&gt;,script=no,downscript=no \\
+  -device virtio-net-pci,netdev=arena0,mac=&lt;mac&gt; \\
+  -device virtio-serial-pci \\
+  -chardev socket,id=control,path=&lt;control.sock&gt;,server=on,wait=off \\
+  -device virtserialport,chardev=control,name=org.sandboxer.control</code></pre>
+<p>Notes on the pieces that matter:</p>
+<ul><li><strong><code>setpriv --reuid/--regid/--init-groups</code></strong>: QEMU itself runs as the unprivileged user, not root, inside the network namespace. Before launch, a forked witness child drops to that same uid and proves it can create and unlink a probe file in the runtime directory; failure produces <code>QEMU_SOCKET_WITNESS_*</code> errors rather than a hopeful start.</li><li><strong>QEMU sandbox flags</strong>: <code>-sandbox on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny</code> disables obsolete syscalls, privilege escalation, helper process spawning, and resource-control operations from within the VMM process.</li><li><strong>No monitor, no display, <code>-no-reboot</code></strong>: the monitor is disabled entirely; serial output goes to a log file whose stderr capture is sanitized (sensitive-looking assignments are redacted, absolute paths replaced) before it ever reaches diagnostics.</li><li><strong>Control channel over virtio-serial</strong>, not IP: the chardev Unix socket <code>control.sock</code> lives in the runner root and speaks to a control server in the guest over <code>org.sandboxer.control</code>. Responses are bounded by <code>MAX_TOOL_MESSAGE_BYTES</code> and ASCII-validated.</li></ul>
+<p>Cleanup is fail-closed. If provisioning or teardown cannot prove destruction of every artifact (process, cgroup, TTL unit, tap, namespaces, directories), the record moves to a <code>QUARANTINED</code> state tracked in <code>_partials</code>, and <code>reconcile()</code> retries later, reporting named failures like <code>QEMU_PROCESS_SURVIVED</code> or <code>CGROUP_REMAINS</code>. A systemd transient timer (<code>systemd-run --on-active</code>) armed per runner kills the verified cgroup if the orchestrator itself dies; the watchdog validates PID plus start time before acting.</p>
+<h2>Network: namespaces first, nftables second</h2>
+<p>Blue phase needs total separation; Red phase needs controlled contact. The design uses both Linux network namespaces and a bridge firewall, applied in that order of authority.</p>
+<p><strong>Blue.</strong> Each runner gets its own namespace (<code>ip netns add</code>), containing only loopback up and its own tap device. There is no bridge in Blue at all. The authoritative check reads default routes from each Blue namespace: any non-empty route output means egress capability, and observation reports the runners as reachable. Guest-side witnesses confirm the same thing from inside the VM.</p>
+<p><strong>Red transition.</strong> When the match moves to Red, taps move into a single shared red namespace and attach to a bridge there. But before the first tap can join, <code>_install_red_policy()</code> applies a complete nftables table in one transaction:</p>
+<pre><code>add table bridge sandboxer            # or flush if it already exists
+add chain bridge sandboxer forward { type filter hook forward priority 0; policy drop; }
+add counter ... arp_left / arp_right / tcp_left / tcp_right / response_left / response_right
+accept rules: ARP either direction,
+              TCP dport &lt;toy_service_port&gt; left-&gt;right and right-&gt;left,
+              TCP sport &lt;port&gt; with ACK|RST flags (responses),
+              ct state established,related</code></pre>
+<p>Everything else hits <code>policy drop</code>. Because nft applies the whole table atomically and the policy is installed <em>before</em> any tap attaches, there is no delete-then-open window where the two runners could talk unrestricted. Counters on each rule give per-direction evidence of what actually flowed.</p>
+<p>Verification does not stop at reading the ruleset back. <code>_measure_network()</code> re-checks the live table for the expected strings (<code>policy drop</code>, <code>ether type arp</code>, <code>tcp dport &lt;port&gt;</code>, both tap names), confirms the red bridge has no addresses and the red namespace has no default route (no ingress, no egress), and then runs active reachability proofs through the control channel. If any witness is unavailable, the result is a failure, never an inference of safety: "an unavailable witness is unsafe by definition."</p>
+<p>Runner addressing is fixed: guests come up at <code>10.77.0.11</code> and <code>10.77.0.12/24</code> via cloud-init network config, and the scripts declare port 8080 (<code>toy_service_port=8080</code>) as the toy service port. MAC addresses derive deterministically from the match id and runner name under the locally-administered <code>02:</code> prefix.</p>
+<h2>Control plane: phase-scoped tool whitelists</h2>
+<p>Inside each guest, <code>RunnerToolServer</code> (<a href="https://github.com/andreamicheli/sandboxer/blob/main/pilot/sandboxer_v0/runner_tool_server.py">runner_tool_server.py</a>) exposes a small, finite tool protocol over a private Unix socket, chmod 0600, with messages capped at 64 KiB. Authorization is a strict whitelist keyed by phase:</p>
+<pre><code>_PHASE_TOOLS = {
+    "blue": {"inspect_service", "deploy_service", "request_own_service", "finish_phase"},
+    "red":  {"inspect_service", "describe_target_service", "http_request",
+             "submit_flag", "finish_phase"},
+}</code></pre>
+<p>Dispatch order matters: unknown tools get <code>RUNNER_TOOL_DENIED</code>; known tools outside the current phase get <code>RUNNER_TOOL_PHASE_DENIED</code>; argument shape mismatches get <code>RUNNER_TOOL_ARGUMENTS_INVALID</code>. Argument validation is exact-set matching (deploy_service accepts precisely the nine <code>_SERVICE_SPEC_FIELDS</code>; HTTP tools accept exactly <code>{method, path, headers, body}</code>, GET/POST only, path starting with <code>/</code>, values capped at half the message limit).</p>
+<p>Every decision, allowed or denied, becomes a <code>ToolDecision</code> passed to the audit callback before execution. An optional <code>max_tool_calls</code> ceiling counts calls in a locked section; once exceeded, everything except <code>finish_phase</code> returns <code>RUNNER_TOOL_CEILING_EXCEEDED</code>.</p>
+<p>On the model side, the Command Code adapter (<a href="https://github.com/andreamicheli/sandboxer/blob/main/pilot/sandboxer_v0/command_code.py">command_code.py</a>) mirrors this boundary. The coding CLI's workspace gets a generated <code>.commandcode/settings.json</code> with <code>permissions.defaultMode: "dont-ask"</code>, an explicit allow list of <code>mcp__runner__&lt;tool&gt;</code> entries for exactly the whitelisted phase tools, and a deny list of native tools; <code>.mcp.json</code> wires the runner MCP bridge over stdio with <code>SANDBOXER_RUNNER_SOCKET</code> and <code>SANDBOXER_RUNNER_TOOLS</code> env vars. Post-run validation then rejects any native tool event that was not explicitly allowed (<code>COMMAND_CODE_NATIVE_TOOL_REJECTED</code>), verifies the observed model matches the requested one, and enforces the output token budget.</p>
+<h2>Telemetry as the source of truth</h2>
+<p>Scores are computed from hash-chained telemetry, not from narrative. In <a href="https://github.com/andreamicheli/sandboxer/blob/main/pilot/sandboxer_v0/evidence.py">evidence.py</a>, each normalized event carries <code>previous_event_hash</code> and <code>event_hash</code> (SHA-256 over canonical JSON), starting from a zero chain; verification recomputes the chain and rejects duplicate event ids, broken linkage, or mismatched sealed raw event hashes. Evidence bundles add their own provenance spine: versioned URLs (<code>sandboxer://evidence/&lt;series&gt;/v&lt;n&gt;</code>), the previous bundle's hash, checksums over public and restricted payloads, and a signature. The public projection gets its own independent chain. A report consumer can therefore prove that the published outcome derives from the same events the match produced.</p>
+<h2>What this design honestly does not cover</h2>
+<p>Three limitations are stated in the code rather than hidden:</p>
+<ol><li><strong><code>production_ready = False</code>.</strong> The adapter's own docstring says it plainly: "a successful rehearsal proves only the configured containment checks, not resistance to a hostile workload." Until someone documents adversarial red-teaming against this pipeline, that flag stays down, and the benchmark's operators treat it accordingly.</li><li><strong>Container tier shares a kernel.</strong> The Docker rehearsal tier inherits all container-isolation caveats. It is for iteration, not for claims about escape resistance; the VM tier exists because of that gap.</li><li><strong>Scope.</strong> This pipeline contains the runners' execution environments and the network between them. It does not defend against prompt-injection content inside the CTF materials themselves, side channels between VMs on the same physical host, or compromise of the privileged orchestrator, which remains a trusted component running <code>SubprocessLocalKvmHost</code> on the host.</li></ol>
+<p>If you are evaluating whether to trust this isolation, the right move is to read it yourself: the paper at https://sandboxer.vercel.app/assets/paper/sandboxer-paper.pdf describes the benchmark methodology, and the full source is at https://github.com/andreamicheli/sandboxer. Start with <code>pilot/sandboxer_v0/local_kvm.py</code> and try to find a hole; the code is written to make your audit cheap.</p>
+      <div class="post-foot">
+        <p>The full source is in the repository: <a href="https://github.com/andreamicheli/sandboxer/blob/main/pilot/sandboxer_v0/local_kvm.py">pilot/sandboxer_v0/local_kvm.py</a>. The benchmark methodology and evidence model are described in the paper at <a href="assets/paper/sandboxer-paper.pdf">assets/paper/sandboxer-paper.pdf</a>.</p>
+      </div>
+    </article>
+  </main>
+  <footer class="site-footer">
+    <div class="footer-brand">
+      <p class="brand-label">SandBoxer</p>
+      <p>Experimental AI systems research.<br>Simulated environment. Bounded claims.</p>
+    </div>
+    <div class="footer-limitations">
+      <h3>Limitations</h3>
+      <p>SandBoxer is an experimental benchmark conducted in a simulated, contained capture-the-flag environment. Results do not establish general cyber capability and must not be generalized beyond the tested configuration.</p>
+    </div>
+    <nav class="footer-nav">
+      <a href="index.html#match">Match</a>
+      <a href="index.html#method">Method</a>
+      <a href="assets/paper/sandboxer-paper.pdf">Paper</a>
+      <a href="index.html#archive">Archive</a>
+    </nav>
+    <p class="footer-copy">© 2026 / BUILD 0.2</p>
+  </footer>
+</body>
+</html>

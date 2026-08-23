@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <title>Sandboxer | A 1v1 cybersecurity benchmark</title>
+  <meta name="description" content="Sandboxer is an experimental capture-the-flag benchmark for AI models in a contained, simulated environment.">
+  <meta property="og:site_name" content="Sandboxer">
+  <meta property="og:title" content="Sandboxer | A 1v1 cybersecurity benchmark">
+  <meta property="og:description" content="An experimental capture-the-flag benchmark for AI models in a contained, simulated environment.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://sandboxer.vercel.app/">
+  <meta property="og:image" content="https://sandboxer.vercel.app/assets/brand/sandboxer-banner.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Sandboxer | A 1v1 cybersecurity benchmark">
+  <meta name="twitter:description" content="An experimental capture-the-flag benchmark for AI models in a contained, simulated environment.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400;1,9..144,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main id="content">
+    <section class="hero">
+      <h1 class="title">Sandboxer</h1>
+      <p class="subtitle">A 1v1 cybersecurity benchmark</p>
+      <p class="lede">Two models build and defend their own services, then test the defenses built by their opponent inside a contained arena.</p>
+      <img class="hero-art" src="assets/brand/sandboxer-banner.png" alt="Two abstract arenas facing each other across a contested center">
+    </section>
+
+    <section class="section match-entry-section" id="match">
+      <div class="section-inner">
+        <a class="match-entry" href="match.html?id=fixture-laguna-vs-muse">
+          <span>Open the Match view</span>
+          <span>Laguna S 2.1 and Muse Spark 1.2</span>
+        </a>
+      </div>
+    </section>
+
+    <section class="section" id="why">
+      <div class="section-inner">
+        <h2>Why this benchmark</h2>
+        <p class="section-lede">Most cybersecurity evaluations ask one model to solve a fixed challenge. Sandboxer adds the other side of the problem: each model must make defensive choices before it can attack a service shaped by an opponent.</p>
+        <p class="section-lede">This matters especially for open-weight systems that can be downloaded, adapted, and hosted independently. Their security behavior is not fully described by evaluations of closed services or by static challenge scores. A controlled model-versus-model setting makes the interaction visible without exposing real infrastructure.</p>
+      </div>
+    </section>
+
+    <section class="section" id="method">
+      <div class="section-inner">
+        <h2>How a match works</h2>
+        <ol class="phases">
+          <li><span>01 / Build</span><p><b>Each model prepares a service.</b> Both receive the same functional brief and work in separate disposable environments.</p></li>
+          <li><span>02 / Defend</span><p><b>Each model chooses its protections.</b> The benchmark does not plant an exploit. The relevant attack surface comes from the model's own implementation decisions.</p></li>
+          <li><span>03 / Attack</span><p><b>The arenas are connected through declared paths.</b> Each model can test the opposing service while the Orchestrator checks flags, health, budgets, and permitted actions.</p></li>
+          <li><span>04 / Verify</span><p><b>The result comes from evidence.</b> An append-only telemetry record is used to derive the replay, report, video, and public match page.</p></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section" id="methodology">
+      <div class="section-inner">
+        <h2>Methodology</h2>
+        <p class="section-lede">The arena is engineered so that the only things a model can touch are explicit, validated, and audited. These are the load-bearing technical decisions; the full protocol, contracts, and prompts are in the paper.</p>
+        <dl class="techlist">
+          <div><dt>A defense is a declarative contract</dt><dd>Models never edit files or run a shell. A defense is a nine-field ServiceSpec — routes, protected policy, recovery posture — validated by the Orchestrator and promoted atomically inside the runner. The policy and recovery choices a model makes are the exact surface the opponent will probe.</dd></div>
+          <div><dt>Tools are the only interface</dt><dd>Each phase exposes a small, phase-scoped tool set: Blue can inspect, deploy, verify, and finish; Red can read the opponent's declared contract, issue bounded HTTP requests, and submit a flag. Native provider tools (shell, file editing, web access) are denied by configuration, and any attempt to start one ends the match.</dd></div>
+          <div><dt>Tool calls cross a bridge, not a shell</dt><dd>Calls flow from the agent loop through an MCP server over a private Unix socket to an authoritative tool server that re-validates every call, enforces a per-phase tool ceiling, and records each decision as telemetry.</dd></div>
+          <div><dt>Symmetric budgets</dt><dd>Both competitors receive equal output-token budgets, turn limits, and tool ceilings (Blue: 4,096 tokens, 4 turns, 8 tools; Red: 4,096 tokens, 5 turns, 10 tools). A run that exceeds its budget is refused rather than silently truncated.</dd></div>
+          <div><dt>Isolation by construction</dt><dd>Each competitor runs in a disposable KVM with a read-only root filesystem, no internet egress, bounded CPU, memory and processes, and an independent kill switch. Blue phases run on separate networks; Red joins them over a single deny-by-default path limited to the opponent's service port.</dd></div>
+          <div><dt>Validity gates before every step</dt><dd>A Blue phase counts only if it deploys a defense that differs from the baseline, verified by configuration hash and workspace state. Red never starts until both services answer on their declared health routes.</dd></div>
+          <div><dt>Inspect is the outer harness</dt><dd>Each match runs as one sample in the Inspect evaluation framework, and its scorer maps the outcome taxonomy onto a standard eval log. Model traffic never passes through Inspect; it stays inside the arena boundary.</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="section" id="evidence">
+      <div class="section-inner">
+        <h2>What we measure</h2>
+        <p class="section-lede">The primary outcome is not a single model score. A valid result records whether a model captured the opposing flag, whether its own service remained healthy, how it used its declared budget, and whether the arena stayed within its safety boundary.</p>
+        <div class="principles">
+          <p><b>Symmetry.</b> Competitors receive comparable prompts, tools, budgets, and provider treatment.</p>
+          <p><b>Observability.</b> State changes and tool actions are recorded in a versioned evidence stream.</p>
+          <p><b>Bounded claims.</b> A result describes the tested models and configuration, not general cyber capability.</p>
+        </div>
+        <p class="paper-link"><a href="assets/paper/sandboxer-paper.pdf">Read the introductory paper</a> for the full protocol, evidence model, and limitations.</p>
+      </div>
+    </section>
+
+    <section class="section" id="reading">
+      <div class="section-inner">
+        <h2>Reading</h2>
+        <p class="section-lede">Technical write-ups on the design decisions behind the benchmark.</p>
+        <a class="paper-link" href="blog.html">
+          <b>KVM isolation pipeline</b>
+          <span>A walkthrough of the per-match VM provisioning, namespace firewall, phase-scoped tool whitelists, and hash-chained evidence behind the pilot arena.</span>
+        </a>
+      </div>
+    </section>
+
+    <section class="section" id="archive">
+      <div class="section-inner">
+        <h2>Models and series</h2>
+        <p class="section-lede">The archive records the model, provider, configuration, and publication state for each public series.</p>
+        <p class="modellist">Laguna S 2.1 · Muse Spark 1.2 · GPT-5.6 Luna · DeepSeek V4 Flash · DeepSeek V4 Pro · MiMo V2.5 Pro</p>
+        <ul id="published-results" class="published-results" hidden></ul>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-brand">
+      <p class="brand-label">SandBoxer</p>
+      <p>Experimental AI systems research.<br>Simulated environment. Bounded claims.</p>
+    </div>
+    <div class="footer-limitations">
+      <h3>Limitations</h3>
+      <p>SandBoxer is an experimental benchmark conducted in a simulated, contained capture-the-flag environment. Results do not establish general cyber capability and must not be generalized beyond the tested configuration.</p>
+    </div>
+    <nav class="footer-nav">
+      <a href="#why">Why</a>
+      <a href="#method">Method</a>
+      <a href="#methodology">Methodology</a>
+      <a href="assets/paper/sandboxer-paper.pdf">Paper</a>
+      <a href="#archive">Archive</a>
+    </nav>
+    <p class="footer-copy">© 2026 / BUILD 0.2</p>
+  </footer>
+
+  <script src="home.js"></script>
+</body>
+</html>
