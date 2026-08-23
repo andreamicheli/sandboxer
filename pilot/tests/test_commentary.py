@@ -272,14 +272,14 @@ def test_build_commentary_fills_dead_air_with_seen_action_recap():
 def test_build_commentary_flags_lopsided_defense_promotion():
     lines = build_commentary(_fixture_frames(), _IDENTITIES, FPS)
     notes = [line for line in lines
-             if line["voice_role"] == "analyst" and "telemetry clock" in line["text"]]
+             if line["voice_role"] == "analyst" and "Telemetry note:" in line["text"]]
     assert len(notes) == 1
     note = notes[0]
     assert note["line_type"] == "observed"
     assert set(note["event_ids"]) == {"e05", "e09"}
     # Elapsed times come straight from the fixture timestamps: 12s vs 50s.
     assert "Laguna S 2.1" in note["text"] and "Muse Spark 1.2" in note["text"]
-    assert " 12 " in note["text"] and " 50 " in note["text"]
+    assert " 12s" in note["text"] and " 50s" in note["text"]
 
 
 def test_build_commentary_repeated_offense_gets_pattern_note():
