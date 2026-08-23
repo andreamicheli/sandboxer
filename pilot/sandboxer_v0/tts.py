@@ -80,7 +80,7 @@ _PACK_GAP_MS = 400
 _MIN_PACK_GAP_MS = 25
 # How far a block may be pulled earlier than its event anchor to absorb tail
 # cascade (milliseconds).  Keeps narration within ~4s of its on-screen action.
-_PULL_FORWARD_MS = 4000
+_PULL_FORWARD_MS = 8000
 # The pull-forward allowance only applies inside this many ms of the boundary,
 # and never before this fraction of the window has elapsed (protects intro and
 # early event anchors in short fixtures).
@@ -851,6 +851,7 @@ def render_commentary_audio(
             pull_zone_ms=max(
                 recap_start*1000//fps - _PULL_ZONE_MS,
                 round(recap_start*1000//fps * _PULL_ZONE_MIN_FRACTION))
+            gap_floor=0 if pull_forward else _MIN_PACK_GAP_MS
             prev_end_ms=None
             for block in blocks:
                 duration_ms=int(block["duration_ms"])
@@ -858,16 +859,25 @@ def render_commentary_audio(
                 if prev_end_ms is None:
                     at_ms=planned_ms
                 elif pull_forward and planned_ms>=pull_zone_ms:
-                    at_ms=max(prev_end_ms+gap_ms, planned_ms-_PULL_FORWARD_MS)
+                    at_ms=max(prev_end_ms, planned_ms-_PULL_FORWARD_MS)
                 else:
-                    at_ms=max(planned_ms, prev_end_ms+gap_ms)
+                    at_ms=max(planned_ms, prev_end_ms+gap_floor)
                 block["start_frame"]=round(at_ms*fps/1000)
                 block["end_frame"]=round((at_ms+duration_ms)*fps/1000)
                 prev_end_ms=at_ms+duration_ms
         _pack(pull_forward=False)
         if blocks and blocks[-1]["end_frame"]>recap_start:
             _pack(pull_forward=True)
-        if blocks[-1]["end_frame"]>recap_start: raise TtsError("COMMENTARY_OVERFLOW_AFTER_RENDER")
+        # Pure speech overflow: when total speech alone exceeds the window
+        # even with zero gaps, no packing can fit it, so fail closed instead
+        # of silently gutting the narration block by block.
+        if sum(int(b["duration_ms"]) for b in blocks)>recap_start*1000//fps:
+            raise TtsError("COMMENTARY_OVERFLOW_AFTER_RENDER")
+        while len(blocks)>1 and blocks[-1]["end_frame"]>recap_start:
+            # Tail cascade beyond what pull-forward can absorb: drop the
+            # latest block (the least timely narration) and re-pack.
+            blocks.pop()
+            _pack(pull_forward=True)
     blocks_hash = _digest([block["script_hash"] for block in blocks])
     # Observed provenance: aggregated from the audio actually present.  Models
     # come from every block record (sidecars included for resumed renders), so
