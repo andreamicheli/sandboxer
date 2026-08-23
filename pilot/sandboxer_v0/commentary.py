@@ -58,6 +58,9 @@ ACTION_EVENT_TYPES = frozenset({
 
 LINE_WINDOW_SECONDS = 8      # a line's [start_frame, end_frame) window cap
 DEAD_AIR_SECONDS = 15        # silence longer than this earns a filler recap
+LINE_TARGET_SECONDS = 4.0    # soft per-line speech budget (chars/15 TTS pace)
+_CHARS_PER_SECOND = 15       # rough Fish TTS pace used for the estimate
+_RECAP_PHRASES_MAX = 2       # dead-air filler concatenates at most this many
 ANALYST_EVERY = 3            # every Nth consecutive action also earns an analyst beat
 ANALYST_DELAY_SECONDS = 2    # analyst follow-up lands this long after its action
 REPEATED_STREAK = 3          # consecutive same-actor offensive actions -> pattern note
@@ -169,6 +172,30 @@ def _recap_phrase(group: Mapping[str, Any]) -> str:
     name = str(group.get("name", ""))
     phrase = _KIND_PHRASE.get(kind, kind)
     return f"{phrase} from {name}" if name else phrase
+
+
+def _shorten(text: str) -> str:
+    """Deterministically tighten an over-budget line without losing facts.
+
+    Episode-v8g: dense series commentary totalled ~361s of speech against a
+    ~326s window.  The estimate is chars/15s; over-budget play-by-play lines
+    drop trailing clauses after the second comma, filler prefixes are
+    stripped, whitespace collapses.  Event grounding is never touched.
+    """
+    cleaned = " ".join(str(text).split())
+    if len(cleaned) / _CHARS_PER_SECOND <= LINE_TARGET_SECONDS:
+        return cleaned
+    prefixes = ("While the arena holds quiet, the story so far: ",
+                "Story so far: ")
+    for prefix in prefixes:
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix):]
+            break
+    if len(cleaned) / _CHARS_PER_SECOND > LINE_TARGET_SECONDS:
+        parts = cleaned.split(", ")
+        if len(parts) > 2:
+            cleaned = ", ".join(parts[:2]).rstrip(",") + "."
+    return " ".join(cleaned.split())
 
 
 def build_commentary(
@@ -331,7 +358,7 @@ def build_commentary(
             continue
         window = groups[max(0, recent_index - 2): recent_index + 1]
         ids = [event_id for item in window for event_id in item["event_ids"]]
-        phrases = "; ".join(_recap_phrase(item) for item in window)
+        phrases = "; ".join(_recap_phrase(item) for item in window[:_RECAP_PHRASES_MAX])
         filler_start = max(entry["start"] + 1,
                            entry["start"] + fps * LINE_WINDOW_SECONDS)
         filled.append({"role": "analyst", "model": "",
@@ -350,7 +377,7 @@ def build_commentary(
             "model": entry["model"],
             "start_frame": entry["start"],
             "end_frame": max(end, entry["start"] + 1),
-            "text": entry["text"],
+            "text": _shorten(entry["text"]),
             "event_ids": list(entry["ids"]),
             "line_type": entry["type"],
             "provenance": PROVENANCE_DETERMINISTIC,
