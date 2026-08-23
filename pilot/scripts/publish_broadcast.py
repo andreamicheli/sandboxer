@@ -368,6 +368,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="after the upload, flip the unlisted video to public; needs an approval token")
     parser.add_argument("--approval-token", default=None,
                         help="explicit approval token for --publish-public (default: SANDBOXER_PUBLISH_APPROVAL env)")
+    parser.add_argument("--allow-ungated", action="store_true",
+                        help="deliberately bypass the hard publish gate (unlisted preview uploads)")
     parser.add_argument("--manual", action="store_true",
                         help="re-enable the human approval gate (--approved-by + confirmation); default is unattended auto-approve")
     parser.add_argument("--report-url", default=None,
@@ -513,6 +515,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             category_id=metadata["snippet"]["categoryId"],
             privacy_status=args.privacy,
             approved=args.approved_by is not None or rehearsal,
+            allow_ungated=args.allow_ungated,
             **gate_inputs,
         )
         thumbnail = _best_effort(lambda: uploader.set_thumbnail(uploaded["video_id"], thumb_source)) if thumb_source else None
