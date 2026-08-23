@@ -78,6 +78,14 @@ _PACK_GAP_MS = 400
 # Floor the turn gap may shrink to when dense commentary would otherwise
 # overflow the speak window (milliseconds).
 _MIN_PACK_GAP_MS = 25
+# How far a block may be pulled earlier than its event anchor to absorb tail
+# cascade (milliseconds).  Keeps narration within ~4s of its on-screen action.
+_PULL_FORWARD_MS = 4000
+# The pull-forward allowance only applies inside this many ms of the boundary,
+# and never before this fraction of the window has elapsed (protects intro and
+# early event anchors in short fixtures).
+_PULL_ZONE_MS = 30000
+_PULL_ZONE_MIN_FRACTION = 0.75
 
 # Fish Audio (https://fish.audio) free developer tier: the `s2.1-pro-free`
 # model has no hard usage cap under Fair Use.  Voices are explicit
@@ -834,15 +842,31 @@ def render_commentary_audio(
         gap_ms=_PACK_GAP_MS
         if inter_gaps>0 and slack_ms<inter_gaps*_PACK_GAP_MS:
             gap_ms=min(_PACK_GAP_MS,max(_MIN_PACK_GAP_MS,slack_ms//inter_gaps))
-        prev_end_ms=None
-        for block in blocks:
-            duration_ms=int(block["duration_ms"])
-            planned_ms=block["start_frame"]*1000//fps
-            if prev_end_ms is None: at_ms=planned_ms
-            else: at_ms=max(planned_ms,prev_end_ms+gap_ms)
-            block["start_frame"]=round(at_ms*fps/1000)
-            block["end_frame"]=round((at_ms+duration_ms)*fps/1000)
-            prev_end_ms=at_ms+duration_ms
+        # Pack pass 1: planned anchors are a hard lower bound.  If the tail
+        # still overflows the window (events clustered near the recap), pack
+        # pass 2 re-runs allowing late blocks to be pulled up to
+        # _PULL_FORWARD_MS earlier, absorbing the cascade into earlier idle
+        # space while keeping narration within ~4s of its on-screen action.
+        def _pack(pull_forward: bool) -> None:
+            pull_zone_ms=max(
+                recap_start*1000//fps - _PULL_ZONE_MS,
+                round(recap_start*1000//fps * _PULL_ZONE_MIN_FRACTION))
+            prev_end_ms=None
+            for block in blocks:
+                duration_ms=int(block["duration_ms"])
+                planned_ms=block["start_frame"]*1000//fps
+                if prev_end_ms is None:
+                    at_ms=planned_ms
+                elif pull_forward and planned_ms>=pull_zone_ms:
+                    at_ms=max(prev_end_ms+gap_ms, planned_ms-_PULL_FORWARD_MS)
+                else:
+                    at_ms=max(planned_ms, prev_end_ms+gap_ms)
+                block["start_frame"]=round(at_ms*fps/1000)
+                block["end_frame"]=round((at_ms+duration_ms)*fps/1000)
+                prev_end_ms=at_ms+duration_ms
+        _pack(pull_forward=False)
+        if blocks and blocks[-1]["end_frame"]>recap_start:
+            _pack(pull_forward=True)
         if blocks[-1]["end_frame"]>recap_start: raise TtsError("COMMENTARY_OVERFLOW_AFTER_RENDER")
     blocks_hash = _digest([block["script_hash"] for block in blocks])
     # Observed provenance: aggregated from the audio actually present.  Models
