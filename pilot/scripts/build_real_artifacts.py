@@ -231,6 +231,10 @@ def merge_series_replays(replays: list[dict]) -> dict:
     sequence = 0
     for position, replay in enumerate(replays, start=1):
         bundle_hashes.append(str(replay.get("source_bundle_hash", "")))
+        # Bootstrap-failed matches have zero frames: skip the clock-base math
+        # (there is nothing to offset) but keep consuming their scene slot.
+        if not replay.get("frames"):
+            continue
         # Push this match's clock base past the previous match's last frame,
         # preserving intra-match relative spacing.
         offset_ns = max(0, previous_ns + 1 - int(replay["frames"][0]["at_monotonic_ns"]))
