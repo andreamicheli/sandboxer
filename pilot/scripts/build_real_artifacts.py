@@ -222,8 +222,9 @@ def merge_series_replays(replays: list[dict]) -> dict:
     for position, replay in enumerate(replays, start=1):
         if replay.get("schema_version") != REPLAY_SCHEMA:
             raise ArtifactInputError(f"SERIES_REPLAY_SCHEMA_INVALID:m{position}")
-        if not replay.get("frames"):
-            raise ArtifactInputError(f"SERIES_REPLAY_EMPTY:m{position}")
+        # NOTE: a bootstrap-failed match legitimately has zero frames (v8d):
+        # its scene still renders as an intermission-style placeholder, it
+        # just carries no terminal feed or commentary.
     frames: list[dict] = []
     previous_ns = -1
     bundle_hashes: list[str] = []
