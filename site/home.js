@@ -88,3 +88,46 @@
       /* Fail closed: no banner, no article list. */
     });
 })();
+
+/* Slow parallax for the homepage paper preview.
+ *
+ * The preview clips a page render taller than its window; as the section
+ * travels through the viewport the page inside drifts by a fraction of the
+ * window's distance from the viewport center. Skipped entirely for
+ * prefers-reduced-motion and on the mobile breakpoint, where the image
+ * renders statically instead.
+ */
+(function () {
+  "use strict";
+
+  const FACTOR = 0.25;
+  const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const MOBILE = window.matchMedia("(max-width: 820px)");
+
+  const frame = document.querySelector(".paper-window");
+  const page = frame ? frame.querySelector(".paper-page") : null;
+  if (!frame || !page || REDUCED.matches) return;
+
+  let raf = null;
+
+  function update() {
+    raf = null;
+    if (MOBILE.matches) return;
+    const bounds = frame.getBoundingClientRect();
+    const vh = window.innerHeight;
+    /* Offscreen: leave the last shift in place, spend no work. */
+    if (bounds.bottom <= 0 || bounds.top >= vh) return;
+    const offsetFromCenter = bounds.top + bounds.height / 2 - vh / 2;
+    const slack = Math.max((page.offsetHeight - frame.clientHeight) / 2, 0);
+    const shift = Math.max(-slack, Math.min(slack, offsetFromCenter * FACTOR));
+    page.style.setProperty("--shift", shift.toFixed(1) + "px");
+  }
+
+  function requestUpdate() {
+    if (raf === null) raf = window.requestAnimationFrame(update);
+  }
+
+  window.addEventListener("scroll", requestUpdate, { passive: true });
+  window.addEventListener("resize", requestUpdate);
+  requestUpdate();
+})();
