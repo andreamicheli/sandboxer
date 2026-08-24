@@ -29,6 +29,14 @@
       <img class="hero-art" src="assets/brand/ctf-arena-hero.jpg" alt="Monochrome isometric CTF diagram of two model sandboxes facing each other across the arena, each holding a flag">
     </section>
 
+    <section class="section" id="why">
+      <div class="section-inner">
+        <h2>Why this benchmark</h2>
+        <p class="section-lede">Most cybersecurity evaluations ask one model to solve a fixed challenge. Sandboxer adds the other side of the problem: each model must make defensive choices before it can attack a service shaped by an opponent.</p>
+        <p class="section-lede">This matters especially for open-weight systems that can be downloaded, adapted, and hosted independently. Their security behavior is not fully described by evaluations of closed services or by static challenge scores. A controlled model-versus-model setting makes the interaction visible without exposing real infrastructure.</p>
+      </div>
+    </section>
+
     <section class="section" id="paper">
       <div class="section-inner">
         <h2 class="paper-heading">The paper</h2>
@@ -46,14 +54,6 @@
           <span>Open the Match view</span>
           <span>Laguna S 2.1 and Muse Spark 1.2</span>
         </a>
-      </div>
-    </section>
-
-    <section class="section" id="why">
-      <div class="section-inner">
-        <h2>Why this benchmark</h2>
-        <p class="section-lede">Most cybersecurity evaluations ask one model to solve a fixed challenge. Sandboxer adds the other side of the problem: each model must make defensive choices before it can attack a service shaped by an opponent.</p>
-        <p class="section-lede">This matters especially for open-weight systems that can be downloaded, adapted, and hosted independently. Their security behavior is not fully described by evaluations of closed services or by static challenge scores. A controlled model-versus-model setting makes the interaction visible without exposing real infrastructure.</p>
       </div>
     </section>
 
@@ -78,7 +78,7 @@
           <div><dt>Tools are the only interface</dt><dd>Each phase exposes a small, phase-scoped tool set: Blue can inspect, deploy, verify, and finish; Red can read the opponent's declared contract, issue bounded HTTP requests, and submit a flag. Native provider tools (shell, file editing, web access) are denied by configuration, and any attempt to start one ends the match.</dd></div>
           <div><dt>Tool calls cross a bridge, not a shell</dt><dd>Calls flow from the agent loop through an MCP server over a private Unix socket to an authoritative tool server that re-validates every call, enforces a per-phase tool ceiling, and records each decision as telemetry.</dd></div>
           <div><dt>Symmetric budgets</dt><dd>Both competitors receive equal output-token budgets, turn limits, and tool ceilings (Blue: 4,096 tokens, 4 turns, 8 tools; Red: 4,096 tokens, 5 turns, 10 tools). A run that exceeds its budget is refused rather than silently truncated.</dd></div>
-          <div><dt>Isolation by construction</dt><dd>Each competitor runs in a disposable KVM with a read-only root filesystem, no internet egress, bounded CPU, memory and processes, and an independent kill switch. Blue phases run on separate networks; Red joins them over a single deny-by-default path limited to the opponent's service port.</dd></div>
+          <div><dt>Isolation by construction</dt><dd>Each competitor runs in a disposable <a href="blog.html#kvm-isolation">sandbox</a> with a read-only root filesystem, no internet egress, bounded CPU, memory and processes, and an independent kill switch. Blue phases run on separate networks; Red joins them over a single deny-by-default path limited to the opponent's service port.</dd></div>
           <div><dt>Validity gates before every step</dt><dd>A Blue phase counts only if it deploys a defense that differs from the baseline, verified by configuration hash and workspace state. Red never starts until both services answer on their declared health routes.</dd></div>
           <div><dt>Inspect is the outer harness</dt><dd>Each match runs as one sample in the Inspect evaluation framework, and its scorer maps the outcome taxonomy onto a standard eval log. Model traffic never passes through Inspect; it stays inside the arena boundary.</dd></div>
         </dl>
@@ -105,6 +105,18 @@
         <a class="paper-link" href="blog.html">
           <b>KVM isolation pipeline</b>
           <span>A walkthrough of the per-match VM provisioning, namespace firewall, phase-scoped tool whitelists, and hash-chained evidence behind the pilot arena.</span>
+        </a>
+      </div>
+    </section>
+
+    <section class="section" id="articles">
+      <div class="section-inner">
+        <h2>Articles</h2>
+        <p class="section-lede">Longer technical write-ups on how the benchmark is built.</p>
+        <!-- Add new article cards here; each links to blog.html#<article-id> -->
+        <a class="paper-link" href="blog.html#kvm-isolation">
+          <b>KVM isolation pipeline</b>
+          <span>Per-match VM provisioning, namespace firewall, phase-scoped tool whitelists, and hash-chained evidence.</span>
         </a>
       </div>
     </section>

@@ -100,19 +100,19 @@
 (function () {
   "use strict";
 
-  const FACTOR = 0.25;
+  const FACTOR = 0.35;
   const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)");
   const MOBILE = window.matchMedia("(max-width: 820px)");
 
   const frame = document.querySelector(".paper-window");
   const page = frame ? frame.querySelector(".paper-page") : null;
-  if (!frame || !page || REDUCED.matches) return;
+  if (!frame || !page) return;
 
   let raf = null;
 
   function update() {
     raf = null;
-    if (MOBILE.matches) return;
+    if (REDUCED.matches || MOBILE.matches) return;
     const bounds = frame.getBoundingClientRect();
     const vh = window.innerHeight;
     /* Offscreen: leave the last shift in place, spend no work. */
