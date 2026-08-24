@@ -137,6 +137,22 @@ h3 {
 }
 .paper-caption a { text-decoration: underline; text-underline-offset: 4px; }
 
+/* Article cards with thumbnail */
+.article-card {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+}
+.article-thumb {
+  width: clamp(120px, 18vw, 180px);
+  height: auto;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+}
+.article-card-text {
+  display: block;
+}
+
 .match-entry-section { padding-top: 0; padding-bottom: 0; }
 .match-entry {
   display: flex;
