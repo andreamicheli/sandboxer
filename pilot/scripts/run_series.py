@@ -77,6 +77,26 @@ def _is_timeout_failure(codes: tuple[str, ...]) -> bool:
     return "COMMAND_CODE_TIMEOUT" in codes
 
 
+def _is_retryable_failure(codes: tuple[str, ...]) -> bool:
+    """True when a single retry is warranted for this failure class.
+
+    Episode-laguna-muse postmortem: generic ``RuntimeError`` failures (a bare
+    exception without a ``reason_code`` attribute escaping the match core)
+    died at three telemetry events and were recorded as-is with no retry,
+    sinking the series below the gate on infrastructure flake.  Bare-type
+    codes (no underscore convention) and calibration errors get one retry;
+    model-behaviour failures keep their recorded data point.
+    """
+    if _is_budget_failure(codes) or _is_timeout_failure(codes):
+        return True
+    for code in codes:
+        if code in {"RuntimeError", "FileNotFoundError", "OSError", "TimeoutError"}:
+            return True
+        if code.startswith(("BLUE_", "RED_")) and "BASELINE" in code:
+            return False
+    return any(code == code.upper() and "_" not in code for code in codes)
+
+
 def _budget_retry_args(
     match_args: argparse.Namespace, *, extend_phase_timeout: bool = False
 ) -> argparse.Namespace:
@@ -177,7 +197,7 @@ def execute_series(
                 attempts.append(_attempt_record(len(attempts) + 1, match_args,
                                                 multipliers=multipliers, succeeded=False,
                                                 reason_code=codes[0]))
-                if len(attempts) <= 1 and (_is_budget_failure(codes) or _is_timeout_failure(codes)):
+                if len(attempts) <= 1 and _is_retryable_failure(codes):
                     multipliers = {key: value * BUDGET_RETRY_MULTIPLIER
                                    for key, value in multipliers.items()}
                     match_args = _budget_retry_args(
