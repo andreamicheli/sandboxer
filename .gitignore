@@ -9,3 +9,4 @@ __pycache__/
 
 # The already-hosted match report currently keeps its own repository.
 /match-report-site/
+.hermes/
