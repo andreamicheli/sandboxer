@@ -60,7 +60,7 @@ const ChartTooltipContent = React.forwardRef<
     <div
       ref={ref}
       className={cn(
-        "grid min-w-[10rem] items-start gap-1.5 rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-xs shadow-md",
+        "grid min-w-[10rem] items-start gap-1.5 rounded-none border border-[var(--line)] bg-white px-3 py-2 text-xs shadow-md",
         className
       )}
     >
@@ -78,7 +78,7 @@ const ChartTooltipContent = React.forwardRef<
             <div key={i} className="flex items-center justify-between gap-3">
               {!hideIndicator && (
                 <span
-                  className="h-2 w-2 shrink-0 rounded-full"
+                  className="h-2 w-2 shrink-0 rounded-none"
                   style={{ background: item.payload?.fill || item.color || "var(--ink)" }}
                 />
               )}

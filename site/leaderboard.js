@@ -1,18 +1,32 @@
 /* Leaderboard — vanilla render da site/data/leaderboard.json
-   Desktop: side-by-side shadcn BarChart (div-based) + football table
-   Mobile: animated Tabs (Grafico / Classifica) with slide indicator + panel animation
-   Design system: Fraunces, --ink #171717, --line #d9d9d9, --bg white
+   Vertical bars, logos, no W/D/L in chart, squared, accent fix
 */
 (function () {
   "use strict";
 
   const ACCENT = {
-    "deepseek/deepseek-v4-pro": "#4F46E5",
-    "openai/gpt-5.6-luna": "#10A37F",
+    "deepseek/deepseek-v4-pro": "#2563EB",
+    "deepseek/deepseek-v4-flash": "#2563EB",
+    "openai/gpt-5.6-luna": "#171717",
     "poolside/laguna-s-2.1-free": "#9A65E8",
     "xiaomi/mimo-v2.5-pro": "#FF6900",
-    "deepseek/deepseek-v4-flash": "#0EA5E9",
     "meta/muse-spark-1.2-contributor": "#58A9FF",
+  };
+  const LOGO = {
+    "deepseek/deepseek-v4-pro": "assets/models/deepseek-v4-pro.jpg",
+    "deepseek/deepseek-v4-flash": "assets/models/deepseek-v4-flash.jpg",
+    "openai/gpt-5.6-luna": "assets/models/gpt-5.6-luna.jpg",
+    "poolside/laguna-s-2.1-free": "assets/models/laguna-s-2.1-free.jpg",
+    "xiaomi/mimo-v2.5-pro": "assets/models/mimo-v2.5-pro.jpg",
+    "meta/muse-spark-1.2-contributor": "assets/models/meta-muse-spark-1.2-contributor.jpg",
+  };
+  const INITIALS = {
+    "deepseek/deepseek-v4-pro": "DS P",
+    "deepseek/deepseek-v4-flash": "DS F",
+    "openai/gpt-5.6-luna": "LUNA",
+    "poolside/laguna-s-2.1-free": "LAG",
+    "xiaomi/mimo-v2.5-pro": "MIMO",
+    "meta/muse-spark-1.2-contributor": "SPARK",
   };
   const MOBILE_Q = "(max-width: 860px)";
 
@@ -23,67 +37,66 @@
     return n;
   }
 
-  function renderChart(mount, ranking) {
-    const max = Math.max.apply(null, ranking.map(function (r) { return r.points; })) || 13;
-    const list = el("ol", "lb-chart");
-    list.setAttribute("aria-label", "Grafico punti per modello");
+  function logoImg(model_id, cls) {
+    const src = LOGO[model_id];
+    if (src) {
+      const img = document.createElement("img");
+      img.className = cls;
+      img.src = src;
+      img.alt = "";
+      img.loading = "lazy";
+      img.onerror = function () {
+        const fb = el("span", cls + "--fallback", INITIALS[model_id] || "??");
+        fb.style.background = ACCENT[model_id] || "#171717";
+        img.replaceWith(fb);
+      };
+      return img;
+    }
+    const fb = el("span", cls + "--fallback", INITIALS[model_id] || "??");
+    fb.style.background = ACCENT[model_id] || "#171717";
+    return fb;
+  }
 
-    var head = el("li", "lb-row lb-row--head");
-    head.setAttribute("aria-hidden", "true");
-    head.appendChild(el("span", null, "Modello"));
-    head.appendChild(el("span", null, "Punti"));
-    head.appendChild(el("span", null, ""));
-    list.appendChild(head);
+  function renderChart(mount, ranking) {
+    const max = 13;
+    const list = el("ol", "lb-chart");
+    list.setAttribute("aria-label", "Points by model");
 
     ranking.forEach(function (row) {
-      var li = el("li", "lb-row");
+      var col = el("li", "lb-vcol");
 
-      var label = el("div", "lb-label");
-      var rank = el("span", "lb-rank" + (row.pos === 1 ? " lb-rank--1" : ""), String(row.pos));
-      var nameWrap = el("div", null);
-      var name = el("div", "lb-name", row.public_name);
-      var prod = el("span", "lb-producer", row.producer);
-      nameWrap.appendChild(name);
-      nameWrap.appendChild(prod);
-      label.appendChild(rank);
-      label.appendChild(nameWrap);
+      var points = el("div", "lb-vpoints", String(row.points));
 
-      var track = el("div", "lb-track");
+      var track = el("div", "lb-vtrack");
       track.setAttribute("role", "img");
-      track.setAttribute("aria-label", row.public_name + " " + row.points + " punti");
-      var fill = el("div", "lb-fill");
-      fill.style.width = (row.points / max * 100).toFixed(1) + "%";
+      track.setAttribute("aria-label", row.public_name + " " + row.points + " pts");
+      var fill = el("div", "lb-vfill");
+      var h = max ? (row.points / max * 100) : 0;
+      fill.style.height = h.toFixed(1) + "%";
       fill.style.background = ACCENT[row.model_id] || "var(--ink)";
       track.appendChild(fill);
 
-      var right = el("div", null);
-      var points = el("div", "lb-points", String(row.points));
-      right.appendChild(points);
-      if (row.form && row.form.length) {
-        var form = el("div", "lb-form");
-        row.form.forEach(function (c) {
-          form.appendChild(el("i", c, c));
-        });
-        right.appendChild(form);
-      }
+      var label = el("div", "lb-vlabel");
+      label.appendChild(logoImg(row.model_id, "lb-vlogo"));
+      var nm = el("div", "lb-vname", row.public_name);
+      label.appendChild(nm);
+      // no W/D/L, no producer under chart except tooltip aria
 
-      li.appendChild(label);
-      li.appendChild(track);
-      li.appendChild(right);
-      list.appendChild(li);
+      col.appendChild(points);
+      col.appendChild(track);
+      col.appendChild(label);
+      list.appendChild(col);
     });
 
     mount.replaceChildren(list);
-    // animate fill after paint for 700ms transition
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
-        var fills = mount.querySelectorAll(".lb-fill");
+        var fills = mount.querySelectorAll(".lb-vfill");
         fills.forEach(function (f) {
-          var w = f.style.width;
-          f.style.width = "0%";
-          // force reflow
+          var h = f.style.height;
+          f.style.height = "0%";
           void f.offsetWidth;
-          f.style.width = w;
+          f.style.height = h;
         });
       });
     });
@@ -92,18 +105,17 @@
   function renderTable(mount, ranking) {
     var wrap = el("div", "lb-table-wrap");
     var table = el("table", "lb-table");
-    table.setAttribute("aria-label", "Classifica stile calcio");
+    table.setAttribute("aria-label", "League table");
 
     var thead = document.createElement("thead");
     var hr = document.createElement("tr");
-    ["#", "Squadra", "Pt", "G", "V", "N", "P", "Forma"].forEach(function (h, i) {
+    ["#", "Team", "Pts", "P", "W", "D", "L", "Form"].forEach(function (h, i) {
       var th = el("th", null, h);
-      if (h === "Pt") th.title = "Punti";
-      if (h === "G") th.title = "Giocate";
-      if (h === "V") th.title = "Vinte";
-      if (h === "N") th.title = "Pareggiate";
-      if (h === "P") th.title = "Perse";
-      // align
+      if (h === "Pts") th.title = "Points";
+      if (h === "P") th.title = "Played";
+      if (h === "W") th.title = "Wins";
+      if (h === "D") th.title = "Draws";
+      if (h === "L") th.title = "Losses";
       if (i === 0) th.style.width = "32px";
       if (i === 2) th.style.color = "var(--ink)";
       hr.appendChild(th);
@@ -119,10 +131,15 @@
       tr.appendChild(tdPos);
 
       var tdTeam = el("td", "lb-td-team");
+      var inner = el("div", "lb-td-team-inner");
+      inner.appendChild(logoImg(row.model_id, "lb-td-logo"));
+      var txt = el("div", null);
       var nm = el("div", "lb-td-name", row.public_name);
       var pr = el("div", "lb-td-producer", row.producer);
-      tdTeam.appendChild(nm);
-      tdTeam.appendChild(pr);
+      txt.appendChild(nm);
+      txt.appendChild(pr);
+      inner.appendChild(txt);
+      tdTeam.appendChild(inner);
       tr.appendChild(tdTeam);
 
       var tdPt = el("td", "lb-td-pt", String(row.points));
@@ -134,7 +151,7 @@
       tr.appendChild(el("td", "lb-td-num", String(row.losses)));
 
       var tdForm = el("td", "lb-td-form");
-      var form = el("div", "lb-form lb-form--table");
+      var form = el("div", "lb-form");
       (row.form || []).slice(-5).forEach(function (c) {
         form.appendChild(el("i", c, c));
       });
@@ -146,10 +163,9 @@
     table.appendChild(tbody);
     wrap.appendChild(table);
 
-    // tie-break footnote if present
     var tie = ranking.find(function (r) { return r.tie_break; });
     if (tie) {
-      var foot = el("div", "lb-table-foot", "Nota: " + tie.public_name + " — " + tie.tie_break + ".");
+      var foot = el("div", "lb-table-foot", "Note: " + tie.public_name + " — " + tie.tie_break + ".");
       wrap.appendChild(foot);
     }
 
@@ -172,7 +188,6 @@
 
     function syncDesktop() {
       if (!isMobile()) {
-        // desktop: both visible, no animation, indicator irrelevant
         pChart.classList.add("is-active");
         pChart.classList.remove("is-exiting");
         pTable.classList.add("is-active");
@@ -184,7 +199,6 @@
         tabs.setAttribute("data-active", active);
         return;
       }
-      // mobile: only active visible
       [pChart, pTable].forEach(function (p) { p.hidden = !p.classList.contains("is-active"); });
     }
 
@@ -217,7 +231,6 @@
         return;
       }
 
-      // animate exit then enter
       from.classList.remove("is-active");
       from.classList.add("is-exiting");
       from.addEventListener("animationend", function handler() {
@@ -225,7 +238,6 @@
         from.classList.remove("is-exiting");
         from.hidden = true;
         to.hidden = false;
-        // trigger enter
         void to.offsetWidth;
         to.classList.add("is-active");
       }, { once: true });
@@ -234,7 +246,6 @@
     btnChart.addEventListener("click", function () { setActive("chart"); });
     btnTable.addEventListener("click", function () { setActive("table"); });
 
-    // keyboard: arrow left/right
     tabs.addEventListener("keydown", function (e) {
       if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
         e.preventDefault();
@@ -247,10 +258,8 @@
     });
 
     mql.addEventListener("change", function () {
-      // reset to chart as default on breakpoint change, but respect current active
       syncDesktop();
       if (isMobile()) {
-        // ensure only active shown
         if (active === "chart") {
           pChart.classList.add("is-active"); pChart.hidden = false;
           pTable.classList.remove("is-active"); pTable.hidden = true;
@@ -261,7 +270,6 @@
       }
     });
 
-    // initial
     tabs.setAttribute("data-active", active);
     syncDesktop();
     if (isMobile()) {
@@ -279,8 +287,7 @@
 
     var legend = document.getElementById("leaderboard-legend");
     if (legend) {
-      var max = ranking.length ? Math.max.apply(null, ranking.map(function (r) { return r.points; })) : 13;
-      legend.innerHTML = "<b>" + max + " pt</b> max · Punteggio: <b>3</b> vittoria · <b>1</b> pareggio · <b>0</b> sconfitta · " + (data.series_count || 15) + " serie best-of-3 · round-robin 6 modelli";
+      if(legend) legend.remove();
     }
 
     initTabs();
@@ -291,6 +298,6 @@
     .then(render)
     .catch(function () {
       var m = document.getElementById("leaderboard-chart");
-      if (m) m.textContent = "Classifica non disponibile.";
+      if (m) m.textContent = "Leaderboard unavailable.";
     });
 })();

@@ -23,11 +23,38 @@
 </head>
 <body>
   <main id="content">
-    <section class="hero">
-      <h1 class="title">Sandboxer</h1>
-      <p class="subtitle">A 1v1 cybersecurity benchmark</p>
-      <p class="lede">Two models build and defend their own services, then test the defenses built by their opponent inside a contained arena.</p>
-      <img class="hero-art" src="assets/brand/ctf-arena-hero.jpg" alt="Monochrome isometric CTF diagram of two model sandboxes facing each other across the arena, each holding a flag">
+    <section class="section leaderboard-section" id="leaderboard">
+      <div class="section-inner lb-shell">
+        <h2 class="lb-title">Leaderboard</h2>
+
+        <div class="lb-tabs" role="tablist" aria-label="Leaderboard view">
+          <button type="button" role="tab" class="lb-tab is-active" data-tab="chart" aria-selected="true" aria-controls="lb-panel-chart" id="lb-tab-chart">Chart</button>
+          <button type="button" role="tab" class="lb-tab" data-tab="table" aria-selected="false" aria-controls="lb-panel-table" id="lb-tab-table">Table</button>
+          <span class="lb-tab-indicator" aria-hidden="true"></span>
+        </div>
+
+        <div class="lb-grid" id="lb-grid">
+          <div class="lb-panel lb-panel--chart is-active" id="lb-panel-chart" role="tabpanel" aria-labelledby="lb-tab-chart">
+            <div class="lb-card lb-card--chart">
+              <div class="lb-card-head">
+                <span class="lb-card-title">Points</span>
+                <span class="lb-card-meta">0–13</span>
+              </div>
+              <div id="leaderboard-chart" aria-live="polite">Loading…</div>
+            </div>
+          </div>
+          <div class="lb-panel lb-panel--table is-active" id="lb-panel-table" role="tabpanel" aria-labelledby="lb-tab-table">
+            <div class="lb-card lb-card--table">
+              <div class="lb-card-head">
+                <span class="lb-card-title">Table</span>
+                <span class="lb-card-meta">3 pts win</span>
+              </div>
+              <div id="leaderboard-table" aria-live="polite"></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
     </section>
 
     <section class="section" id="why">
@@ -103,7 +130,6 @@
       <div class="section-inner">
         <h2>Articles</h2>
         <p class="section-lede">Technical write-ups on the design decisions behind the benchmark.</p>
-        <!-- Add new article cards here; each links to blog.html#<article-id> -->
         <a class="paper-link article-card" href="blog.html#kvm-isolation">
           <img class="article-thumb" src="assets/blog/kvm-sandbox-header.jpg" alt="Isometric KVM sandbox illustration thumbnail">
           <span class="article-card-text">
@@ -111,44 +137,6 @@
             <span>Per-match VM provisioning, namespace firewall, phase-scoped tool whitelists, and hash-chained evidence.</span>
           </span>
         </a>
-      </div>
-    </section>
-
-    <section class="section leaderboard-section" id="leaderboard">
-      <div class="section-inner lb-shell">
-        <p class="lb-kicker">Season episode-v12 · 15 series</p>
-        <h2 class="lb-title">Leaderboard</h2>
-        <p class="lb-note"><b>3</b> vittoria · <b>1</b> pareggio · <b>0</b> sconfitta · best-of-3 · round-robin 6 modelli. Barre con accent brand, scala su 13 pt.</p>
-
-        <!-- Mobile tabs — hidden on desktop, animated switch -->
-        <div class="lb-tabs" role="tablist" aria-label="Vista classifica">
-          <button type="button" role="tab" class="lb-tab is-active" data-tab="chart" aria-selected="true" aria-controls="lb-panel-chart" id="lb-tab-chart">Grafico</button>
-          <button type="button" role="tab" class="lb-tab" data-tab="table" aria-selected="false" aria-controls="lb-panel-table" id="lb-tab-table">Classifica</button>
-          <span class="lb-tab-indicator" aria-hidden="true"></span>
-        </div>
-
-        <div class="lb-grid" id="lb-grid">
-          <div class="lb-panel lb-panel--chart is-active" id="lb-panel-chart" role="tabpanel" aria-labelledby="lb-tab-chart">
-            <div class="lb-card lb-card--chart">
-              <div class="lb-card-head">
-                <span class="lb-card-title">Punti</span>
-                <span class="lb-card-meta">scala 0–13</span>
-              </div>
-              <div id="leaderboard-chart" aria-live="polite">Caricamento classifica…</div>
-            </div>
-          </div>
-          <div class="lb-panel lb-panel--table is-active" id="lb-panel-table" role="tabpanel" aria-labelledby="lb-tab-table">
-            <div class="lb-card lb-card--table">
-              <div class="lb-card-head">
-                <span class="lb-card-title">Classifica</span>
-                <span class="lb-card-meta">3V · 1N · 0P</span>
-              </div>
-              <div id="leaderboard-table" aria-live="polite"></div>
-            </div>
-          </div>
-        </div>
-
-        <p id="leaderboard-legend" class="lb-legend"></p>
       </div>
     </section>
 
