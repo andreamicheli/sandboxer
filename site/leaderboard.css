@@ -108,6 +108,8 @@
   align-items: end;
   gap: 10px;
   height: 260px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .lb-vcol {
   flex: 1;
@@ -332,16 +334,17 @@
   .lb-vfill, .lb-tab-indicator, .lb-panel.is-active, .lb-panel.is-exiting { transition: none; animation: none !important; }
 }
 
-/* narrow tweaks */
+/* narrow tweaks — compact for 6 models on narrow mobile (390px) */
 @media (max-width: 640px) {
-  .lb-chart { gap: 6px; padding: 12px 8px 10px; height: 220px; }
-  .lb-vtrack { height: 140px; max-width: none; }
-  .lb-vlogo { width: 30px; height: 30px; }
-  .lb-vname { font-size: 10px; }
+  .lb-chart { gap: 4px; padding: 10px 4px; height: 220px; overflow-x: auto; }
+  .lb-vtrack { height: 120px; max-width: 32px; }
+  .lb-vlogo, .lb-vlogo--fallback { width: 26px; height: 26px; }
+  .lb-vname { font-size: 9px; }
   .lb-vproducer { display: none; }
   .lb-card-head { padding: 12px 14px 10px; }
 }
 @media (max-width: 420px) {
-  .lb-chart { gap: 4px; }
+  .lb-chart { gap: 3px; }
+  .lb-vtrack { max-width: 28px; }
   .lb-table .lb-td-team { min-width: 118px; }
 }

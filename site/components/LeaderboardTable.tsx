@@ -24,22 +24,20 @@ type Entry = {
   tie_break?: string
 }
 
-const LOGO: Record<string, string> = {
-  "deepseek/deepseek-v4-pro": "assets/models/deepseek-v4-pro.jpg",
-  "deepseek/deepseek-v4-flash": "assets/models/deepseek-v4-flash.jpg",
-  "openai/gpt-5.6-luna": "assets/models/gpt-5.6-luna.jpg",
-  "poolside/laguna-s-2.1-free": "assets/models/laguna-s-2.1-free.jpg",
-  "xiaomi/mimo-v2.5-pro": "assets/models/mimo-v2.5-pro.jpg",
-  "meta/muse-spark-1.2-contributor": "assets/models/meta-muse-spark-1.2-contributor.jpg",
+const PRODUCER_BADGE: Record<string, { initials: string; bg: string }> = {
+  "DeepSeek": { initials: "DS", bg: "#2563EB" },
+  "OpenAI":   { initials: "OAI", bg: "#171717" },
+  "Poolside": { initials: "PS", bg: "#9A65E8" },
+  "Xiaomi":   { initials: "MI", bg: "#FF6900" },
+  "Meta":     { initials: "M", bg: "#58A9FF" },
 }
-
-const INITIALS: Record<string, string> = {
-  "deepseek/deepseek-v4-pro": "DS",
-  "deepseek/deepseek-v4-flash": "DS",
-  "openai/gpt-5.6-luna": "L",
-  "poolside/laguna-s-2.1-free": "LS",
-  "xiaomi/mimo-v2.5-pro": "XM",
-  "meta/muse-spark-1.2-contributor": "MS",
+const PRODUCER_BY_MODEL: Record<string, string> = {
+  "deepseek/deepseek-v4-pro": "DeepSeek",
+  "deepseek/deepseek-v4-flash": "DeepSeek",
+  "openai/gpt-5.6-luna": "OpenAI",
+  "poolside/laguna-s-2.1-free": "Poolside",
+  "xiaomi/mimo-v2.5-pro": "Xiaomi",
+  "meta/muse-spark-1.2-contributor": "Meta",
 }
 
 const ACCENT: Record<string, string> = {
@@ -51,29 +49,18 @@ const ACCENT: Record<string, string> = {
   "meta/muse-spark-1.2-contributor": "#58A9FF",
 }
 
-function Logo({ model_id }: { model_id: string }) {
-  const [failed, setFailed] = React.useState(false)
-  const src = LOGO[model_id]
-  const initials = INITIALS[model_id] ?? "??"
-  const bg = ACCENT[model_id] ?? "#171717"
-  if (!src || failed) {
-    return (
-      <span
-        className="inline-flex h-7 w-7 shrink-0 items-center justify-center border border-[var(--line)] text-[9px] font-bold tracking-wide text-white"
-        style={{ background: bg }}
-      >
-        {initials}
-      </span>
-    )
-  }
+function Logo({ model_id, producer }: { model_id: string; producer?: string }) {
+  const prod = producer ?? PRODUCER_BY_MODEL[model_id] ?? ""
+  const badge = PRODUCER_BADGE[prod] ?? { initials: (prod.slice(0, 2).toUpperCase() || "??"), bg: ACCENT[model_id] ?? "#171717" }
   return (
-    <img
-      src={src}
-      alt=""
-      className="h-7 w-7 shrink-0 border border-[var(--line)] object-cover"
-      onError={() => setFailed(true)}
-      loading="lazy"
-    />
+    <span
+      className="inline-flex h-7 w-7 shrink-0 items-center justify-center border border-[var(--line)] text-[9px] font-bold tracking-wide text-white"
+      style={{ background: badge.bg }}
+      aria-label={prod}
+      title={prod}
+    >
+      {badge.initials}
+    </span>
   )
 }
 
@@ -110,7 +97,7 @@ export function LeaderboardTable({ data }: { data: Entry[] }) {
                     <TableCell className="text-center tabular-nums text-[12px] font-semibold text-[#525252]">{r.pos}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <Logo model_id={r.model_id} />
+                        <Logo model_id={r.model_id} producer={r.producer} />
                         <div>
                           <div className="text-[13px] font-medium leading-none text-[var(--ink)]">{r.public_name}</div>
                           <div className="mt-[2px] text-[10px] tracking-[0.04em] uppercase text-[#a3a3a3] leading-none">{r.producer}</div>

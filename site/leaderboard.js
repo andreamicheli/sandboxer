@@ -12,21 +12,22 @@
     "xiaomi/mimo-v2.5-pro": "#FF6900",
     "meta/muse-spark-1.2-contributor": "#58A9FF",
   };
-  const LOGO = {
-    "deepseek/deepseek-v4-pro": "assets/models/deepseek-v4-pro.jpg",
-    "deepseek/deepseek-v4-flash": "assets/models/deepseek-v4-flash.jpg",
-    "openai/gpt-5.6-luna": "assets/models/gpt-5.6-luna.jpg",
-    "poolside/laguna-s-2.1-free": "assets/models/laguna-s-2.1-free.jpg",
-    "xiaomi/mimo-v2.5-pro": "assets/models/mimo-v2.5-pro.jpg",
-    "meta/muse-spark-1.2-contributor": "assets/models/meta-muse-spark-1.2-contributor.jpg",
+  // Producer / company badges - squared initials (no model photos)
+  const PRODUCER_BADGE = {
+    "DeepSeek": { initials: "DS", bg: "#2563EB" },
+    "OpenAI":   { initials: "OAI", bg: "#171717" },
+    "Poolside": { initials: "PS", bg: "#9A65E8" },
+    "Xiaomi":   { initials: "MI", bg: "#FF6900" },
+    "Meta":     { initials: "M", bg: "#58A9FF" },
   };
-  const INITIALS = {
-    "deepseek/deepseek-v4-pro": "DS P",
-    "deepseek/deepseek-v4-flash": "DS F",
-    "openai/gpt-5.6-luna": "LUNA",
-    "poolside/laguna-s-2.1-free": "LAG",
-    "xiaomi/mimo-v2.5-pro": "MIMO",
-    "meta/muse-spark-1.2-contributor": "SPARK",
+  // Fallback map model_id -> producer when ranking row lacks producer field
+  const PRODUCER_BY_MODEL = {
+    "deepseek/deepseek-v4-pro": "DeepSeek",
+    "deepseek/deepseek-v4-flash": "DeepSeek",
+    "openai/gpt-5.6-luna": "OpenAI",
+    "poolside/laguna-s-2.1-free": "Poolside",
+    "xiaomi/mimo-v2.5-pro": "Xiaomi",
+    "meta/muse-spark-1.2-contributor": "Meta",
   };
   const MOBILE_Q = "(max-width: 860px)";
 
@@ -37,24 +38,17 @@
     return n;
   }
 
-  function logoImg(model_id, cls) {
-    const src = LOGO[model_id];
-    if (src) {
-      const img = document.createElement("img");
-      img.className = cls;
-      img.src = src;
-      img.alt = "";
-      img.loading = "lazy";
-      img.onerror = function () {
-        const fb = el("span", cls + "--fallback", INITIALS[model_id] || "??");
-        fb.style.background = ACCENT[model_id] || "#171717";
-        img.replaceWith(fb);
-      };
-      return img;
-    }
-    const fb = el("span", cls + "--fallback", INITIALS[model_id] || "??");
-    fb.style.background = ACCENT[model_id] || "#171717";
-    return fb;
+  function badgeFor(model_id, producer) {
+    var prod = producer || PRODUCER_BY_MODEL[model_id] || "";
+    return PRODUCER_BADGE[prod] || { initials: (prod.slice(0, 2).toUpperCase() || "??"), bg: ACCENT[model_id] || "#171717" };
+  }
+  function logoImg(model_id, cls, producer) {
+    var b = badgeFor(model_id, producer);
+    var span = el("span", cls + "--fallback", b.initials);
+    span.style.background = b.bg;
+    span.setAttribute("aria-label", producer || PRODUCER_BY_MODEL[model_id] || model_id);
+    span.title = producer || PRODUCER_BY_MODEL[model_id] || "";
+    return span;
   }
 
   function renderChart(mount, ranking) {
@@ -77,7 +71,7 @@
       track.appendChild(fill);
 
       var label = el("div", "lb-vlabel");
-      label.appendChild(logoImg(row.model_id, "lb-vlogo"));
+      label.appendChild(logoImg(row.model_id, "lb-vlogo", row.producer));
       var nm = el("div", "lb-vname", row.public_name);
       label.appendChild(nm);
       // no W/D/L, no producer under chart except tooltip aria
@@ -132,7 +126,7 @@
 
       var tdTeam = el("td", "lb-td-team");
       var inner = el("div", "lb-td-team-inner");
-      inner.appendChild(logoImg(row.model_id, "lb-td-logo"));
+      inner.appendChild(logoImg(row.model_id, "lb-td-logo", row.producer));
       var txt = el("div", null);
       var nm = el("div", "lb-td-name", row.public_name);
       var pr = el("div", "lb-td-producer", row.producer);

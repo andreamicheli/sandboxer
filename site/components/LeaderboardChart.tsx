@@ -40,10 +40,10 @@ const SHORT: Record<string, string> = {
 const INITIALS: Record<string, string> = {
   "deepseek/deepseek-v4-pro": "DS",
   "deepseek/deepseek-v4-flash": "DS",
-  "openai/gpt-5.6-luna": "L",
-  "poolside/laguna-s-2.1-free": "LS",
-  "xiaomi/mimo-v2.5-pro": "XM",
-  "meta/muse-spark-1.2-contributor": "MS",
+  "openai/gpt-5.6-luna": "OAI",
+  "poolside/laguna-s-2.1-free": "PS",
+  "xiaomi/mimo-v2.5-pro": "MI",
+  "meta/muse-spark-1.2-contributor": "M",
 }
 
 const chartConfig = {
