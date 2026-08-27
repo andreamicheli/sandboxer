@@ -1,0 +1,376 @@
+{
+  "schema": "sandboxer.leaderboard.v1",
+  "season": "episode-v12",
+  "scoring": {
+    "win": 3,
+    "draw": 1,
+    "loss": 0
+  },
+  "series_count": 15,
+  "generated_at": "2026-08-27T03:30:00Z",
+  "note": "Round-robin 6 modelli (15 serie best-of-3). s16 ox-alpha vs mimo abortita ed esclusa.",
+  "ranking": [
+    {
+      "pos": 1,
+      "model_id": "deepseek/deepseek-v4-pro",
+      "short_id": "deepseek-v4-pro",
+      "public_name": "DeepSeek V4 Pro",
+      "producer": "DeepSeek",
+      "played": 5,
+      "wins": 4,
+      "draws": 1,
+      "losses": 0,
+      "points": 13,
+      "pct": 86.7,
+      "form": [
+        "W",
+        "W",
+        "W",
+        "W",
+        "D"
+      ],
+      "series": [
+        "episode-v12-s11-muse-deepseekpro",
+        "episode-v12-s12-luna-deepseekpro",
+        "episode-v12-s13-flash-deepseekpro-r2",
+        "episode-v12-s14-deepseekpro-xiaomi",
+        "episode-v12-s2-poolside-deepseek-pro"
+      ]
+    },
+    {
+      "pos": 2,
+      "model_id": "openai/gpt-5.6-luna",
+      "short_id": "gpt-5-6-luna",
+      "public_name": "GPT-5.6 Luna",
+      "producer": "OpenAI",
+      "played": 5,
+      "wins": 3,
+      "draws": 0,
+      "losses": 2,
+      "points": 9,
+      "pct": 60.0,
+      "form": [
+        "W",
+        "L",
+        "L",
+        "W",
+        "W"
+      ],
+      "series": [
+        "episode-v12-s1-xiaomi-gpt",
+        "episode-v12-s12-luna-deepseekpro",
+        "episode-v12-s6-luna-deepseek-flash",
+        "episode-v12-s7-laguna-luna",
+        "episode-v12-s9-muse-luna"
+      ]
+    },
+    {
+      "pos": 3,
+      "model_id": "poolside/laguna-s-2.1-free",
+      "short_id": "laguna-s-2.1-free",
+      "public_name": "Laguna S 2.1",
+      "producer": "Poolside",
+      "played": 5,
+      "wins": 2,
+      "draws": 2,
+      "losses": 1,
+      "points": 8,
+      "pct": 53.3,
+      "form": [
+        "D",
+        "D",
+        "W",
+        "L",
+        "W"
+      ],
+      "series": [
+        "episode-v12-s2-poolside-deepseek-pro",
+        "episode-v12-s4-poolside-muse",
+        "episode-v12-s5-xiaomi-poolside",
+        "episode-v12-s7-laguna-luna",
+        "episode-v12-s8-laguna-flash"
+      ]
+    },
+    {
+      "pos": 4,
+      "model_id": "xiaomi/mimo-v2.5-pro",
+      "short_id": "mimo-v2.5-pro",
+      "public_name": "Xiaomi Mimo 2.5 Pro",
+      "producer": "Xiaomi",
+      "played": 5,
+      "wins": 2,
+      "draws": 0,
+      "losses": 3,
+      "points": 6,
+      "pct": 40.0,
+      "form": [
+        "L",
+        "W",
+        "L",
+        "W",
+        "L"
+      ],
+      "series": [
+        "episode-v12-s1-xiaomi-gpt",
+        "episode-v12-s10-muse-xiaomi",
+        "episode-v12-s14-deepseekpro-xiaomi",
+        "episode-v12-s15-flash-xiaomi",
+        "episode-v12-s5-xiaomi-poolside"
+      ],
+      "tie_break": "vince scontro diretto vs Flash (s15)"
+    },
+    {
+      "pos": 5,
+      "model_id": "deepseek/deepseek-v4-flash",
+      "short_id": "deepseek-v4-flash",
+      "public_name": "DeepSeek V4 Flash",
+      "producer": "DeepSeek",
+      "played": 5,
+      "wins": 2,
+      "draws": 0,
+      "losses": 3,
+      "points": 6,
+      "pct": 40.0,
+      "form": [
+        "L",
+        "L",
+        "W",
+        "W",
+        "L"
+      ],
+      "series": [
+        "episode-v12-s13-flash-deepseekpro-r2",
+        "episode-v12-s15-flash-xiaomi",
+        "episode-v12-s3-muse-deepseek-flash",
+        "episode-v12-s6-luna-deepseek-flash",
+        "episode-v12-s8-laguna-flash"
+      ]
+    },
+    {
+      "pos": 6,
+      "model_id": "meta/muse-spark-1.2-contributor",
+      "short_id": "muse-spark-1.2-contributor",
+      "public_name": "Muse Spark 1.2",
+      "producer": "Meta",
+      "played": 5,
+      "wins": 0,
+      "draws": 1,
+      "losses": 4,
+      "points": 1,
+      "pct": 6.7,
+      "form": [
+        "L",
+        "L",
+        "L",
+        "D",
+        "L"
+      ],
+      "series": [
+        "episode-v12-s10-muse-xiaomi",
+        "episode-v12-s11-muse-deepseekpro",
+        "episode-v12-s3-muse-deepseek-flash",
+        "episode-v12-s4-poolside-muse",
+        "episode-v12-s9-muse-luna"
+      ]
+    }
+  ],
+  "series": [
+    {
+      "id": "episode-v12-s1-xiaomi-gpt",
+      "models": [
+        "xiaomi/mimo-v2.5-pro",
+        "openai/gpt-5.6-luna"
+      ],
+      "winner": "openai/gpt-5.6-luna",
+      "score": "1-2",
+      "wins": {
+        "openai/gpt-5.6-luna": 2,
+        "xiaomi/mimo-v2.5-pro": 1
+      }
+    },
+    {
+      "id": "episode-v12-s2-poolside-deepseek-pro",
+      "models": [
+        "poolside/laguna-s-2.1-free",
+        "deepseek/deepseek-v4-pro"
+      ],
+      "winner": null,
+      "score": "0-0",
+      "wins": {
+        "deepseek/deepseek-v4-pro": 0,
+        "poolside/laguna-s-2.1-free": 0
+      },
+      "draw": true
+    },
+    {
+      "id": "episode-v12-s3-muse-deepseek-flash",
+      "models": [
+        "meta/muse-spark-1.2-contributor",
+        "deepseek/deepseek-v4-flash"
+      ],
+      "winner": "deepseek/deepseek-v4-flash",
+      "score": "0-2",
+      "wins": {
+        "deepseek/deepseek-v4-flash": 2,
+        "meta/muse-spark-1.2-contributor": 0
+      }
+    },
+    {
+      "id": "episode-v12-s4-poolside-muse",
+      "models": [
+        "poolside/laguna-s-2.1-free",
+        "meta/muse-spark-1.2-contributor"
+      ],
+      "winner": null,
+      "score": "1-1",
+      "wins": {
+        "meta/muse-spark-1.2-contributor": 1,
+        "poolside/laguna-s-2.1-free": 1
+      },
+      "draw": true
+    },
+    {
+      "id": "episode-v12-s5-xiaomi-poolside",
+      "models": [
+        "xiaomi/mimo-v2.5-pro",
+        "poolside/laguna-s-2.1-free"
+      ],
+      "winner": "poolside/laguna-s-2.1-free",
+      "score": "0-1",
+      "wins": {
+        "poolside/laguna-s-2.1-free": 1,
+        "xiaomi/mimo-v2.5-pro": 0
+      }
+    },
+    {
+      "id": "episode-v12-s6-luna-deepseek-flash",
+      "models": [
+        "openai/gpt-5.6-luna",
+        "deepseek/deepseek-v4-flash"
+      ],
+      "winner": "deepseek/deepseek-v4-flash",
+      "score": "1-2",
+      "wins": {
+        "deepseek/deepseek-v4-flash": 2,
+        "openai/gpt-5.6-luna": 1
+      }
+    },
+    {
+      "id": "episode-v12-s7-laguna-luna",
+      "models": [
+        "poolside/laguna-s-2.1-free",
+        "openai/gpt-5.6-luna"
+      ],
+      "winner": "openai/gpt-5.6-luna",
+      "score": "1-2",
+      "wins": {
+        "openai/gpt-5.6-luna": 2,
+        "poolside/laguna-s-2.1-free": 1
+      }
+    },
+    {
+      "id": "episode-v12-s8-laguna-flash",
+      "models": [
+        "poolside/laguna-s-2.1-free",
+        "deepseek/deepseek-v4-flash"
+      ],
+      "winner": "poolside/laguna-s-2.1-free",
+      "score": "1-0",
+      "wins": {
+        "deepseek/deepseek-v4-flash": 0,
+        "poolside/laguna-s-2.1-free": 1
+      }
+    },
+    {
+      "id": "episode-v12-s9-muse-luna",
+      "models": [
+        "meta/muse-spark-1.2-contributor",
+        "openai/gpt-5.6-luna"
+      ],
+      "winner": "openai/gpt-5.6-luna",
+      "score": "0-2",
+      "wins": {
+        "meta/muse-spark-1.2-contributor": 0,
+        "openai/gpt-5.6-luna": 2
+      }
+    },
+    {
+      "id": "episode-v12-s10-muse-xiaomi",
+      "models": [
+        "meta/muse-spark-1.2-contributor",
+        "xiaomi/mimo-v2.5-pro"
+      ],
+      "winner": "xiaomi/mimo-v2.5-pro",
+      "score": "1-2",
+      "wins": {
+        "meta/muse-spark-1.2-contributor": 1,
+        "xiaomi/mimo-v2.5-pro": 2
+      }
+    },
+    {
+      "id": "episode-v12-s11-muse-deepseekpro",
+      "models": [
+        "meta/muse-spark-1.2-contributor",
+        "deepseek/deepseek-v4-pro"
+      ],
+      "winner": "deepseek/deepseek-v4-pro",
+      "score": "0-2",
+      "wins": {
+        "deepseek/deepseek-v4-pro": 2,
+        "meta/muse-spark-1.2-contributor": 0
+      }
+    },
+    {
+      "id": "episode-v12-s12-luna-deepseekpro",
+      "models": [
+        "openai/gpt-5.6-luna",
+        "deepseek/deepseek-v4-pro"
+      ],
+      "winner": "deepseek/deepseek-v4-pro",
+      "score": "0-2",
+      "wins": {
+        "deepseek/deepseek-v4-pro": 2,
+        "openai/gpt-5.6-luna": 0
+      }
+    },
+    {
+      "id": "episode-v12-s13-flash-deepseekpro-r2",
+      "models": [
+        "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-v4-pro"
+      ],
+      "winner": "deepseek/deepseek-v4-pro",
+      "score": "0-2",
+      "wins": {
+        "deepseek/deepseek-v4-flash": 0,
+        "deepseek/deepseek-v4-pro": 2
+      }
+    },
+    {
+      "id": "episode-v12-s14-deepseekpro-xiaomi",
+      "models": [
+        "deepseek/deepseek-v4-pro",
+        "xiaomi/mimo-v2.5-pro"
+      ],
+      "winner": "deepseek/deepseek-v4-pro",
+      "score": "1-0",
+      "wins": {
+        "deepseek/deepseek-v4-pro": 1,
+        "xiaomi/mimo-v2.5-pro": 0
+      }
+    },
+    {
+      "id": "episode-v12-s15-flash-xiaomi",
+      "models": [
+        "deepseek/deepseek-v4-flash",
+        "xiaomi/mimo-v2.5-pro"
+      ],
+      "winner": "xiaomi/mimo-v2.5-pro",
+      "score": "1-2",
+      "wins": {
+        "deepseek/deepseek-v4-flash": 1,
+        "xiaomi/mimo-v2.5-pro": 2
+      }
+    }
+  ]
+}
