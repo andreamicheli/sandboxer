@@ -19,7 +19,9 @@
 // 9. Disk space in /tmp (490MB free): Set TMPDIR=/home/ubuntu for temp files.
 // ============================================================================
 
-process.env.TMPDIR = '/home/ubuntu';
+if (!process.env.TMPDIR || process.env.TMPDIR === '/home/ubuntu') {
+  process.env.TMPDIR = '/tmp';
+}
 
 const { renderMedia, getCompositions } = require('@remotion/renderer');
 const { bundle } = require('@remotion/bundler');
@@ -29,11 +31,19 @@ const fs = require('fs');
 const entryPoint = path.resolve(__dirname, 'src/index.tsx');
 const outputFile = path.resolve(
   __dirname,
-  process.env.OUTPUT_FILE || '../pilot/artifacts/runs/episode-laguna-muse-v12-fix/sandboxer-v12-fix-game1.mp4'
+  process.env.OUTPUT_FILE || (
+    fs.existsSync(path.resolve(__dirname, '../artifacts'))
+      ? '../artifacts/delivery.mp4'
+      : '../pilot/artifacts/runs/episode-laguna-muse-v12-fix/sandboxer-v12-fix-game1.mp4'
+  )
 );
 const propsPath = path.resolve(
   __dirname,
-  '../pilot/artifacts/runs/episode-laguna-muse-v12-fix/remotion-props.json'
+  process.env.PROPS_FILE || (
+    fs.existsSync(path.resolve(__dirname, '../artifacts/remotion-props.json'))
+      ? '../artifacts/remotion-props.json'
+      : '../pilot/artifacts/runs/episode-laguna-muse-v12-fix/remotion-props.json'
+  )
 );
 
 const props = JSON.parse(fs.readFileSync(propsPath, 'utf-8'));
