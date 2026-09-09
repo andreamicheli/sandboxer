@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from sandboxer_v0.blue_briefs import BlueBrief, select_blue_briefs
-from sandboxer_v0.service_spec import SERVICE_SPEC_VERSION, ServiceSpecError, parse_service_spec
+from sandboxer_v0.service_spec import SERVICE_SPEC_VERSION, ServiceSpec, ServiceSpecError, parse_service_spec
 
 
 def _spec(**overrides):
