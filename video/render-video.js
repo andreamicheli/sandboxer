@@ -29,11 +29,11 @@ const fs = require('fs');
 const entryPoint = path.resolve(__dirname, 'src/index.tsx');
 const outputFile = path.resolve(
   __dirname,
-  '../pilot/artifacts/runs/match-full-pipeline-v7/video-only.mp4'
+  process.env.OUTPUT_FILE || '../pilot/artifacts/runs/episode-laguna-muse-v12-fix/sandboxer-v12-fix-game1.mp4'
 );
 const propsPath = path.resolve(
   __dirname,
-  '../pilot/artifacts/runs/match-full-pipeline-v7/remotion-props.json'
+  '../pilot/artifacts/runs/episode-laguna-muse-v12-fix/remotion-props.json'
 );
 
 const props = JSON.parse(fs.readFileSync(propsPath, 'utf-8'));
@@ -44,7 +44,10 @@ async function main() {
 
   // Step 1: bundle the Remotion project with webpack
   console.log('[render-script] bundling...');
-  const bundled = await bundle({ entryPoint });
+  const bundled = await bundle({
+    entryPoint,
+    publicDir: path.resolve(__dirname, 'public'),
+  });
   console.log('[render-script] bundle URL:', bundled);
 
   // Step 2: get compositions from the bundle
@@ -65,14 +68,22 @@ async function main() {
     process.exit(1);
   }
 
+  const frameRange = process.env.SUBSET_FRAMES
+    ? [0, parseInt(process.env.SUBSET_FRAMES, 10) - 1]
+    : undefined;
+
   console.log('[render-script] rendering composition:', composition.id);
   console.log('[render-script] fps:', composition.fps, 'durationInFrames:', composition.durationInFrames);
+  if (frameRange) {
+    console.log('[render-script] SUBSET_FRAMES active, frameRange:', frameRange);
+  }
 
   await renderMedia({
     serveUrl: bundled,
     composition,
     outputLocation: outputFile,
     inputProps: props,
+    ...(frameRange ? { frameRange } : {}),
     concurrency: 1,
     logLevel: 'info',
     codec: 'h264',
@@ -80,11 +91,15 @@ async function main() {
     pixelFormat: 'yuv420p',
     imageFormat: 'jpeg',
     licenseKey: 'free-license',
+    hardwareAcceleration: 'disable', // Piano 3: forza encoder H.264 software, bypassa GPU difettosa
+    timeout: 120000, // 2 min per frame timeout (era 600000)
     chromiumOptions: {
+      gl: 'swiftshader', // Piano 3: rendering GL software deterministico (era 'angle')
       args: [
         '--disable-dev-shm-usage',
         '--no-sandbox',
-        '--disable-gpu',
+        '--disable-features=Vulkan', // Piano 3: disattiva backend encoder Vulkan (causa NAL corrotte)
+        '--disable-gpu-compositing', // Piano 3: evita compositore GPU sul path video
       ],
     },
   });
