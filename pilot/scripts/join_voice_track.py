@@ -59,7 +59,7 @@ def assemble_voice_track(
 
     # Prefer tts.blocks (actual duration packed schedule) if available, else commentary
     tts_blocks = manifest.get("tts", {}).get("blocks") if isinstance(manifest.get("tts"), Mapping) else None
-    if tts_blocks:
+    if tts_blocks and isinstance(tts_blocks, list):
         block_items = []
         for b in tts_blocks:
             fname = b.get("file") or f"block-{len(block_items):04d}.wav"
