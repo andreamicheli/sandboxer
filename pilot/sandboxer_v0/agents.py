@@ -69,6 +69,8 @@ def _run(
     binary_kind: str,
     timeout_seconds: float,
     cwd: Path | None = None,
+    stdin: int | None = subprocess.DEVNULL,
+    input: str | bytes | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
@@ -76,7 +78,8 @@ def _run(
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
-            stdin=subprocess.DEVNULL,
+            stdin=stdin,
+            input=input if isinstance(input, str) else (input or None),
             cwd=str(cwd) if cwd is not None else None,
         )
     except FileNotFoundError as error:

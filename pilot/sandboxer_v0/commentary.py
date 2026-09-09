@@ -46,6 +46,17 @@ from .agents import HeadlessAgentAdapter, phase_adapter
 PROVENANCE_DETERMINISTIC = "deterministic"
 """Line content derived mechanically from telemetry (never model prose)."""
 
+PROVENANCE_MODEL_DRAFT = "model_draft"
+"""Line content drafted by a headless coding agent (model prose)."""
+
+# Cap on the number of replay frames handed to the headless commentary agent.
+# A full replay can carry tens of thousands of frames; passing them all makes
+# the prompt large enough that ``cmd`` answers in >120s and the regen times out,
+# forcing the deterministic fallback.  Every narratable action event is kept
+# (it is required for grounding), and the remaining budget is filled with
+# evenly-sampled context frames so the model still sees the match's shape.
+MAX_PROMPT_FRAMES = 400
+
 # Replay vocabulary treated as narratable action.  ``artifact_converter.convert``
 # emits MATCH_STARTED / PHASE_TRANSITION / MODEL_RESPONSE / TOOL_CALL /
 # MATCH_FINISHED; series-level producers add gate-opening and verified-submission
@@ -57,6 +68,7 @@ ACTION_EVENT_TYPES = frozenset({
 })
 
 LINE_WINDOW_SECONDS = 8      # a line's [start_frame, end_frame) window cap
+MIN_LINE_GAP_SECONDS = 1.2   # min pause before next line when neither line is heated
 DEAD_AIR_SECONDS = 15        # silence longer than this earns a filler recap
 LINE_TARGET_SECONDS = 3.5    # soft per-line speech budget
 _CHARS_PER_SECOND = 12.4     # measured Fish s2.1 pace (episode-v8d telemetry)
@@ -358,9 +370,13 @@ def build_commentary(
             _emit(candidate["role"], candidate["model"], begin,
                   candidate["text"], candidate["ids"], candidate["type"])
 
-    # Dead-air filler: real gaps between windows become analyst recaps that
+    # Dead-air filler: real gaps between windows become recaps that
     # cite only actions the viewer has already seen.
+    # Primary voice (play_by_play / Kore) leads the broadcast and dead-air recaps;
+    # analyst (Charon) supports (1 out of every 3 fillers) to preserve the
+    # 2:1 to 3:1 play_by_play:analyst balance.
     filled: list[dict[str, Any]] = []
+    filler_count = 0
     for position, entry in enumerate(entries):
         filled.append(entry)
         if position + 1 >= len(entries):
@@ -374,17 +390,38 @@ def build_commentary(
         phrases = "; ".join(_recap_phrase(item) for item in window[:_RECAP_PHRASES_MAX])
         filler_start = max(entry["start"] + 1,
                            entry["start"] + fps * LINE_WINDOW_SECONDS)
-        filled.append({"role": "analyst", "model": "",
+        role = "analyst" if filler_count % 3 == 0 else "play_by_play"
+        filler_count += 1
+        filled.append({"role": role, "model": "",
                        "start": min(filler_start, entries[position + 1]["start"] - fps),
                        "text": f"While the arena holds quiet, the story so far: {phrases}.",
                        "ids": ids, "type": "observed"})
+
+    # Heated moments (red phase / capture beats) keep a tight rhythm: no
+    # minimum gap.  ``line_context`` + ``CAPTURE_KINDS`` from
+    # ``commentary_emotion`` already derive phase red / capture excitement,
+    # i.e. exactly the signals behind the [excited]/[tense, urgent] TTS cues.
+    # Local import: commentary_emotion imports _action_kind from here, so a
+    # top-level import would be circular.
+    from .commentary_emotion import CAPTURE_KINDS, line_context
+
+    terminal_events = {str(frame.get("event_id")): frame for frame in frames
+                       if frame.get("event_id") is not None}
+
+    def _is_heated(entry: Mapping[str, Any]) -> bool:
+        shim = {"event_ids": entry.get("ids", entry.get("event_ids", ()))}
+        ctx = line_context(shim, terminal_events=terminal_events)
+        return ctx["phase"] == "red" or ctx["event_kind"] in CAPTURE_KINDS
 
     lines: list[dict[str, Any]] = []
     for position, entry in enumerate(filled):
         next_start = filled[position + 1]["start"] if position + 1 < len(filled) else None
         end = entry["start"] + fps * LINE_WINDOW_SECONDS
         if next_start is not None:
-            end = min(end, next_start)
+            heated_now = _is_heated(entry)
+            heated_next = _is_heated(filled[position + 1])
+            gap = 0 if (heated_now or heated_next) else int(round(fps * MIN_LINE_GAP_SECONDS))
+            end = min(end, next_start - gap)
         lines.append({
             "voice_role": entry["role"],
             "model": entry["model"],
@@ -526,6 +563,34 @@ class HeadlessCommentaryDrafter:
         text = self._adapter.complete(self._prompt(replay, report))
         return self._parse(text, replay)
 
+    def _select_prompt_frames(
+        self, frames: Sequence[Mapping[str, Any]]
+    ) -> list[Mapping[str, Any]]:
+        """Pick a small, representative frame subset for the agent prompt.
+
+        Large replays carry tens of thousands of telemetry frames; feeding them
+        all bloats the prompt so ``cmd`` answers in >120s and the regen times
+        out (falling back to ``build_commentary``).  We keep every narratable
+        action event — the model must ground lines to those event IDs — and
+        spend the rest of the :data:`MAX_PROMPT_FRAMES` budget on an
+        evenly-strided sample of the remaining context frames, preserving
+        chronological order so the rundown still reads as a match.
+        """
+        frames = list(frames)
+        if len(frames) <= MAX_PROMPT_FRAMES:
+            return frames
+        kept: set[int] = {
+            i for i, frame in enumerate(frames)
+            if str(frame.get("event_type", "")) in ACTION_EVENT_TYPES
+        }
+        room = MAX_PROMPT_FRAMES - len(kept)
+        if room > 0:
+            non_action = [i for i in range(len(frames)) if i not in kept]
+            step = max(1, len(non_action) / room)
+            for k in range(min(room, len(non_action))):
+                kept.add(non_action[int(k * step)])
+        return [frames[i] for i in sorted(kept)]
+
     def _prompt(self, replay: Mapping[str, Any], report: Mapping[str, Any]) -> str:
         identities = [str(pane["identity"]) for pane in replay.get("panes", ())]
         frames = [
@@ -535,7 +600,7 @@ class HeadlessCommentaryDrafter:
                 "pane": frame.get("pane", 0),
                 "text": frame.get("text", ""),
             }
-            for frame in replay.get("frames", ())
+            for frame in self._select_prompt_frames(replay.get("frames", ()))
         ]
         return json.dumps(
             {
@@ -553,12 +618,12 @@ class HeadlessCommentaryDrafter:
                     "grounding": "every line's event_ids must reference real event IDs below",
                     "hedging": "interpreted lines must use 'appears', 'seems', or similar",
                     "tone": "human, curious, engaging; a simulated CTF, never glorify real harm",
-                    "length": "produce at most 10 lines total; keep each line under 25 words; let the analyst voice speak less often (roughly one analyst line per two play-by-play lines)",
+                    "length": "produce at least 50 lines total (aim for 60-70); hard limit 25 words per line; let the analyst voice speak less often (roughly one analyst line per two play-by-play lines)",
                 },
                 "identities": identities,
                 "outcome": report.get("outcome", {}),
                 "frames": frames,
-                "output": '{"lines":[{"voice_role","line_type","event_ids","text"}, ...]}',
+                "output": '{"lines":[{"voice_role","line_type","event_ids","text","model"}, ...]}',
             },
             indent=2,
         )
@@ -583,6 +648,26 @@ class HeadlessCommentaryDrafter:
             raise CommentaryError("COMMENTARY_EMPTY")
         lines = [dict(line) for line in lines]
         _repair_line_types(lines)
+        # Derive a "model" for each line when the drafter omitted the optional
+        # field, by mapping the line's anchor event to its pane identity.  This
+        # keeps the dense schema self-consistent (FIX_PLAN kore/charon, root 1)
+        # and prevents an otherwise-valid draft from failing a model-coverage
+        # expectation.  Lines that still lack a model settle to "".
+        known_identities = [str(p["identity"]) for p in replay.get("panes", ())]
+        event_to_identity: dict[str, str] = {}
+        for frame in replay.get("frames", ()):
+            eid = str(frame.get("event_id", ""))
+            pane = frame.get("pane")
+            if eid and isinstance(pane, int) and 0 <= pane < len(known_identities):
+                event_to_identity[eid] = known_identities[pane]
+        for line in lines:
+            if not line.get("model"):
+                model = ""
+                for eid in (str(item) for item in line.get("event_ids", ())):
+                    if eid in event_to_identity:
+                        model = event_to_identity[eid]
+                        break
+                line["model"] = model
         failures = validate_commentary(lines, replay.get("frames", ()))
         if failures:
             raise CommentaryError(f"COMMENTARY_INVALID: {'; '.join(failures)}")
