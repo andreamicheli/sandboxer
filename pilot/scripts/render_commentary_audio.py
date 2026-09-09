@@ -184,19 +184,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"updated {args.manifest} with packed commentary schedule")
 
     # Assemble the full-length track with each block at its start_frame.
-    track = bytearray(total_ms * RATE // 1000 * 2)
-    for block in section["blocks"]:
-        with wave.open(str(args.out_dir / block["file"]), "rb") as reader:
-            data = reader.readframes(reader.getnframes())
-        at = block["start_frame"] * RATE // fps
-        end = min(len(track) // 2, at + len(data) // 2)
-        track[at * 2 : end * 2] = data[: (end - at) * 2]
-    args.track.parent.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(args.track), "wb") as writer:
-        writer.setnchannels(1)
-        writer.setsampwidth(2)
-        writer.setframerate(RATE)
-        writer.writeframes(bytes(track))
+    from scripts.join_voice_track import assemble_voice_track
+    manifest["tts"]["blocks"] = section["blocks"]
+    assemble_voice_track(manifest, args.out_dir, args.track)
     print(f"wrote {args.track} ({total_ms / 1000:.1f}s track)")
     return 0
 
