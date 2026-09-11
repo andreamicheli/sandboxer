@@ -31,17 +31,22 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import stat
 import subprocess
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from .arena_safety import NetworkObservation, Phase, TeardownEvidence, TeardownState
+from .local_kvm_control import parse_control, parse_network_proof
+from .local_kvm_tools import RunnerToolExecutionError, encode_tool_request, parse_tool_response
 from .runner_backend import PreflightCheck, PreflightWitnessFailed, RunnerHandle
+from .service_spec import ServiceSpec, parse_service_spec
 
 _SAFE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 _RUNNER_USER = "10001"  # `arena` user in pilot/docker/runner.Dockerfile
@@ -104,6 +109,9 @@ class _RunnerRecord:
     match_id: str
     container: str
     network: str
+    subnet: str
+    ip: str
+    nonce: str
     root: Path
     deadline: float
     timer: threading.Timer | None = None
@@ -140,16 +148,23 @@ class LocalDockerRunnerProvider:
             raise RuntimeError("MATCH_ROOT_UNSAFE")
         digest = hashlib.sha256(match_id.encode("ascii")).hexdigest()[:12]
         network = f"sbx-arena-{digest}"
+        # Deterministic per-match /24 under 10.77.0.0/16 (mirrors the KVM Arena
+        # numbering; peers are always .11/.12). Parallel matches sharing an
+        # octet collide on create and fail closed; matches run serially.
+        octet = 1 + (int(digest, 16) % 200)
+        subnet = f"10.77.{octet}.0/24"
         created: list[_RunnerRecord] = []
         try:
             self._run(
                 ("network", "create", "--internal", "--driver", "bridge",
+                 "--subnet", subnet,
                  "--label", f"sandboxer.match={match_id}", network),
                 "ARENA_NETWORK_CREATE_FAILED",
             )
-            for name in names:
+            for index, name in enumerate(names):
                 container = f"sbx-{digest}-{name}"
-                record = self._provision_runner(match_id, name, container, network, match_root)
+                ip = f"10.77.{octet}.{11 + index}"
+                record = self._provision_runner(match_id, name, container, network, subnet, ip, match_root)
                 created.append(record)
                 self._records[record.handle.runner_id] = record
         except Exception:
@@ -165,16 +180,30 @@ class LocalDockerRunnerProvider:
         records = self._require_records(runners)
         self._enforce_ttl(records)
         try:
-            states = [self._inspect(record.container) for record in records]
+            responses = [self._control_probe(record) for record in records]
         except PreflightWitnessFailed:
             raise
+        except Exception as error:
+            raise PreflightWitnessFailed("LOCAL_DOCKER_CONTROL_UNAVAILABLE") from error
+        toy_states = {item.toy_bootstrap for item in responses}
+        if toy_states != {"ready"}:
+            state = next(iter(toy_states)) if len(toy_states) == 1 else "unknown"
+            raise PreflightWitnessFailed(f"LOCAL_DOCKER_TOY_BOOTSTRAP_{state.upper()}")
+        try:
+            network = self._measure_network(records, Phase.BLUE)
+        except PreflightWitnessFailed:
+            raise
+        except Exception as error:
+            raise PreflightWitnessFailed("LOCAL_DOCKER_BLUE_NETWORK_WITNESS_UNAVAILABLE") from error
+        try:
+            states = [self._inspect(record.container) for record in records]
         except Exception as error:
             raise PreflightWitnessFailed("LOCAL_DOCKER_INSPECT_UNAVAILABLE") from error
         unique_containers = len({record.container for record in records}) == 2
         now = time.monotonic()
         checks: list[PreflightCheck] = []
-        for record, state in zip(records, states):
-            checks.extend(self._probe_runner(record, state, now))
+        for record, item, state in zip(records, responses, states):
+            checks.extend(self._probe_runner(record, item, state, now))
         # Collapse per-runner witnesses into the provider-level probe tuple.
         by_name: dict[str, PreflightCheck] = {}
         for check in checks:
@@ -188,6 +217,10 @@ class LocalDockerRunnerProvider:
                 "telemetry_egress", "clock", "ttl", "health", "cleanup_capability",
             )],
         )
+        # The backend cross-checks the backend-level network policy; surface the
+        # measured observation here so a direct-observation leak fails closed.
+        if network.orchestrator_reachable or network.direct_egress:
+            raise PreflightWitnessFailed("LOCAL_DOCKER_BLUE_NETWORK_WITNESS_FAILED")
         return ordered
 
     def network_observation(
@@ -201,13 +234,14 @@ class LocalDockerRunnerProvider:
                     # A container started on `--network none` cannot be
                     # connected to a second network directly; detach the
                     # `none` stub first (the Runner stays without egress
-                    # throughout — disconnect and connect are back-to-back).
+                    # throughout — disconnect and connect are back-to-back),
+                    # attaching its deterministic Arena address.
                     self._run(
                         ("network", "disconnect", "none", record.container),
                         "NETWORK_POLICY_APPLY_FAILED",
                     )
                     self._run(
-                        ("network", "connect", record.network, record.container),
+                        ("network", "connect", "--ip", record.ip, record.network, record.container),
                         "NETWORK_POLICY_APPLY_FAILED",
                     )
                     record.phase = Phase.RED
@@ -266,11 +300,94 @@ class LocalDockerRunnerProvider:
 
     # -- internals -----------------------------------------------------------
 
+    def execute_tool(self, runner: RunnerHandle, tool: str, arguments: dict[str, object]) -> str:
+        """Execute one validated tool through the Runner control agent."""
+        record = self._records.get(runner.runner_id)
+        if record is None or record.handle != runner:
+            raise RuntimeError("RUNNER_TOOL_RUNNER_UNKNOWN")
+        self._enforce_ttl([record])
+        request = encode_tool_request(record.nonce, tool, arguments)
+        parts = request.strip().split(" ")
+        try:
+            response = self._exec(record, "TOOL", *parts[1:], timeout_seconds=30)
+            return parse_tool_response(response + "\n", record.nonce)
+        except RunnerToolExecutionError:
+            raise
+        except RuntimeError:
+            raise
+        except Exception as error:
+            raise RuntimeError("RUNNER_TOOL_CONTROL_UNAVAILABLE") from error
+
+    def place_synthetic_flag(self, runner: RunnerHandle, flag: str) -> None:
+        self.execute_tool(runner, "orchestrator_place_flag", {"flag": flag})
+
+    def deploy_service(
+        self,
+        runner: RunnerHandle,
+        raw_spec: str,
+        *,
+        brief=None,
+        brief_family: str | None = None,
+        public_note: str | None = None,
+    ) -> ServiceSpec:
+        """Validate a declarative defense outside the Runner, then promote it."""
+        spec = parse_service_spec(raw_spec, brief=brief, brief_family=brief_family, public_note=public_note)
+        result = self.execute_tool(runner, "orchestrator_deploy_service", {"config": spec.render_runtime_config()})
+        if not result.startswith("deployment promoted "):
+            raise RuntimeError("SERVICE_DEPLOYMENT_UNPROMOTED")
+        return spec
+
+    def service_request(
+        self, runner: RunnerHandle, *, peer: str, method: str, path: str, headers: str, body: str
+    ) -> str:
+        return self.execute_tool(runner, "orchestrator_http_request", {
+            "peer": peer, "method": method, "path": path, "headers": headers, "body": body,
+        })
+
+    def runner_address(self, runner: RunnerHandle) -> str:
+        record = self._records.get(runner.runner_id)
+        if record is None or record.handle != runner:
+            raise RuntimeError("RUNNER_TOOL_RUNNER_UNKNOWN")
+        return record.ip
+
+    def verified_submission(self, runner: RunnerHandle) -> str:
+        try:
+            return self.execute_tool(runner, "orchestrator_read_submission", {})
+        except RuntimeError as error:
+            if str(error) == "RUNNER_TOOL_EXECUTION_FAILED":
+                return ""
+            raise
+
+    def workspace_digest(self, runner: RunnerHandle) -> str:
+        return self.execute_tool(runner, "orchestrator_workspace_digest", {}).strip()
+
+    def peer_flag_witness(self, runner: RunnerHandle, peer: str) -> bool:
+        return self.execute_tool(runner, "orchestrator_peer_flag_witness", {"peer": peer}).strip() == "reachable"
+
+    def _exec(self, record: _RunnerRecord, *args: str, timeout_seconds: float = 30) -> str:
+        """Run the in-container control agent; fail closed on any anomaly."""
+        try:
+            result = self._host.run(
+                ("exec", record.container, "/usr/local/bin/runner-control", *args),
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception as error:
+            raise RuntimeError("RUNNER_TOOL_CONTROL_UNAVAILABLE") from error
+        if result.returncode != 0 or not result.stdout.strip():
+            raise RuntimeError("RUNNER_TOOL_CONTROL_UNAVAILABLE")
+        lines = result.stdout.strip().splitlines()
+        if len(lines) > 4:
+            raise RuntimeError("RUNNER_TOOL_CONTROL_UNAVAILABLE")
+        return "\n".join(lines)
+
     def _provision_runner(
-        self, match_id: str, name: str, container: str, network: str, match_root: Path
+        self, match_id: str, name: str, container: str, network: str,
+        subnet: str, ip: str, match_root: Path,
     ) -> _RunnerRecord:
         root = match_root / name
         root.mkdir(mode=0o700)
+        nonce = secrets.token_urlsafe(18)
+        runner_uuid = str(uuid.uuid4())
         self._run(("rm", "-f", container), "", allow_failure=True)
         result = self._run(
             ("run", "-d",
@@ -289,6 +406,10 @@ class LocalDockerRunnerProvider:
              "--memory-swap", f"{self.config.memory_mib}m",
              "--cpus", f"{self.config.cpus:.1f}",
              "--stop-timeout", "5",
+             "-e", f"SANDBOXER_NONCE={nonce}",
+             "-e", f"SANDBOXER_RUNNER_UUID={runner_uuid}",
+             "-e", f"SANDBOXER_ARENA_SUBNET={subnet}",
+             "-e", f"SANDBOXER_TOY_PORT={self.config.toy_service_port}",
              "--entrypoint", "/usr/local/bin/runner-entrypoint",
              self.config.image),
             "RUNNER_CREATE_FAILED",
@@ -305,14 +426,70 @@ class LocalDockerRunnerProvider:
             resource_limits=True,
             ephemeral_service_state=True,
         )
-        record = _RunnerRecord(handle, match_id, container, network, root, deadline)
+        record = _RunnerRecord(handle, match_id, container, network, subnet, ip, nonce, root, deadline)
         record.timer = self._arm_ttl(record)
         if not self._container_running(container):
             self._destroy_record(record, "RUNNER_START_FAILED")
             raise RuntimeError("RUNNER_START_FAILED")
         return record
 
-    def _probe_runner(self, record: _RunnerRecord, state: dict, now: float) -> list[PreflightCheck]:
+    def _control_probe(self, record: _RunnerRecord):
+        try:
+            response = self._exec(record, "PROBE", record.nonce, timeout_seconds=30)
+        except RuntimeError as error:
+            raise PreflightWitnessFailed("LOCAL_DOCKER_CONTROL_UNAVAILABLE") from error
+        try:
+            return parse_control(response, record.nonce, require_probe=True)
+        except Exception as error:
+            raise PreflightWitnessFailed("LOCAL_DOCKER_CONTROL_INVALID_FRAME") from error
+
+    def _network_proofs(self, records: list[_RunnerRecord], phase: Phase) -> list:
+        proofs = []
+        for index, record in enumerate(records):
+            peer = records[1 - index].ip
+            try:
+                response = self._exec(
+                    record, "NETPROBE", record.nonce, phase.value, peer, timeout_seconds=60,
+                )
+            except RuntimeError as error:
+                raise PreflightWitnessFailed("LOCAL_DOCKER_NETWORK_WITNESS_UNAVAILABLE") from error
+            try:
+                proofs.append(parse_network_proof(response, record.nonce, phase.value))
+            except Exception as error:
+                raise PreflightWitnessFailed("LOCAL_DOCKER_NETWORK_PROOF_INVALID") from error
+        return proofs
+
+    @staticmethod
+    def _require_blue_network_proofs(proofs: list) -> None:
+        checks = (
+            ("LOCAL_DOCKER_BLUE_PEER_ISOLATION_WITNESS_FAILED", lambda proof: proof.peer_denied),
+            ("LOCAL_DOCKER_BLUE_TOY_SERVICE_WITNESS_FAILED", lambda proof: not proof.toy_http),
+            ("LOCAL_DOCKER_BLUE_ALTERNATE_PORT_WITNESS_FAILED", lambda proof: proof.alternate_denied),
+            ("LOCAL_DOCKER_BLUE_ICMP_WITNESS_FAILED", lambda proof: proof.icmp_denied),
+            ("LOCAL_DOCKER_BLUE_ORCHESTRATOR_WITNESS_FAILED", lambda proof: proof.orchestrator_denied),
+        )
+        for reason_code, passed in checks:
+            if not all(passed(proof) for proof in proofs):
+                raise PreflightWitnessFailed(reason_code)
+        if not all(proof.egress_denied for proof in proofs):
+            raise PreflightWitnessFailed("LOCAL_DOCKER_BLUE_EGRESS_TCP_WITNESS_FAILED")
+
+    @staticmethod
+    def _require_red_network_proofs(proofs: list) -> None:
+        checks = (
+            ("LOCAL_DOCKER_RED_LOCAL_TOY_SERVICE_WITNESS_FAILED", lambda proof: proof.local_toy),
+            ("LOCAL_DOCKER_RED_DECLARED_TOY_TCP_WITNESS_FAILED", lambda proof: proof.peer_tcp),
+            ("LOCAL_DOCKER_RED_DECLARED_TOY_HTTP_WITNESS_FAILED", lambda proof: not proof.peer_denied and proof.toy_http),
+            ("LOCAL_DOCKER_RED_ALTERNATE_PORT_WITNESS_FAILED", lambda proof: proof.alternate_denied),
+            ("LOCAL_DOCKER_RED_ICMP_WITNESS_FAILED", lambda proof: proof.icmp_denied),
+            ("LOCAL_DOCKER_RED_EGRESS_WITNESS_FAILED", lambda proof: proof.egress_denied),
+            ("LOCAL_DOCKER_RED_ORCHESTRATOR_WITNESS_FAILED", lambda proof: proof.orchestrator_denied),
+        )
+        for reason_code, passed in checks:
+            if not all(passed(proof) for proof in proofs):
+                raise PreflightWitnessFailed(reason_code)
+
+    def _probe_runner(self, record: _RunnerRecord, item, state: dict, now: float) -> list[PreflightCheck]:
         host_config = state.get("HostConfig", {})
         config = state.get("Config", {})
         mounts = state.get("Mounts", [])
@@ -323,17 +500,14 @@ class LocalDockerRunnerProvider:
         non_root = bool(user) and user not in ("0", "root", "0:0")
         memory_ok = int(host_config.get("Memory", 0)) == self.config.memory_mib * 1024 * 1024
         pids_ok = int(host_config.get("PidsLimit", 0)) == self.config.pids_max
-        networks = state.get("NetworkSettings", {}).get("Networks", {})
-        isolated = not networks or set(networks) == {"none"}
-        started_at = str(state.get("State", {}).get("StartedAt", ""))
         return [
-            PreflightCheck("orchestrator_unreachable", running and isolated, "ORCHESTRATOR_REACHABLE"),
-            PreflightCheck("no_host_mounts", running and readonly and no_binds, "HOST_MOUNT_DETECTED"),
-            PreflightCheck("no_credentials", running and non_root, "CREDENTIAL_EXPOSURE"),
+            PreflightCheck("orchestrator_unreachable", running and item.uid != 0, "ORCHESTRATOR_REACHABLE"),
+            PreflightCheck("no_host_mounts", running and readonly and no_binds and item.private_mounts, "HOST_MOUNT_DETECTED"),
+            PreflightCheck("no_credentials", running and non_root and item.no_credentials, "CREDENTIAL_EXPOSURE"),
             PreflightCheck("telemetry_egress", running, "TELEMETRY_EGRESS_UNAVAILABLE"),
-            PreflightCheck("clock", running and bool(started_at) and not started_at.startswith("0001-"), "CLOCK_UNVERIFIED"),
+            PreflightCheck("clock", running and item.clock_epoch > 0, "CLOCK_UNVERIFIED"),
             PreflightCheck("ttl", record.deadline > now, "TTL_UNVERIFIED"),
-            PreflightCheck("health", running and non_root and memory_ok and pids_ok, "RUNNER_HEALTH_UNVERIFIED"),
+            PreflightCheck("health", running and non_root and memory_ok and pids_ok and item.uid != 0, "RUNNER_HEALTH_UNVERIFIED"),
             PreflightCheck("cleanup_capability", running, "CLEANUP_UNAVAILABLE"),
         ]
 
@@ -347,13 +521,33 @@ class LocalDockerRunnerProvider:
                 state = self._inspect(record.container)
             except Exception as error:
                 raise PreflightWitnessFailed("LOCAL_DOCKER_NETWORK_WITNESS_UNAVAILABLE") from error
-            networks = set(state.get("NetworkSettings", {}).get("Networks", {}))
+            networks = state.get("NetworkSettings", {}).get("Networks", {})
             if phase is Phase.BLUE:
-                if networks - {"none"}:
+                if set(networks) - {"none"}:
                     raise PreflightWitnessFailed("LOCAL_DOCKER_BLUE_EGRESS_WITNESS_FAILED")
             else:
-                if networks != {record.network}:
+                if set(networks) != {record.network}:
                     raise PreflightWitnessFailed("LOCAL_DOCKER_RED_NETWORK_WITNESS_FAILED")
+                try:
+                    endpoint = networks[record.network]
+                except (KeyError, TypeError) as error:
+                    raise PreflightWitnessFailed("LOCAL_DOCKER_RED_NETWORK_WITNESS_FAILED") from error
+                if endpoint.get("IPAddress", "") != record.ip:
+                    raise PreflightWitnessFailed("LOCAL_DOCKER_RED_ADDRESS_WITNESS_FAILED")
+        if phase is Phase.RED:
+            # The Arena network must be internal: no host route, no egress.
+            result = self._run(("network", "inspect", records[0].network), "LOCAL_DOCKER_NETWORK_WITNESS_UNAVAILABLE")
+            try:
+                inspected = json.loads(result.stdout)
+            except json.JSONDecodeError as error:
+                raise PreflightWitnessFailed("LOCAL_DOCKER_NETWORK_WITNESS_UNAVAILABLE") from error
+            if not inspected or not all(net.get("Internal") for net in inspected):
+                raise PreflightWitnessFailed("LOCAL_DOCKER_RED_NETWORK_NOT_INTERNAL")
+        proofs = self._network_proofs(records, phase)
+        if phase is Phase.BLUE:
+            self._require_blue_network_proofs(proofs)
+        else:
+            self._require_red_network_proofs(proofs)
         edges = set(policy_edges)
         if phase is Phase.RED:
             edges |= {f"{names[0]}->toy-service", f"{names[1]}->toy-service"}

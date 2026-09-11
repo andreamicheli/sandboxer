@@ -29,6 +29,7 @@ from sandboxer_v0.command_code import (
     CommandCodeResult,
     ThinkingLoopWatchdog,
 )
+from sandboxer_v0.local_docker import LocalDockerConfig, LocalDockerRunnerProvider
 from sandboxer_v0.local_kvm import LocalKvmConfig, LocalKvmRunnerProvider
 from sandboxer_v0.runner_tool_server import RunnerToolServer, ToolDecision
 from sandboxer_v0.service_spec import SERVICE_SPEC_VERSION, ServiceSpec, ServiceSpecError, parse_service_spec
@@ -222,15 +223,27 @@ async def execute_match(args: argparse.Namespace) -> dict[str, object]:
     seed = args.seed or args.match_id
     brief = select_blue_briefs(seed, count=1)[0]
     blue_brief_manifest = brief_manifest(brief)
-    qemu_account = pwd.getpwnam("sandboxer-runner")
     command_account = pwd.getpwnam("ubuntu")
-    provider = LocalKvmRunnerProvider(LocalKvmConfig(
-        runner_root=args.runner_root, base_image=args.image,
-        base_image_sha256=_sha256(args.image), base_profile=args.profile,
-        qemu_user=qemu_account.pw_name, qemu_uid=qemu_account.pw_uid, qemu_gid=qemu_account.pw_gid,
-        toy_service_port=8080, ttl_seconds=args.ttl_seconds,
-    ))
-    args.evidence_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+    if args.provider == "kvm":
+        qemu_account = pwd.getpwnam("sandboxer-runner")
+        provider = LocalKvmRunnerProvider(LocalKvmConfig(
+            runner_root=args.runner_root, base_image=args.image,
+            base_image_sha256=_sha256(args.image), base_profile=args.profile,
+            qemu_user=qemu_account.pw_name, qemu_uid=qemu_account.pw_uid, qemu_gid=qemu_account.pw_gid,
+            toy_service_port=8080, ttl_seconds=args.ttl_seconds,
+        ))
+    else:
+        if not args.image_digest:
+            raise MatchCalibrationError("DOCKER_IMAGE_DIGEST_MISSING")
+        provider = LocalDockerRunnerProvider(LocalDockerConfig(
+            runner_root=args.runner_root, image=str(args.image),
+            image_digest=args.image_digest,
+            toy_service_port=8080, ttl_seconds=args.ttl_seconds,
+        ))
+    try:
+        args.evidence_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+    except OSError as error:
+        raise MatchCalibrationError("EVIDENCE_DIR_UNWRITABLE") from error
     telemetry_path = args.evidence_dir / f"{args.match_id}.telemetry.jsonl"
     stop_path = args.evidence_dir / f"{args.match_id}.stop"
     result_path = args.evidence_dir / f"{args.match_id}.result.json"
@@ -301,7 +314,7 @@ async def execute_match(args: argparse.Namespace) -> dict[str, object]:
                 if tool == "request_own_service":
                     result = provider.service_request(selected, peer=provider.runner_address(selected), **values)  # type: ignore[arg-type]
                 elif tool == "http_request":
-                    peer = "10.77.0.12" if selected_model == models[0] else "10.77.0.11"
+                    peer = addrs[1] if selected_model == models[0] else addrs[0]
                     result = provider.service_request(selected, peer=peer, **values)  # type: ignore[arg-type]
                 else:
                     result = provider.execute_tool(selected, tool, values)
@@ -344,6 +357,7 @@ async def execute_match(args: argparse.Namespace) -> dict[str, object]:
 
     try:
         runners = provider.provision(args.match_id, tuple(_runner_name(model) for model in models))
+        addrs = (provider.runner_address(runners[0]), provider.runner_address(runners[1]))
         checks = provider.probe(runners)
         if not all(item.passed for item in checks):
             raise MatchCalibrationError("RUNNER_PREFLIGHT_FAILED")
@@ -388,11 +402,11 @@ async def execute_match(args: argparse.Namespace) -> dict[str, object]:
         try:
             peer_witnesses = (
                 provider.service_request(
-                    runners[0], peer="10.77.0.12", method="GET",
+                    runners[0], peer=addrs[1], method="GET",
                     path=deployment_specs[models[1]].health_path, headers="", body="",
                 ).strip() == "healthy",
                 provider.service_request(
-                    runners[1], peer="10.77.0.11", method="GET",
+                    runners[1], peer=addrs[0], method="GET",
                     path=deployment_specs[models[0]].health_path, headers="", body="",
                 ).strip() == "healthy",
             )
@@ -406,7 +420,7 @@ async def execute_match(args: argparse.Namespace) -> dict[str, object]:
             raise MatchCalibrationError(reason) from error
         if peer_witnesses != (True, True):
             raise MatchCalibrationError("RED_FLAG_MECHANICS_UNAVAILABLE")
-        red_prompts = (_red_prompt("10.77.0.12"), _red_prompt("10.77.0.11"))
+        red_prompts = (_red_prompt(addrs[1]), _red_prompt(addrs[0]))
         red = await tool_phase("red", red_prompts, args.red_tokens, args.red_turns, tool_ceiling=args.red_tools)
         submissions = tuple(provider.verified_submission(runner).strip() for runner in runners)
         captures = (submissions[0] == flags[1], submissions[1] == flags[0])
@@ -480,7 +494,9 @@ def run_one_match(args: argparse.Namespace) -> dict[str, object]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--image", type=Path, required=True); parser.add_argument("--profile", type=Path, required=True)
+    parser.add_argument("--image", type=Path, required=True); parser.add_argument("--profile", type=Path, required=False, default=None)
+    parser.add_argument("--image-digest", default=None, help="pinned sha256 hex of the Docker Runner image (required with --provider docker)")
+    parser.add_argument("--provider", choices=("kvm", "docker"), default="kvm")
     parser.add_argument("--match-id", required=True)
     parser.add_argument("--seed", help="public deterministic Blue Brief selection seed; defaults to match ID")
     parser.add_argument("--models", nargs=2, metavar=("MODEL_A", "MODEL_B"), default=DEFAULT_MODELS)
@@ -493,7 +509,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--blue-tools", "--blue-tool-ceiling", dest="blue_tools", type=int, default=8)
     parser.add_argument("--red-tools", "--red-tool-ceiling", dest="red_tools", type=int, default=10)
     args = parser.parse_args(argv)
-    if os.geteuid() != 0:
+    if args.provider == "kvm" and os.geteuid() != 0:
         print("MATCH_REQUIRES_ORCHESTRATOR_ROOT", file=sys.stderr); return 2
     try:
         payload = run_one_match(args)

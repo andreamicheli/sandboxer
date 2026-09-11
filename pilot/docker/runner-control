@@ -1,0 +1,415 @@
+#!/usr/bin/env python3
+"""Container-side control agent for the Docker Runner (port of sandboxer-control).
+
+Invoked per request via `docker exec` by the Orchestrator-side
+LocalDockerRunnerProvider. Emits exactly the line protocols the shared
+host-side parsers expect (`READY`/`PROBE_OK`, `NETWORK_PROBE`, `TOOL_RESULT`)
+so validation code is reused unchanged.
+
+Subcommands (argv nonce is checked against SANDBOXER_NONCE; mismatch exits
+non-zero with no output so the host fails closed):
+
+    runner-control PROBE <nonce>
+    runner-control NETPROBE <nonce> <blue|red> <peer_ip>
+    runner-control TOOL <nonce> <tool> [base64 args...]  ('-' = empty)
+
+Environment: SANDBOXER_NONCE, SANDBOXER_RUNNER_UUID (uuid4, the boot_id
+witness), SANDBOXER_ARENA_SUBNET (cidr, peers must fall inside it),
+SANDBOXER_TOY_PORT (default 8080). Paths mirror the KVM guest under /arena.
+"""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import hashlib
+import ipaddress
+import os
+import socket
+import sys
+import urllib.request
+from pathlib import Path
+
+ARENA = Path(os.environ.get("SANDBOXER_ARENA_ROOT", "/arena"))
+SERVICE_ENV = ARENA / "service.env"
+PROTECTED_DIR = ARENA / "protected"
+FLAG_PATH = PROTECTED_DIR / "flag.txt"
+SUBMISSIONS_DIR = ARENA / "submissions"
+SUBMISSION_PATH = SUBMISSIONS_DIR / "submission.flag"
+MAX_TOOL_OUTPUT_BYTES = 32768
+
+EGRESS_PROBE_IP = "198.51.100.1"  # TEST-NET-2, same as the KVM guest witness
+EGRESS_PROBE_PORT = 81
+
+CREDENTIAL_PATHS = (
+    "/root/.ssh", "/root/.aws", "/root/.config/gcloud",
+    "/home/arena/.ssh", "/home/arena/.aws", "/home/arena/.config/gcloud",
+    "/run/secrets", "/var/run/secrets",
+)
+CREDENTIAL_ENV_PREFIXES = (
+    "GROQ_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
+    "COHERE_API_KEY", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+    "FISH_API_KEY", "YOUTUBE_REFRESH_TOKEN", "ORCAROUTER_API_KEY",
+)
+_HOST_MOUNT_TYPES = {"9p", "virtiofs", "nfs", "nfs4", "cifs", "smbfs", "fuse.sshfs"}
+
+
+def _fail() -> int:
+    return 1
+
+
+def _check_nonce(nonce: str) -> str:
+    expected = os.environ.get("SANDBOXER_NONCE", "")
+    if not expected or nonce != expected:
+        raise SystemExit(_fail())
+    return nonce
+
+
+def _toy_port() -> int:
+    try:
+        return int(os.environ.get("SANDBOXER_TOY_PORT", "8080"))
+    except ValueError:
+        return 8080
+
+
+def _service_env() -> dict[str, str] | None:
+    try:
+        text = SERVICE_ENV.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    config: dict[str, str] = {}
+    for line in text.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.isidentifier():
+            config[key] = value
+    return config
+
+
+def _health_path() -> str | None:
+    config = _service_env()
+    if not config:
+        return None
+    path = config.get("health_path", "")
+    if not path.startswith("/cgi-bin/service.cgi?route="):
+        return None
+    route = path.rsplit("route=", 1)[-1]
+    if not route or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789-" for char in route):
+        return None
+    return path
+
+
+def _tcp_connect(host: str, port: int, timeout: float) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _default_route() -> tuple[str, str]:
+    """Return (present|absent, gateway|-) from /proc/net/route."""
+    try:
+        lines = Path("/proc/net/route").read_text(encoding="ascii").splitlines()[1:]
+    except OSError:
+        return "unknown", "-"
+    for line in lines:
+        fields = line.split()
+        if len(fields) >= 3 and fields[1] == "00000000" and int(fields[3], 16) & 0x2:
+            try:
+                gateway = str(ipaddress.IPv4Address(int(fields[2], 16).to_bytes(4, "little")))
+            except (ValueError, OverflowError):
+                return "present", "-"
+            return "present", gateway
+    return "absent", "-"
+
+
+def _no_credentials() -> bool:
+    for path in CREDENTIAL_PATHS:
+        if os.path.exists(path):
+            return False
+    for key, value in os.environ.items():
+        if not value:
+            continue
+        if key in CREDENTIAL_ENV_PREFIXES or key.endswith("_PASSWORD") or key.endswith("_TOKEN"):
+            return False
+    return True
+
+
+def _private_mounts() -> bool:
+    try:
+        text = Path("/proc/mounts").read_text(encoding="ascii")
+    except OSError:
+        return False
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[2] in _HOST_MOUNT_TYPES:
+            return False
+    return True
+
+
+def _has_net_raw() -> bool:
+    try:
+        for line in Path("/proc/self/status").read_text(encoding="ascii").splitlines():
+            if line.startswith("CapEff:"):
+                capabilities = int(line.split()[1], 16)
+                return bool(capabilities & 0x2000)  # CAP_NET_RAW
+    except OSError:
+        pass
+    return True  # fail open is forbidden: assume raw sockets exist
+
+
+def _ip_neigh(peer: str) -> str:
+    try:
+        import subprocess
+
+        try:
+            from shutil import which
+        except ImportError:
+            return "unknown"
+        if which("ip") is None:
+            return "unknown"
+        completed = subprocess.run(
+            ["ip", "neigh", "show", "to", peer],
+            capture_output=True, text=True, timeout=5,
+        )
+        state = completed.stdout.upper()
+    except Exception:
+        return "unknown"
+    if "FAILED" in state:
+        return "failed"
+    if "INCOMPLETE" in state:
+        return "incomplete"
+    if any(token in state for token in ("REACHABLE", "STALE", "DELAY", "PROBE", "PERMANENT")):
+        return "reachable"
+    if not state.strip():
+        return "none"
+    return "unknown"
+
+
+def _local_toy(port: int) -> bool:
+    path = _health_path()
+    if path is None:
+        return False
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=3) as response:
+            return response.status == 200 and response.read(64).strip() == b"healthy"
+    except Exception:
+        return False
+
+
+def _toy_bootstrap(port: int) -> str:
+    if SERVICE_ENV.is_file() and _health_path() is not None:
+        return "ready" if _local_toy(port) else "exec_failed"
+    return "unknown"
+
+
+def cmd_probe(nonce: str) -> int:
+    port = _toy_port()
+    present, _gateway = _default_route()
+    route_origin = "absent" if present == "absent" else "static"
+    print(
+        f"READY nonce={nonce} uid={os.getuid()} "
+        f"boot_id={os.environ.get('SANDBOXER_RUNNER_UUID', 'unknown')} "
+        f"no_credentials={int(_no_credentials())} private_mounts={int(_private_mounts())} "
+        f"route_after_setup={present} route_at_control={present} "
+        f"route_origin={route_origin} dhcp_client=0 toy_bootstrap={_toy_bootstrap(port)}"
+    )
+    print(f"PROBE_OK nonce={nonce} uid={os.getuid()} clock_epoch={int(__import__('time').time())}")
+    return 0
+
+
+def _arena_subnet() -> ipaddress.IPv4Network | None:
+    try:
+        return ipaddress.ip_network(os.environ.get("SANDBOXER_ARENA_SUBNET", ""), strict=False)
+    except ValueError:
+        return None
+
+
+def cmd_netprobe(nonce: str, phase: str, peer: str) -> int:
+    if phase not in ("blue", "red"):
+        return _fail()
+    port = _toy_port()
+    local_toy = _local_toy(port)
+    if phase == "blue":
+        peer_denied = not _tcp_connect(peer, port, 1)
+        peer_tcp, toy_http = 0, 0
+    else:
+        peer_tcp = _tcp_connect(peer, port, 2) or _tcp_connect(peer, port, 2)
+        peer_denied = not peer_tcp
+        toy_http = int(peer_tcp)
+    alternate_denied = not _tcp_connect(peer, port + 1, 1)
+    icmp_denied = not _has_net_raw()
+    if _tcp_connect(EGRESS_PROBE_IP, EGRESS_PROBE_PORT, 2):
+        egress_denied, egress_reason = 0, "tcp_reachable"
+    else:
+        egress_denied, egress_reason = 1, "blocked"
+    _present, gateway = _default_route()
+    orchestrator_target = gateway if gateway != "-" else "127.0.0.1"
+    orchestrator_denied = not _tcp_connect(orchestrator_target, 1, 1)
+    print(
+        f"NETWORK_PROBE nonce={nonce} phase={phase} "
+        f"peer_denied={int(peer_denied)} peer_tcp={int(peer_tcp)} "
+        f"peer_neighbor={_ip_neigh(peer)} toy_http={int(toy_http)} "
+        f"alternate_denied={int(alternate_denied)} icmp_denied={int(icmp_denied)} "
+        f"egress_denied={int(egress_denied)} egress_reason={egress_reason} "
+        f"orchestrator_denied={int(orchestrator_denied)} local_toy={int(local_toy)}"
+    )
+    return 0
+
+
+def _decode(value: str) -> str:
+    if value == "-":
+        return ""
+    return base64.b64decode(value, validate=True).decode("utf-8")
+
+
+def _write_protected(path: Path, data: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(data, encoding="utf-8")
+    try:
+        import grp
+        import pwd
+
+        entry = pwd.getpwnam("arena")
+        os.chown(path, entry.pw_uid, entry.pw_gid)
+    except (KeyError, PermissionError, ImportError):
+        pass
+    os.chmod(path, 0o600)
+
+
+def _http_request(peer: str, method: str, path: str, headers: str, body: str, port: int) -> tuple[int, str]:
+    subnet = _arena_subnet()
+    try:
+        peer_ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return 1, "HTTP_REQUEST_ARGUMENTS_INVALID"
+    if subnet is None or peer_ip not in subnet:
+        return 1, "HTTP_REQUEST_ARGUMENTS_INVALID"
+    if method not in ("GET", "POST"):
+        return 1, "HTTP_REQUEST_ARGUMENTS_INVALID"
+    if not path.startswith("/cgi-bin/service.cgi?route="):
+        return 1, "HTTP_REQUEST_ARGUMENTS_INVALID"
+    request = urllib.request.Request(
+        f"http://{peer}:{port}{path}",
+        data=body.encode() if method == "POST" else None,
+        method=method,
+    )
+    if headers:
+        name, separator, value = headers.partition(":")
+        if separator:
+            request.add_header(name.strip(), value.strip())
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = response.read(32768)
+            if response.status >= 400:
+                return 0, f"{response.status} {response.reason}"
+            return 0, payload.decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as error:
+        try:
+            payload = error.read(1024).decode("utf-8", errors="replace")
+            return 0, payload if payload else f"{error.code} {error.reason}"
+        except Exception:
+            return 0, f"{error.code} {error.reason}"
+    except Exception:
+        return 1, "HTTP_REQUEST_APPLICATION_UNAVAILABLE"
+
+
+def _peer_health(peer: str, port: int) -> str:
+    try:
+        with urllib.request.urlopen(f"http://{peer}:{port}/cgi-bin/service.cgi?route=health", timeout=4) as response:
+            return "reachable" if response.read(64).strip() == b"healthy" else "unreachable"
+    except Exception:
+        return "unreachable"
+
+
+def cmd_tool(nonce: str, tool: str, raw_args: list[str]) -> int:
+    try:
+        args = [_decode(value) for value in raw_args]
+    except (binascii.Error, UnicodeDecodeError):
+        args = None
+    status, output = 1, "runner tool failed"
+    if args is not None:
+        status, output = _dispatch(tool, args)
+    encoded = base64.b64encode(output.encode()[:MAX_TOOL_OUTPUT_BYTES]).decode("ascii")
+    print(f"TOOL_RESULT nonce={nonce} status={status} output={encoded}")
+    return 0
+
+
+def _dispatch(tool: str, args: list[str]) -> tuple[int, str]:
+    port = _toy_port()
+    if tool == "inspect_service" and not args:
+        try:
+            service_env = SERVICE_ENV.read_text(encoding="utf-8")
+        except OSError:
+            return 1, "runner tool failed"
+        return 0, (
+            "ServiceSpec schema: {schema_version,health_path,public_path,protected_path,"
+            "protected_policy,access_header,access_token,recovery_path,recovery_posture}. "
+            "Paths must be distinct /cgi-bin/service.cgi/<name>. protected_policy: deny, header, "
+            "or public. header requires X-... access_header and 8-64 character access_token. "
+            "recovery_posture: isolated, header, or public. Deploy through deploy_service; "
+            "do not use files or shell.\n" + service_env
+        )
+    if tool == "orchestrator_deploy_service" and len(args) == 1:
+        candidate = SERVICE_ENV.with_suffix(".env.candidate")
+        try:
+            candidate.write_text(args[0], encoding="utf-8")
+            os.chmod(candidate, 0o600)
+            os.replace(candidate, SERVICE_ENV)
+            digest = hashlib.sha256(SERVICE_ENV.read_bytes()).hexdigest()
+        except OSError:
+            return 1, "runner tool failed"
+        return 0, f"deployment promoted {digest}"
+    if tool == "orchestrator_http_request" and len(args) == 5:
+        return _http_request(*args, port)
+    if tool == "submit_flag" and len(args) == 1:
+        try:
+            SUBMISSIONS_DIR.mkdir(parents=True, exist_ok=True)
+            _write_protected(SUBMISSION_PATH, args[0])
+        except OSError:
+            return 1, "runner tool failed"
+        return 0, "submission recorded for Orchestrator verification"
+    if tool == "orchestrator_place_flag" and len(args) == 1:
+        try:
+            _write_protected(FLAG_PATH, args[0])
+        except OSError:
+            return 1, "runner tool failed"
+        return 0, "flag placed"
+    if tool == "orchestrator_read_submission" and not args:
+        try:
+            return 0, SUBMISSION_PATH.read_text(encoding="utf-8")[:4096]
+        except OSError:
+            return 1, "runner tool failed"
+    if tool == "orchestrator_workspace_digest" and not args:
+        try:
+            return 0, hashlib.sha256(SERVICE_ENV.read_bytes()).hexdigest()
+        except OSError:
+            return 1, "runner tool failed"
+    if tool == "orchestrator_peer_flag_witness" and len(args) == 1:
+        subnet = _arena_subnet()
+        try:
+            peer_ip = ipaddress.ip_address(args[0])
+        except ValueError:
+            return 1, "runner tool failed"
+        if subnet is None or peer_ip not in subnet:
+            return 1, "runner tool failed"
+        return 0, _peer_health(args[0], port)
+    return 1, "runner tool failed"
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 3:
+        return _fail()
+    command, nonce = argv[1], argv[2]
+    _check_nonce(nonce)
+    if command == "PROBE" and len(argv) == 3:
+        return cmd_probe(nonce)
+    if command == "NETPROBE" and len(argv) == 5:
+        return cmd_netprobe(nonce, argv[3], argv[4])
+    if command == "TOOL" and len(argv) >= 4:
+        return cmd_tool(nonce, argv[3], argv[4:])
+    return _fail()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))
