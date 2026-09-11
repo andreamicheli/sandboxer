@@ -58,6 +58,7 @@ def test_rehearsal_cli_persists_a_redacted_typed_failure_before_stderr(tmp_path:
     monkeypatch.setattr(cli, "LocalKvmRunnerProvider", lambda config: config)
     monkeypatch.setattr(cli, "LocalKvmConfig", lambda **kwargs: kwargs)
     monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(cli, "_kvm_device_present", lambda: True)
     monkeypatch.setattr(cli.pwd, "getpwnam", lambda _name: type("Account", (), {"pw_uid": 1, "pw_gid": 1})())
     assert cli.main(["--image", str(image), "--profile", str(profile), "--match-id", "safe-match", "--evidence-path", str(evidence)]) == 2
     payload = json.loads(evidence.read_text())
@@ -65,6 +66,18 @@ def test_rehearsal_cli_persists_a_redacted_typed_failure_before_stderr(tmp_path:
     assert payload["teardown"][1]["state"] == "quarantined"
     assert evidence.stat().st_mode & 0o777 == 0o600
     assert str(tmp_path) not in evidence.read_text() and "image" not in evidence.read_text()
+
+
+def test_rehearsal_cli_redirects_to_docker_without_kvm(tmp_path: Path, monkeypatch, capsys) -> None:
+    sys.path.insert(0, str(REHEARSAL.parents[1]))
+    from scripts import rehearse_local_kvm as cli
+    image = tmp_path / "image.qcow2"; image.write_bytes(b"image")
+    profile = tmp_path / "profile.json"; profile.write_text("{}")
+
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(cli, "_kvm_device_present", lambda: False)
+    assert cli.main(["--image", str(image), "--profile", str(profile), "--match-id", "safe-match"]) == 2
+    assert "rehearse_local_docker.py" in capsys.readouterr().err
 
 
 def test_rehearsal_cli_keeps_complete_evidence_if_stdout_fails(tmp_path: Path, monkeypatch) -> None:
@@ -84,6 +97,7 @@ def test_rehearsal_cli_keeps_complete_evidence_if_stdout_fails(tmp_path: Path, m
     monkeypatch.setattr(cli, "LocalKvmRunnerProvider", lambda config: config)
     monkeypatch.setattr(cli, "LocalKvmConfig", lambda **kwargs: kwargs)
     monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(cli, "_kvm_device_present", lambda: True)
     monkeypatch.setattr(cli.pwd, "getpwnam", lambda _name: type("Account", (), {"pw_uid": 1, "pw_gid": 1})())
     monkeypatch.setattr("builtins.print", lambda *_args, **_kwargs: (_ for _ in ()).throw(BrokenPipeError()))
     with pytest.raises(BrokenPipeError):
